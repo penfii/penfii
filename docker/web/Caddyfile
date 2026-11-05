@@ -1,0 +1,85 @@
+# Serves the built SPA and forwards /v1 (HTTP and WebSocket), the MCP OAuth endpoints and /mcp to core-api.
+# TLS terminates at the outer reverse proxy, so this listens on plain HTTP.
+{
+	admin off
+	auto_https off
+	servers {
+		# Whose X-Forwarded-For this server believes, i.e. the outer TLS proxy. Space-separated CIDRs or
+		# `private_ranges`. A proxy that is not on a private address (a cloud load balancer) has to be
+		# listed here and, as a comma-separated list, in core-api's PENFII_TRUSTED_PROXIES; otherwise
+		# every visitor appears to come from the proxy and shares one sign-in throttle.
+		trusted_proxies static {$PENFII_EDGE_PROXIES:private_ranges}
+	}
+}
+
+:80 {
+	# File bytes are streamed with Range. Compressing them would make a 206 body not match the
+	# ranges a video player seeks, so those paths are left as core-api sent them.
+	@pages not path /v1/files/* /v1/attachments/*
+	encode @pages zstd gzip
+
+	# Headers of every page response. The Content-Security-Policy is the one the web app is known to work
+	# under (checked in a real browser): its own scripts only, inline styles (React style attributes
+	# and the editor's injected <style>), images from this origin plus the blob:/data: ones the upload
+	# preview and the favicon use, and connections to this origin (the API and its WebSockets).
+	# Strict-Transport-Security belongs to the outer proxy that terminates TLS.
+	# File responses keep the CSP core-api set for them (`sandbox`, no script). The page policy
+	# would replace it, and a file opened on its own would then be a page of this origin.
+	header @pages {
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()"
+		-Server
+	}
+
+	# Health probes of core-api (liveness and readiness); without these they would fall through to the SPA.
+	handle /healthz {
+		reverse_proxy core-api:8080
+	}
+
+	handle /readyz {
+		reverse_proxy core-api:8080
+	}
+
+	handle /v1/* {
+		reverse_proxy core-api:8080
+	}
+
+	# MCP: OAuth Authorization Server, discovery documents, Streamable HTTP endpoint. They answer 404
+	# unless the server runs with PENFII_MCP_ENABLED. The SPA route /consent stays with the SPA.
+	handle /oauth/* {
+		reverse_proxy core-api:8080
+	}
+
+	handle /mcp {
+		reverse_proxy core-api:8080 {
+			flush_interval -1
+			transport http {
+				response_header_timeout 60s
+			}
+		}
+	}
+
+	handle /.well-known/oauth-* {
+		reverse_proxy core-api:8080
+	}
+
+	handle /.well-known/openid-configuration {
+		reverse_proxy core-api:8080
+	}
+
+	handle /assets/* {
+		root * /srv
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
+	handle {
+		root * /srv
+		header Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+}

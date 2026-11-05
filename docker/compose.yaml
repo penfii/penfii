@@ -1,0 +1,158 @@
+# Penfii self-hosting stack: PostgreSQL, OpenSearch (with the Korean analyzer), MinIO, core-api and
+# the web app, all built or pulled by Compose from this checkout. Settings come from `.env`
+# (copy `.env.example`).
+#
+#   cd docker
+#   cp .env.example .env     # then edit it
+#   docker compose up -d --build
+#   docker compose run --rm admin-cli bootstrap --email ... --password ... --display-name ... \
+#       --workspace-name ... --time-zone ...
+#
+# The database schema is database/migrations; core-api applies it on start. Build contexts are the
+# repository root (..), so the images contain server/, client/ and database/ as checked out.
+name: penfii
+
+services:
+  postgres:
+    image: postgres:17.11-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: penfii
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: penfii
+    volumes:
+      - penfii-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U penfii -d penfii"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Derived data: rebuildable from PostgreSQL with `admin-cli search-reindex`.
+  opensearch:
+    build:
+      context: opensearch
+    image: penfii-opensearch:local
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      # The node is reachable on the compose network only; it is not published.
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    volumes:
+      - penfii-os:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # S3-compatible file storage. core-api creates the bucket `penfii` on start.
+  minio:
+    image: pgsty/silo:RELEASE.2026-09-16T00-00-00Z
+    restart: unless-stopped
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ${PENFII_S3_ACCESS_KEY:?set PENFII_S3_ACCESS_KEY in .env}
+      MINIO_ROOT_PASSWORD: ${PENFII_S3_SECRET_KEY:?set PENFII_S3_SECRET_KEY in .env}
+    volumes:
+      - penfii-files:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://127.0.0.1:9000/minio/health/live >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  core-api:
+    build:
+      context: ..
+      dockerfile: docker/server/Dockerfile
+    image: penfii-core-api:local
+    restart: unless-stopped
+    depends_on:
+      postgres: {condition: service_healthy}
+      opensearch: {condition: service_healthy}
+      minio: {condition: service_healthy}
+    environment:
+      DATABASE_URL: postgres://penfii:${POSTGRES_PASSWORD}@postgres:5432/penfii
+      PENFII_BIND: 0.0.0.0:8080
+      PENFII_PUBLIC_URL: ${PENFII_PUBLIC_URL:?set PENFII_PUBLIC_URL in .env}
+      PENFII_ALLOWED_ORIGINS: ${PENFII_PUBLIC_URL}
+      # Whose X-Forwarded-For core-api believes: the web container (and the proxy in front of it).
+      # core-api is not published, so only containers on this Compose network can reach it; the
+      # default names the private ranges Docker allocates networks from. See .env.example.
+      PENFII_TRUSTED_PROXIES: ${PENFII_TRUSTED_PROXIES:-172.16.0.0/12,192.168.0.0/16,10.0.0.0/8}
+      PENFII_DB_MAX_CONNECTIONS: ${PENFII_DB_MAX_CONNECTIONS:-10}
+      PENFII_OPENSEARCH_URL: http://opensearch:9200
+      PENFII_OPENSEARCH_INDEX_PREFIX: ${PENFII_OPENSEARCH_INDEX_PREFIX:-penfii}
+      PENFII_S3_ENDPOINT: http://minio:9000
+      PENFII_S3_BUCKET: penfii
+      PENFII_S3_ACCESS_KEY: ${PENFII_S3_ACCESS_KEY}
+      PENFII_S3_SECRET_KEY: ${PENFII_S3_SECRET_KEY}
+      PENFII_SESSION_TTL_SECONDS: ${PENFII_SESSION_TTL_SECONDS:?set PENFII_SESSION_TTL_SECONDS in .env}
+      PENFII_MESSAGE_BODY_MAX_BYTES: ${PENFII_MESSAGE_BODY_MAX_BYTES:?set PENFII_MESSAGE_BODY_MAX_BYTES in .env}
+      PENFII_INVITE_TTL_SECONDS: ${PENFII_INVITE_TTL_SECONDS:?set PENFII_INVITE_TTL_SECONDS in .env}
+      PENFII_FILE_MAX_BYTES: ${PENFII_FILE_MAX_BYTES:?set PENFII_FILE_MAX_BYTES in .env}
+      PENFII_MESSAGE_FILE_MAX_COUNT: ${PENFII_MESSAGE_FILE_MAX_COUNT:?set PENFII_MESSAGE_FILE_MAX_COUNT in .env}
+      PENFII_MESSAGE_FILE_MAX_BYTES: ${PENFII_MESSAGE_FILE_MAX_BYTES:?set PENFII_MESSAGE_FILE_MAX_BYTES in .env}
+      # MCP gateway for AI clients: off unless PENFII_MCP_ENABLED=1 (the web container already forwards
+      # /oauth, /.well-known and /mcp here).
+      PENFII_MCP_ENABLED: ${PENFII_MCP_ENABLED:-0}
+      PENFII_MCP_DEFAULT_POLICY: ${PENFII_MCP_DEFAULT_POLICY:-standard}
+      PENFII_MCP_DCR_ENABLED: ${PENFII_MCP_DCR_ENABLED:-0}
+    # /readyz answers 200 while PostgreSQL answers. The image has no curl, so bash opens the socket.
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - 'exec 3<>/dev/tcp/127.0.0.1/8080 && printf "GET /readyz HTTP/1.0\r\n\r\n" >&3 && head -n1 <&3 | grep -q " 200 "'
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # The service name core-api is part of the web image's Caddyfile (reverse_proxy core-api:8080).
+  web:
+    build:
+      context: ..
+      dockerfile: docker/web/Dockerfile
+    image: penfii-web:local
+    restart: unless-stopped
+    depends_on:
+      core-api: {condition: service_healthy}
+    environment:
+      # Whose X-Forwarded-For the web server believes (space-separated), i.e. the TLS proxy in front.
+      PENFII_EDGE_PROXIES: ${PENFII_EDGE_PROXIES:-private_ranges}
+    ports:
+      - "${PENFII_HTTP_BIND:-127.0.0.1}:${PENFII_HTTP_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Operator commands: `docker compose run --rm admin-cli <command>` (bootstrap, user-set-password,
+  # search-status, search-reindex, ...). Not started by `up`.
+  admin-cli:
+    profiles: ["cli"]
+    build:
+      context: ..
+      dockerfile: docker/server/Dockerfile
+    image: penfii-core-api:local
+    entrypoint: ["admin-cli"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      DATABASE_URL: postgres://penfii:${POSTGRES_PASSWORD}@postgres:5432/penfii
+      PENFII_OPENSEARCH_URL: http://opensearch:9200
+      PENFII_OPENSEARCH_INDEX_PREFIX: ${PENFII_OPENSEARCH_INDEX_PREFIX:-penfii}
+
+volumes:
+  penfii-pg:
+  penfii-os:
+  penfii-files:

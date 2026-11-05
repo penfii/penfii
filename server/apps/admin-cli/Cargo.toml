@@ -1,0 +1,18 @@
+[package]
+name = "admin-cli"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-only"
+
+[[bin]]
+name = "admin-cli"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+penfii-core = { workspace = true }
+tokio = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }

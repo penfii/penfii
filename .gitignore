@@ -1,0 +1,4 @@
+# Self-hosting settings with real secrets in them
+docker/.env
+.claude
+.playwright-mcp

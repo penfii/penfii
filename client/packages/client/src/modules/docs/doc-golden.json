@@ -1,0 +1,1513 @@
+{
+ "blocknote": "0.56.0",
+ "yjs": "13.6.33",
+ "fixtures": [
+  {
+   "name": "empty page",
+   "input": [
+    {
+     "id": "e1",
+     "type": "paragraph",
+     "props": {},
+     "content": [],
+     "children": []
+    }
+   ],
+   "bn_blocks": [
+    {
+     "id": "e1",
+     "type": "paragraph",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default",
+      "textAlignment": "left"
+     },
+     "content": [],
+     "children": []
+    }
+   ],
+   "update_js": "AQeCgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgoC09wUAAw5ibG9ja0NvbnRhaW5lcgcAgoC09wUBAwlwYXJhZ3JhcGgoAIKAtPcFAg9iYWNrZ3JvdW5kQ29sb3IBdwdkZWZhdWx0KACCgLT3BQIJdGV4dENvbG9yAXcHZGVmYXVsdCgAgoC09wUCDXRleHRBbGlnbm1lbnQBdwRsZWZ0KACCgLT3BQECaWQBdwJlMQA=",
+   "update_rust": "AQSBgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgYC09wUAAw5ibG9ja0NvbnRhaW5lcigAgYC09wUBAmlkAXcCZTEHAIGAtPcFAQMJcGFyYWdyYXBoAA=="
+  },
+  {
+   "name": "korean paragraph",
+   "input": [
+    {
+     "id": "k1",
+     "type": "paragraph",
+     "props": {},
+     "content": [
+      {
+       "type": "text",
+       "text": "안녕하세요, 반갑습니다. 배포 절차를 검토합니다.",
+       "styles": {}
+      }
+     ],
+     "children": []
+    }
+   ],
+   "bn_blocks": [
+    {
+     "id": "k1",
+     "type": "paragraph",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default",
+      "textAlignment": "left"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "안녕하세요, 반갑습니다. 배포 절차를 검토합니다.",
+       "styles": {}
+      }
+     ],
+     "children": []
+    }
+   ],
+   "update_js": "AQmCgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgoC09wUAAw5ibG9ja0NvbnRhaW5lcgcAgoC09wUBAwlwYXJhZ3JhcGgHAIKAtPcFAgYEAIKAtPcFA0PslYjrhZXtlZjshLjsmpQsIOuwmOqwkeyKteuLiOuLpC4g67Cw7Y+sIOygiOywqOulvCDqsoDthqDtlanri4jri6QuKACCgLT3BQIPYmFja2dyb3VuZENvbG9yAXcHZGVmYXVsdCgAgoC09wUCCXRleHRDb2xvcgF3B2RlZmF1bHQoAIKAtPcFAg10ZXh0QWxpZ25tZW50AXcEbGVmdCgAgoC09wUBAmlkAXcCazEA",
+   "update_rust": "AQaBgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgYC09wUAAw5ibG9ja0NvbnRhaW5lcigAgYC09wUBAmlkAXcCazEHAIGAtPcFAQMJcGFyYWdyYXBoBwCBgLT3BQMGBACBgLT3BQRD7JWI64WV7ZWY7IS47JqULCDrsJjqsJHsirXri4jri6QuIOuwsO2PrCDsoIjssKjrpbwg6rKA7Yag7ZWp64uI64ukLgA="
+  },
+  {
+   "name": "every style",
+   "input": [
+    {
+     "id": "s1",
+     "type": "paragraph",
+     "props": {},
+     "content": [
+      {
+       "type": "text",
+       "text": "굵게",
+       "styles": {
+        "bold": true
+       }
+      },
+      {
+       "type": "text",
+       "text": "기울임",
+       "styles": {
+        "italic": true
+       }
+      },
+      {
+       "type": "text",
+       "text": "밑줄",
+       "styles": {
+        "underline": true
+       }
+      },
+      {
+       "type": "text",
+       "text": "취소선",
+       "styles": {
+        "strike": true
+       }
+      },
+      {
+       "type": "text",
+       "text": "코드",
+       "styles": {
+        "code": true
+       }
+      },
+      {
+       "type": "text",
+       "text": "색",
+       "styles": {
+        "textColor": "red"
+       }
+      },
+      {
+       "type": "text",
+       "text": "배경",
+       "styles": {
+        "backgroundColor": "yellow"
+       }
+      },
+      {
+       "type": "text",
+       "text": "모두",
+       "styles": {
+        "bold": true,
+        "italic": true,
+        "underline": true,
+        "strike": true,
+        "code": true,
+        "textColor": "blue",
+        "backgroundColor": "green"
+       }
+      },
+      {
+       "type": "text",
+       "text": "일반",
+       "styles": {}
+      }
+     ],
+     "children": []
+    }
+   ],
+   "bn_blocks": [
+    {
+     "id": "s1",
+     "type": "paragraph",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default",
+      "textAlignment": "left"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "굵게",
+       "styles": {
+        "bold": true
+       }
+      },
+      {
+       "type": "text",
+       "text": "기울임",
+       "styles": {
+        "italic": true
+       }
+      },
+      {
+       "type": "text",
+       "text": "밑줄",
+       "styles": {
+        "underline": true
+       }
+      },
+      {
+       "type": "text",
+       "text": "취소선",
+       "styles": {
+        "strike": true
+       }
+      },
+      {
+       "type": "text",
+       "text": "코드",
+       "styles": {
+        "code": true
+       }
+      },
+      {
+       "type": "text",
+       "text": "색",
+       "styles": {
+        "textColor": "red"
+       }
+      },
+      {
+       "type": "text",
+       "text": "배경",
+       "styles": {
+        "backgroundColor": "yellow"
+       }
+      },
+      {
+       "type": "text",
+       "text": "모두",
+       "styles": {
+        "bold": true,
+        "italic": true,
+        "underline": true,
+        "strike": true,
+        "code": true,
+        "textColor": "blue",
+        "backgroundColor": "green"
+       }
+      },
+      {
+       "type": "text",
+       "text": "일반",
+       "styles": {}
+      }
+     ],
+     "children": []
+    }
+   ],
+   "update_js": "AS2CgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgoC09wUAAw5ibG9ja0NvbnRhaW5lcgcAgoC09wUBAwlwYXJhZ3JhcGgHAIKAtPcFAgYGAIKAtPcFAwRib2xkAnt9hIKAtPcFBAbqtbXqsoyGgoC09wUGBGJvbGQEbnVsbIaCgLT3BQcGaXRhbGljAnt9hIKAtPcFCAnquLDsmrjsnoSGgoC09wULBml0YWxpYwRudWxshoKAtPcFDAl1bmRlcmxpbmUCe32EgoC09wUNBuuwkeykhIaCgLT3BQ8JdW5kZXJsaW5lBG51bGyGgoC09wUQBnN0cmlrZQJ7fYSCgLT3BREJ7Leo7IaM7ISghoKAtPcFFAZzdHJpa2UEbnVsbIaCgLT3BRUEY29kZQJ7fYSCgLT3BRYG7L2U65OchoKAtPcFGARjb2RlBG51bGyGgoC09wUZCXRleHRDb2xvchV7InN0cmluZ1ZhbHVlIjoicmVkIn2EgoC09wUaA+yDiYaCgLT3BRsJdGV4dENvbG9yBG51bGyGgoC09wUcD2JhY2tncm91bmRDb2xvchh7InN0cmluZ1ZhbHVlIjoieWVsbG93In2EgoC09wUdBuuwsOqyvYaCgLT3BR8PYmFja2dyb3VuZENvbG9yBG51bGyGgoC09wUgBGJvbGQCe32GgoC09wUhBml0YWxpYwJ7fYaCgLT3BSIJdW5kZXJsaW5lAnt9hoKAtPcFIwZzdHJpa2UCe32GgoC09wUkBGNvZGUCe32GgoC09wUlCXRleHRDb2xvchZ7InN0cmluZ1ZhbHVlIjoiYmx1ZSJ9hoKAtPcFJg9iYWNrZ3JvdW5kQ29sb3IXeyJzdHJpbmdWYWx1ZSI6ImdyZWVuIn2EgoC09wUnBuuqqOuRkIaCgLT3BSkEYm9sZARudWxshoKAtPcFKgZpdGFsaWMEbnVsbIaCgLT3BSsJdW5kZXJsaW5lBG51bGyGgoC09wUsBnN0cmlrZQRudWxshoKAtPcFLQRjb2RlBG51bGyGgoC09wUuCXRleHRDb2xvcgRudWxshoKAtPcFLw9iYWNrZ3JvdW5kQ29sb3IEbnVsbISCgLT3BTAG7J2867CYKACCgLT3BQIPYmFja2dyb3VuZENvbG9yAXcHZGVmYXVsdCgAgoC09wUCCXRleHRDb2xvcgF3B2RlZmF1bHQoAIKAtPcFAg10ZXh0QWxpZ25tZW50AXcEbGVmdCgAgoC09wUBAmlkAXcCczEA",
+   "update_rust": "ASyBgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgYC09wUAAw5ibG9ja0NvbnRhaW5lcigAgYC09wUBAmlkAXcCczEHAIGAtPcFAQMJcGFyYWdyYXBoBwCBgLT3BQMGBgCBgLT3BQQEYm9sZAJ7fYSBgLT3BQUG6rW16rKMhoGAtPcFBwRib2xkBG51bGyGgYC09wUIBml0YWxpYwJ7fYSBgLT3BQkJ6riw7Jq47J6EhoGAtPcFDAZpdGFsaWMEbnVsbIaBgLT3BQ0JdW5kZXJsaW5lAnt9hIGAtPcFDgbrsJHspISGgYC09wUQCXVuZGVybGluZQRudWxshoGAtPcFEQZzdHJpa2UCe32EgYC09wUSCey3qOyGjOyEoIaBgLT3BRUGc3RyaWtlBG51bGyGgYC09wUWBGNvZGUCe32EgYC09wUXBuy9lOuTnIaBgLT3BRkEY29kZQRudWxshoGAtPcFGgl0ZXh0Q29sb3IVeyJzdHJpbmdWYWx1ZSI6InJlZCJ9hIGAtPcFGwPsg4mGgYC09wUcCXRleHRDb2xvcgRudWxshoGAtPcFHQ9iYWNrZ3JvdW5kQ29sb3IYeyJzdHJpbmdWYWx1ZSI6InllbGxvdyJ9hIGAtPcFHgbrsLDqsr2GgYC09wUgD2JhY2tncm91bmRDb2xvcgRudWxsxoGAtPcFIIGAtPcFIQl1bmRlcmxpbmUCe33GgYC09wUigYC09wUhD2JhY2tncm91bmRDb2xvchd7InN0cmluZ1ZhbHVlIjoiZ3JlZW4ifcaBgLT3BSOBgLT3BSEEYm9sZAJ7fcaBgLT3BSSBgLT3BSEEY29kZQJ7fcaBgLT3BSWBgLT3BSEGc3RyaWtlAnt9xoGAtPcFJoGAtPcFIQl0ZXh0Q29sb3IWeyJzdHJpbmdWYWx1ZSI6ImJsdWUifcaBgLT3BSeBgLT3BSEGaXRhbGljAnt9xIGAtPcFKIGAtPcFIQbrqqjrkZDGgYC09wUqgYC09wUhCXVuZGVybGluZQRudWxsxoGAtPcFK4GAtPcFIQRjb2RlBG51bGzGgYC09wUsgYC09wUhBnN0cmlrZQRudWxsxoGAtPcFLYGAtPcFIQl0ZXh0Q29sb3IEbnVsbMaBgLT3BS6BgLT3BSEGaXRhbGljBG51bGzGgYC09wUvgYC09wUhBGJvbGQEbnVsbMaBgLT3BTCBgLT3BSEPYmFja2dyb3VuZENvbG9yGHsic3RyaW5nVmFsdWUiOiJ5ZWxsb3cifcaBgLT3BTCBgLT3BTEPYmFja2dyb3VuZENvbG9yBG51bGzEgYC09wUygYC09wUxBuydvOuwmMaBgLT3BTSBgLT3BTEPYmFja2dyb3VuZENvbG9yF3sic3RyaW5nVmFsdWUiOiJncmVlbiJ9AA=="
+  },
+  {
+   "name": "links",
+   "input": [
+    {
+     "id": "l1",
+     "type": "paragraph",
+     "props": {},
+     "content": [
+      {
+       "type": "text",
+       "text": "앞 ",
+       "styles": {}
+      },
+      {
+       "type": "link",
+       "href": "https://example.com/a?b=c",
+       "content": [
+        {
+         "type": "text",
+         "text": "링크",
+         "styles": {}
+        },
+        {
+         "type": "text",
+         "text": " 굵게",
+         "styles": {
+          "bold": true
+         }
+        }
+       ]
+      },
+      {
+       "type": "text",
+       "text": " 중간 ",
+       "styles": {}
+      },
+      {
+       "type": "link",
+       "href": "/w/ws/docs?doc=1",
+       "content": [
+        {
+         "type": "text",
+         "text": "상대",
+         "styles": {}
+        }
+       ]
+      },
+      {
+       "type": "link",
+       "href": "mailto:a@example.com",
+       "content": [
+        {
+         "type": "text",
+         "text": "메일",
+         "styles": {}
+        }
+       ]
+      }
+     ],
+     "children": []
+    }
+   ],
+   "bn_blocks": [
+    {
+     "id": "l1",
+     "type": "paragraph",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default",
+      "textAlignment": "left"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "앞 ",
+       "styles": {}
+      },
+      {
+       "type": "link",
+       "href": "https://example.com/a?b=c",
+       "content": [
+        {
+         "type": "text",
+         "text": "링크",
+         "styles": {}
+        },
+        {
+         "type": "text",
+         "text": " 굵게",
+         "styles": {
+          "bold": true
+         }
+        }
+       ]
+      },
+      {
+       "type": "text",
+       "text": " 중간 ",
+       "styles": {}
+      },
+      {
+       "type": "link",
+       "href": "/w/ws/docs?doc=1",
+       "content": [
+        {
+         "type": "text",
+         "text": "상대",
+         "styles": {}
+        }
+       ]
+      },
+      {
+       "type": "link",
+       "href": "mailto:a@example.com",
+       "content": [
+        {
+         "type": "text",
+         "text": "메일",
+         "styles": {}
+        }
+       ]
+      }
+     ],
+     "children": []
+    }
+   ],
+   "update_js": "ARiCgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgoC09wUAAw5ibG9ja0NvbnRhaW5lcgcAgoC09wUBAwlwYXJhZ3JhcGgHAIKAtPcFAgYEAIKAtPcFAwTslZ4ghoKAtPcFBQRsaW5rJHsiaHJlZiI6Imh0dHBzOi8vZXhhbXBsZS5jb20vYT9iPWMifYSCgLT3BQYG66eB7YGshoKAtPcFCARsaW5rBG51bGyGgoC09wUJBGJvbGQCe32GgoC09wUKBGxpbmskeyJocmVmIjoiaHR0cHM6Ly9leGFtcGxlLmNvbS9hP2I9YyJ9hIKAtPcFCwcg6rW16rKMhoKAtPcFDgRib2xkBG51bGyGgoC09wUPBGxpbmsEbnVsbISCgLT3BRAIIOykkeqwhCCGgoC09wUUBGxpbmsbeyJocmVmIjoiL3cvd3MvZG9jcz9kb2M9MSJ9hIKAtPcFFQbsg4HrjICGgoC09wUXBGxpbmsEbnVsbIaCgLT3BRgEbGluax97ImhyZWYiOiJtYWlsdG86YUBleGFtcGxlLmNvbSJ9hIKAtPcFGQbrqZTsnbyGgoC09wUbBGxpbmsEbnVsbCgAgoC09wUCD2JhY2tncm91bmRDb2xvcgF3B2RlZmF1bHQoAIKAtPcFAgl0ZXh0Q29sb3IBdwdkZWZhdWx0KACCgLT3BQINdGV4dEFsaWdubWVudAF3BGxlZnQoAIKAtPcFAQJpZAF3AmwxAA==",
+   "update_rust": "AROBgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgYC09wUAAw5ibG9ja0NvbnRhaW5lcigAgYC09wUBAmlkAXcCbDEHAIGAtPcFAQMJcGFyYWdyYXBoBwCBgLT3BQMGBACBgLT3BQQE7JWeIIaBgLT3BQYEbGluayR7ImhyZWYiOiJodHRwczovL2V4YW1wbGUuY29tL2E/Yj1jIn2EgYC09wUHBuunge2BrIaBgLT3BQkEbGluawRudWxsxoGAtPcFCYGAtPcFCgRib2xkAnt9xIGAtPcFC4GAtPcFCgcg6rW16rKMxoGAtPcFDoGAtPcFCgRib2xkBG51bGyEgYC09wUKCCDspJHqsIQghoGAtPcFEwRsaW5rG3siaHJlZiI6Ii93L3dzL2RvY3M/ZG9jPTEifYSBgLT3BRQG7IOB64yAhoGAtPcFFgRsaW5rBG51bGzGgYC09wUWgYC09wUXBGxpbmsfeyJocmVmIjoibWFpbHRvOmFAZXhhbXBsZS5jb20ifcSBgLT3BRiBgLT3BRcG66mU7J28xoGAtPcFGoGAtPcFFwRsaW5rG3siaHJlZiI6Ii93L3dzL2RvY3M/ZG9jPTEifQA="
+  },
+  {
+   "name": "headings and lists",
+   "input": [
+    {
+     "id": "h1",
+     "type": "heading",
+     "props": {
+      "level": 1
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "제목 1",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "h2",
+     "type": "heading",
+     "props": {
+      "level": 2
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "제목 2",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "h3",
+     "type": "heading",
+     "props": {
+      "level": 3
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "제목 3",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "li1",
+     "type": "bulletListItem",
+     "props": {},
+     "content": [
+      {
+       "type": "text",
+       "text": "불릿",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "li2",
+     "type": "numberedListItem",
+     "props": {},
+     "content": [
+      {
+       "type": "text",
+       "text": "번호",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "li3",
+     "type": "checkListItem",
+     "props": {
+      "checked": true
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "완료",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "li4",
+     "type": "checkListItem",
+     "props": {
+      "checked": false
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "미완",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "q1",
+     "type": "quote",
+     "props": {},
+     "content": [
+      {
+       "type": "text",
+       "text": "인용",
+       "styles": {}
+      }
+     ],
+     "children": []
+    }
+   ],
+   "bn_blocks": [
+    {
+     "id": "h1",
+     "type": "heading",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default",
+      "textAlignment": "left",
+      "level": 1
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "제목 1",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "h2",
+     "type": "heading",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default",
+      "textAlignment": "left",
+      "level": 2
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "제목 2",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "h3",
+     "type": "heading",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default",
+      "textAlignment": "left",
+      "level": 3
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "제목 3",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "li1",
+     "type": "bulletListItem",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default",
+      "textAlignment": "left"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "불릿",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "li2",
+     "type": "numberedListItem",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default",
+      "textAlignment": "left"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "번호",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "li3",
+     "type": "checkListItem",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default",
+      "textAlignment": "left",
+      "checked": true
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "완료",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "li4",
+     "type": "checkListItem",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default",
+      "textAlignment": "left",
+      "checked": false
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "미완",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "q1",
+     "type": "quote",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "인용",
+       "styles": {}
+      }
+     ],
+     "children": []
+    }
+   ],
+   "update_js": "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",
+   "update_rust": "AS6BgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgYC09wUAAw5ibG9ja0NvbnRhaW5lcigAgYC09wUBAmlkAXcCaDEHAIGAtPcFAQMHaGVhZGluZygAgYC09wUDBWxldmVsAX0BBwCBgLT3BQMGBACBgLT3BQUI7KCc66qpIDGHgYC09wUBAw5ibG9ja0NvbnRhaW5lcigAgYC09wUKAmlkAXcCaDIHAIGAtPcFCgMHaGVhZGluZygAgYC09wUMBWxldmVsAX0CBwCBgLT3BQwGBACBgLT3BQ4I7KCc66qpIDKHgYC09wUKAw5ibG9ja0NvbnRhaW5lcigAgYC09wUTAmlkAXcCaDMHAIGAtPcFEwMHaGVhZGluZygAgYC09wUVBWxldmVsAX0DBwCBgLT3BRUGBACBgLT3BRcI7KCc66qpIDOHgYC09wUTAw5ibG9ja0NvbnRhaW5lcigAgYC09wUcAmlkAXcDbGkxBwCBgLT3BRwDDmJ1bGxldExpc3RJdGVtBwCBgLT3BR4GBACBgLT3BR8G67aI66a/h4GAtPcFHAMOYmxvY2tDb250YWluZXIoAIGAtPcFIgJpZAF3A2xpMgcAgYC09wUiAxBudW1iZXJlZExpc3RJdGVtBwCBgLT3BSQGBACBgLT3BSUG67KI7Zi4h4GAtPcFIgMOYmxvY2tDb250YWluZXIoAIGAtPcFKAJpZAF3A2xpMwcAgYC09wUoAw1jaGVja0xpc3RJdGVtKACBgLT3BSoHY2hlY2tlZAF4BwCBgLT3BSoGBACBgLT3BSwG7JmE66OMh4GAtPcFKAMOYmxvY2tDb250YWluZXIoAIGAtPcFLwJpZAF3A2xpNAcAgYC09wUvAw1jaGVja0xpc3RJdGVtKACBgLT3BTEHY2hlY2tlZAF5BwCBgLT3BTEGBACBgLT3BTMG66+47JmEh4GAtPcFLwMOYmxvY2tDb250YWluZXIoAIGAtPcFNgJpZAF3AnExBwCBgLT3BTYDBXF1b3RlBwCBgLT3BTgGBACBgLT3BTkG7J247JqpAA=="
+  },
+  {
+   "name": "nested blocks",
+   "input": [
+    {
+     "id": "n1",
+     "type": "paragraph",
+     "props": {},
+     "content": [
+      {
+       "type": "text",
+       "text": "부모",
+       "styles": {}
+      }
+     ],
+     "children": [
+      {
+       "id": "n2",
+       "type": "bulletListItem",
+       "props": {},
+       "content": [
+        {
+         "type": "text",
+         "text": "자식",
+         "styles": {}
+        }
+       ],
+       "children": [
+        {
+         "id": "n3",
+         "type": "checkListItem",
+         "props": {
+          "checked": true
+         },
+         "content": [
+          {
+           "type": "text",
+           "text": "손자",
+           "styles": {}
+          }
+         ],
+         "children": [
+          {
+           "id": "n4",
+           "type": "paragraph",
+           "props": {},
+           "content": [
+            {
+             "type": "text",
+             "text": "증손자",
+             "styles": {}
+            }
+           ],
+           "children": []
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "id": "n5",
+       "type": "paragraph",
+       "props": {},
+       "content": [
+        {
+         "type": "text",
+         "text": "둘째 자식",
+         "styles": {}
+        }
+       ],
+       "children": []
+      }
+     ]
+    },
+    {
+     "id": "n6",
+     "type": "paragraph",
+     "props": {},
+     "content": [
+      {
+       "type": "text",
+       "text": "형제",
+       "styles": {}
+      }
+     ],
+     "children": []
+    }
+   ],
+   "bn_blocks": [
+    {
+     "id": "n1",
+     "type": "paragraph",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default",
+      "textAlignment": "left"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "부모",
+       "styles": {}
+      }
+     ],
+     "children": [
+      {
+       "id": "n2",
+       "type": "bulletListItem",
+       "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+       },
+       "content": [
+        {
+         "type": "text",
+         "text": "자식",
+         "styles": {}
+        }
+       ],
+       "children": [
+        {
+         "id": "n3",
+         "type": "checkListItem",
+         "props": {
+          "backgroundColor": "default",
+          "textColor": "default",
+          "textAlignment": "left",
+          "checked": true
+         },
+         "content": [
+          {
+           "type": "text",
+           "text": "손자",
+           "styles": {}
+          }
+         ],
+         "children": [
+          {
+           "id": "n4",
+           "type": "paragraph",
+           "props": {
+            "backgroundColor": "default",
+            "textColor": "default",
+            "textAlignment": "left"
+           },
+           "content": [
+            {
+             "type": "text",
+             "text": "증손자",
+             "styles": {}
+            }
+           ],
+           "children": []
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "id": "n5",
+       "type": "paragraph",
+       "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+       },
+       "content": [
+        {
+         "type": "text",
+         "text": "둘째 자식",
+         "styles": {}
+        }
+       ],
+       "children": []
+      }
+     ]
+    },
+    {
+     "id": "n6",
+     "type": "paragraph",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default",
+      "textAlignment": "left"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "형제",
+       "styles": {}
+      }
+     ],
+     "children": []
+    }
+   ],
+   "update_js": "ATWCgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgoC09wUAAw5ibG9ja0NvbnRhaW5lcgcAgoC09wUBAwlwYXJhZ3JhcGgHAIKAtPcFAgYEAIKAtPcFAwbrtoDrqqgoAIKAtPcFAg9iYWNrZ3JvdW5kQ29sb3IBdwdkZWZhdWx0KACCgLT3BQIJdGV4dENvbG9yAXcHZGVmYXVsdCgAgoC09wUCDXRleHRBbGlnbm1lbnQBdwRsZWZ0h4KAtPcFAgMKYmxvY2tHcm91cAcAgoC09wUJAw5ibG9ja0NvbnRhaW5lcgcAgoC09wUKAw5idWxsZXRMaXN0SXRlbQcAgoC09wULBgQAgoC09wUMBuyekOyLnSgAgoC09wULD2JhY2tncm91bmRDb2xvcgF3B2RlZmF1bHQoAIKAtPcFCwl0ZXh0Q29sb3IBdwdkZWZhdWx0KACCgLT3BQsNdGV4dEFsaWdubWVudAF3BGxlZnSHgoC09wULAwpibG9ja0dyb3VwBwCCgLT3BRIDDmJsb2NrQ29udGFpbmVyBwCCgLT3BRMDDWNoZWNrTGlzdEl0ZW0HAIKAtPcFFAYEAIKAtPcFFQbshpDsnpAoAIKAtPcFFA9iYWNrZ3JvdW5kQ29sb3IBdwdkZWZhdWx0KACCgLT3BRQJdGV4dENvbG9yAXcHZGVmYXVsdCgAgoC09wUUDXRleHRBbGlnbm1lbnQBdwRsZWZ0KACCgLT3BRQHY2hlY2tlZAF4h4KAtPcFFAMKYmxvY2tHcm91cAcAgoC09wUcAw5ibG9ja0NvbnRhaW5lcgcAgoC09wUdAwlwYXJhZ3JhcGgHAIKAtPcFHgYEAIKAtPcFHwnspp3shpDsnpAoAIKAtPcFHg9iYWNrZ3JvdW5kQ29sb3IBdwdkZWZhdWx0KACCgLT3BR4JdGV4dENvbG9yAXcHZGVmYXVsdCgAgoC09wUeDXRleHRBbGlnbm1lbnQBdwRsZWZ0KACCgLT3BR0CaWQBdwJuNCgAgoC09wUTAmlkAXcCbjMoAIKAtPcFCgJpZAF3Am4yh4KAtPcFCgMOYmxvY2tDb250YWluZXIHAIKAtPcFKQMJcGFyYWdyYXBoBwCCgLT3BSoGBACCgLT3BSsN65GY7Ke4IOyekOyLnSgAgoC09wUqD2JhY2tncm91bmRDb2xvcgF3B2RlZmF1bHQoAIKAtPcFKgl0ZXh0Q29sb3IBdwdkZWZhdWx0KACCgLT3BSoNdGV4dEFsaWdubWVudAF3BGxlZnQoAIKAtPcFKQJpZAF3Am41KACCgLT3BQECaWQBdwJuMYeCgLT3BQEDDmJsb2NrQ29udGFpbmVyBwCCgLT3BTYDCXBhcmFncmFwaAcAgoC09wU3BgQAgoC09wU4Bu2YleygnCgAgoC09wU3D2JhY2tncm91bmRDb2xvcgF3B2RlZmF1bHQoAIKAtPcFNwl0ZXh0Q29sb3IBdwdkZWZhdWx0KACCgLT3BTcNdGV4dEFsaWdubWVudAF3BGxlZnQoAIKAtPcFNgJpZAF3Am42AA==",
+   "update_rust": "ASOBgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgYC09wUAAw5ibG9ja0NvbnRhaW5lcigAgYC09wUBAmlkAXcCbjEHAIGAtPcFAQMJcGFyYWdyYXBoBwCBgLT3BQMGBACBgLT3BQQG67aA66qoh4GAtPcFAwMKYmxvY2tHcm91cAcAgYC09wUHAw5ibG9ja0NvbnRhaW5lcigAgYC09wUIAmlkAXcCbjIHAIGAtPcFCAMOYnVsbGV0TGlzdEl0ZW0HAIGAtPcFCgYEAIGAtPcFCwbsnpDsi52HgYC09wUKAwpibG9ja0dyb3VwBwCBgLT3BQ4DDmJsb2NrQ29udGFpbmVyKACBgLT3BQ8CaWQBdwJuMwcAgYC09wUPAw1jaGVja0xpc3RJdGVtKACBgLT3BREHY2hlY2tlZAF4BwCBgLT3BREGBACBgLT3BRMG7IaQ7J6Qh4GAtPcFEQMKYmxvY2tHcm91cAcAgYC09wUWAw5ibG9ja0NvbnRhaW5lcigAgYC09wUXAmlkAXcCbjQHAIGAtPcFFwMJcGFyYWdyYXBoBwCBgLT3BRkGBACBgLT3BRoJ7Kad7IaQ7J6Qh4GAtPcFCAMOYmxvY2tDb250YWluZXIoAIGAtPcFHgJpZAF3Am41BwCBgLT3BR4DCXBhcmFncmFwaAcAgYC09wUgBgQAgYC09wUhDeuRmOynuCDsnpDsi52HgYC09wUBAw5ibG9ja0NvbnRhaW5lcigAgYC09wUnAmlkAXcCbjYHAIGAtPcFJwMJcGFyYWdyYXBoBwCBgLT3BSkGBACBgLT3BSoG7ZiV7KCcAA=="
+  },
+  {
+   "name": "code block",
+   "input": [
+    {
+     "id": "c1",
+     "type": "codeBlock",
+     "props": {
+      "language": "bash"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "kubectl apply -f deploy.yaml\necho \"배포 완료\"",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "c2",
+     "type": "codeBlock",
+     "props": {
+      "language": "text"
+     },
+     "content": [],
+     "children": []
+    }
+   ],
+   "bn_blocks": [
+    {
+     "id": "c1",
+     "type": "codeBlock",
+     "props": {
+      "language": "bash"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "kubectl apply -f deploy.yaml\necho \"배포 완료\"",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "c2",
+     "type": "codeBlock",
+     "props": {
+      "language": "text"
+     },
+     "content": [],
+     "children": []
+    }
+   ],
+   "update_js": "AQuCgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgoC09wUAAw5ibG9ja0NvbnRhaW5lcgcAgoC09wUBAwljb2RlQmxvY2sHAIKAtPcFAgYEAIKAtPcFAzFrdWJlY3RsIGFwcGx5IC1mIGRlcGxveS55YW1sCmVjaG8gIuuwsO2PrCDsmYTro4wiKACCgLT3BQIIbGFuZ3VhZ2UBdwRiYXNoKACCgLT3BQECaWQBdwJjMYeCgLT3BQEDDmJsb2NrQ29udGFpbmVyBwCCgLT3BS8DCWNvZGVCbG9jaygAgoC09wUwCGxhbmd1YWdlAXcEdGV4dCgAgoC09wUvAmlkAXcCYzIA",
+   "update_rust": "AQuBgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgYC09wUAAw5ibG9ja0NvbnRhaW5lcigAgYC09wUBAmlkAXcCYzEHAIGAtPcFAQMJY29kZUJsb2NrKACBgLT3BQMIbGFuZ3VhZ2UBdwRiYXNoBwCBgLT3BQMGBACBgLT3BQUxa3ViZWN0bCBhcHBseSAtZiBkZXBsb3kueWFtbAplY2hvICLrsLDtj6wg7JmE66OMIoeBgLT3BQEDDmJsb2NrQ29udGFpbmVyKACBgLT3BS8CaWQBdwJjMgcAgYC09wUvAwljb2RlQmxvY2soAIGAtPcFMQhsYW5ndWFnZQF3BHRleHQA"
+  },
+  {
+   "name": "table",
+   "input": [
+    {
+     "id": "tb1",
+     "type": "table",
+     "props": {},
+     "content": {
+      "type": "tableContent",
+      "rows": [
+       {
+        "cells": [
+         [
+          {
+           "type": "text",
+           "text": "이름",
+           "styles": {
+            "bold": true
+           }
+          }
+         ],
+         [
+          {
+           "type": "text",
+           "text": "상태",
+           "styles": {
+            "bold": true
+           }
+          }
+         ],
+         [
+          {
+           "type": "text",
+           "text": "담당",
+           "styles": {}
+          }
+         ]
+        ]
+       },
+       {
+        "cells": [
+         [
+          {
+           "type": "text",
+           "text": "삼성전자",
+           "styles": {}
+          }
+         ],
+         [
+          {
+           "type": "text",
+           "text": "계약 완료",
+           "styles": {
+            "textColor": "green"
+           }
+          }
+         ],
+         [
+          {
+           "type": "link",
+           "href": "https://example.com",
+           "content": [
+            {
+             "type": "text",
+             "text": "김민수",
+             "styles": {}
+            }
+           ]
+          }
+         ]
+        ]
+       }
+      ]
+     },
+     "children": []
+    }
+   ],
+   "bn_blocks": [
+    {
+     "id": "tb1",
+     "type": "table",
+     "props": {
+      "textColor": "default"
+     },
+     "content": {
+      "type": "tableContent",
+      "columnWidths": [
+       null,
+       null,
+       null
+      ],
+      "rows": [
+       {
+        "cells": [
+         {
+          "type": "tableCell",
+          "content": [
+           {
+            "type": "text",
+            "text": "이름",
+            "styles": {
+             "bold": true
+            }
+           }
+          ],
+          "props": {
+           "colspan": 1,
+           "rowspan": 1,
+           "backgroundColor": "default",
+           "textColor": "default",
+           "textAlignment": "left"
+          }
+         },
+         {
+          "type": "tableCell",
+          "content": [
+           {
+            "type": "text",
+            "text": "상태",
+            "styles": {
+             "bold": true
+            }
+           }
+          ],
+          "props": {
+           "colspan": 1,
+           "rowspan": 1,
+           "backgroundColor": "default",
+           "textColor": "default",
+           "textAlignment": "left"
+          }
+         },
+         {
+          "type": "tableCell",
+          "content": [
+           {
+            "type": "text",
+            "text": "담당",
+            "styles": {}
+           }
+          ],
+          "props": {
+           "colspan": 1,
+           "rowspan": 1,
+           "backgroundColor": "default",
+           "textColor": "default",
+           "textAlignment": "left"
+          }
+         }
+        ]
+       },
+       {
+        "cells": [
+         {
+          "type": "tableCell",
+          "content": [
+           {
+            "type": "text",
+            "text": "삼성전자",
+            "styles": {}
+           }
+          ],
+          "props": {
+           "colspan": 1,
+           "rowspan": 1,
+           "backgroundColor": "default",
+           "textColor": "default",
+           "textAlignment": "left"
+          }
+         },
+         {
+          "type": "tableCell",
+          "content": [
+           {
+            "type": "text",
+            "text": "계약 완료",
+            "styles": {
+             "textColor": "green"
+            }
+           }
+          ],
+          "props": {
+           "colspan": 1,
+           "rowspan": 1,
+           "backgroundColor": "default",
+           "textColor": "default",
+           "textAlignment": "left"
+          }
+         },
+         {
+          "type": "tableCell",
+          "content": [
+           {
+            "type": "link",
+            "href": "https://example.com",
+            "content": [
+             {
+              "type": "text",
+              "text": "김민수",
+              "styles": {}
+             }
+            ]
+           }
+          ],
+          "props": {
+           "colspan": 1,
+           "rowspan": 1,
+           "backgroundColor": "default",
+           "textColor": "default",
+           "textAlignment": "left"
+          }
+         }
+        ]
+       }
+      ]
+     },
+     "children": []
+    }
+   ],
+   "update_js": "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",
+   "update_rust": "ATKBgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgYC09wUAAw5ibG9ja0NvbnRhaW5lcigAgYC09wUBAmlkAXcDdGIxBwCBgLT3BQEDBXRhYmxlBwCBgLT3BQMDCHRhYmxlUm93BwCBgLT3BQQDCXRhYmxlQ2VsbCgAgYC09wUFB2NvbHNwYW4BfQEoAIGAtPcFBQdyb3dzcGFuAX0BBwCBgLT3BQUDDnRhYmxlUGFyYWdyYXBoBwCBgLT3BQgGBgCBgLT3BQkEYm9sZAJ7fYSBgLT3BQoG7J2066aEhoGAtPcFDARib2xkBG51bGyHgYC09wUFAwl0YWJsZUNlbGwoAIGAtPcFDgdjb2xzcGFuAX0BKACBgLT3BQ4Hcm93c3BhbgF9AQcAgYC09wUOAw50YWJsZVBhcmFncmFwaAcAgYC09wURBgYAgYC09wUSBGJvbGQCe32EgYC09wUTBuyDge2DnIaBgLT3BRUEYm9sZARudWxsh4GAtPcFDgMJdGFibGVDZWxsKACBgLT3BRcHY29sc3BhbgF9ASgAgYC09wUXB3Jvd3NwYW4BfQEHAIGAtPcFFwMOdGFibGVQYXJhZ3JhcGgHAIGAtPcFGgYEAIGAtPcFGwbri7Tri7mHgYC09wUEAwh0YWJsZVJvdwcAgYC09wUeAwl0YWJsZUNlbGwoAIGAtPcFHwdjb2xzcGFuAX0BKACBgLT3BR8Hcm93c3BhbgF9AQcAgYC09wUfAw50YWJsZVBhcmFncmFwaAcAgYC09wUiBgQAgYC09wUjDOyCvOyEseyghOyekIeBgLT3BR8DCXRhYmxlQ2VsbCgAgYC09wUoB2NvbHNwYW4BfQEoAIGAtPcFKAdyb3dzcGFuAX0BBwCBgLT3BSgDDnRhYmxlUGFyYWdyYXBoBwCBgLT3BSsGBgCBgLT3BSwJdGV4dENvbG9yF3sic3RyaW5nVmFsdWUiOiJncmVlbiJ9hIGAtPcFLQ3qs4Tslb0g7JmE66OMhoGAtPcFMgl0ZXh0Q29sb3IEbnVsbIeBgLT3BSgDCXRhYmxlQ2VsbCgAgYC09wU0B2NvbHNwYW4BfQEoAIGAtPcFNAdyb3dzcGFuAX0BBwCBgLT3BTQDDnRhYmxlUGFyYWdyYXBoBwCBgLT3BTcGBgCBgLT3BTgEbGluax57ImhyZWYiOiJodHRwczovL2V4YW1wbGUuY29tIn2EgYC09wU5Ceq5gOuvvOyImIaBgLT3BTwEbGluawRudWxsAA=="
+  },
+  {
+   "name": "image and file",
+   "input": [
+    {
+     "id": "i1",
+     "type": "image",
+     "props": {
+      "url": "/v1/files/00000000-0000-0000-0000-0000000000f1/content",
+      "name": "shot.png",
+      "caption": "스크린샷",
+      "showPreview": true,
+      "previewWidth": 320
+     },
+     "children": []
+    },
+    {
+     "id": "i2",
+     "type": "image",
+     "props": {
+      "url": "/v1/files/00000000-0000-0000-0000-0000000000f1/content",
+      "name": "",
+      "caption": "",
+      "showPreview": false
+     },
+     "children": []
+    },
+    {
+     "id": "f1",
+     "type": "file",
+     "props": {
+      "url": "/v1/files/00000000-0000-0000-0000-0000000000f1/content",
+      "name": "보고서.pdf",
+      "caption": ""
+     },
+     "children": []
+    }
+   ],
+   "bn_blocks": [
+    {
+     "id": "i1",
+     "type": "image",
+     "props": {
+      "textAlignment": "left",
+      "backgroundColor": "default",
+      "name": "shot.png",
+      "url": "/v1/files/00000000-0000-0000-0000-0000000000f1/content",
+      "caption": "스크린샷",
+      "showPreview": true,
+      "previewWidth": 320
+     },
+     "children": []
+    },
+    {
+     "id": "i2",
+     "type": "image",
+     "props": {
+      "textAlignment": "left",
+      "backgroundColor": "default",
+      "name": "",
+      "url": "/v1/files/00000000-0000-0000-0000-0000000000f1/content",
+      "caption": "",
+      "showPreview": false
+     },
+     "children": []
+    },
+    {
+     "id": "f1",
+     "type": "file",
+     "props": {
+      "backgroundColor": "default",
+      "name": "보고서.pdf",
+      "url": "/v1/files/00000000-0000-0000-0000-0000000000f1/content",
+      "caption": ""
+     },
+     "children": []
+    }
+   ],
+   "update_js": "ARyCgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgoC09wUAAw5ibG9ja0NvbnRhaW5lcgcAgoC09wUBAwVpbWFnZSgAgoC09wUCDXRleHRBbGlnbm1lbnQBdwRsZWZ0KACCgLT3BQIPYmFja2dyb3VuZENvbG9yAXcHZGVmYXVsdCgAgoC09wUCBG5hbWUBdwhzaG90LnBuZygAgoC09wUCA3VybAF3Ni92MS9maWxlcy8wMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwZjEvY29udGVudCgAgoC09wUCB2NhcHRpb24BdwzsiqTtgazrprDsg7coAIKAtPcFAgtzaG93UHJldmlldwF4KACCgLT3BQIMcHJldmlld1dpZHRoAX2ABSgAgoC09wUBAmlkAXcCaTGHgoC09wUBAw5ibG9ja0NvbnRhaW5lcgcAgoC09wULAwVpbWFnZSgAgoC09wUMDXRleHRBbGlnbm1lbnQBdwRsZWZ0KACCgLT3BQwPYmFja2dyb3VuZENvbG9yAXcHZGVmYXVsdCgAgoC09wUMBG5hbWUBdwAoAIKAtPcFDAN1cmwBdzYvdjEvZmlsZXMvMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMGYxL2NvbnRlbnQoAIKAtPcFDAdjYXB0aW9uAXcAKACCgLT3BQwLc2hvd1ByZXZpZXcBeSgAgoC09wUMDHByZXZpZXdXaWR0aAF/KACCgLT3BQsCaWQBdwJpMoeCgLT3BQsDDmJsb2NrQ29udGFpbmVyBwCCgLT3BRUDBGZpbGUoAIKAtPcFFg9iYWNrZ3JvdW5kQ29sb3IBdwdkZWZhdWx0KACCgLT3BRYEbmFtZQF3DeuztOqzoOyEnC5wZGYoAIKAtPcFFgN1cmwBdzYvdjEvZmlsZXMvMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMGYxL2NvbnRlbnQoAIKAtPcFFgdjYXB0aW9uAXcAKACCgLT3BRUCaWQBdwJmMQA=",
+   "update_rust": "ARaBgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgYC09wUAAw5ibG9ja0NvbnRhaW5lcigAgYC09wUBAmlkAXcCaTEHAIGAtPcFAQMFaW1hZ2UoAIGAtPcFAwN1cmwBdzYvdjEvZmlsZXMvMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMGYxL2NvbnRlbnQoAIGAtPcFAwRuYW1lAXcIc2hvdC5wbmcoAIGAtPcFAwdjYXB0aW9uAXcM7Iqk7YGs66aw7IO3KACBgLT3BQMLc2hvd1ByZXZpZXcBeCgAgYC09wUDDHByZXZpZXdXaWR0aAF9gAWHgYC09wUBAw5ibG9ja0NvbnRhaW5lcigAgYC09wUJAmlkAXcCaTIHAIGAtPcFCQMFaW1hZ2UoAIGAtPcFCwN1cmwBdzYvdjEvZmlsZXMvMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMGYxL2NvbnRlbnQoAIGAtPcFCwRuYW1lAXcAKACBgLT3BQsHY2FwdGlvbgF3ACgAgYC09wULC3Nob3dQcmV2aWV3AXmHgYC09wUJAw5ibG9ja0NvbnRhaW5lcigAgYC09wUQAmlkAXcCZjEHAIGAtPcFEAMEZmlsZSgAgYC09wUSA3VybAF3Ni92MS9maWxlcy8wMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwZjEvY29udGVudCgAgYC09wUSBG5hbWUBdw3rs7Tqs6DshJwucGRmKACBgLT3BRIHY2FwdGlvbgF3AAA="
+  },
+  {
+   "name": "divider",
+   "input": [
+    {
+     "id": "d0",
+     "type": "paragraph",
+     "props": {},
+     "content": [
+      {
+       "type": "text",
+       "text": "위",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "dv",
+     "type": "divider",
+     "props": {},
+     "children": []
+    },
+    {
+     "id": "d1",
+     "type": "paragraph",
+     "props": {},
+     "content": [
+      {
+       "type": "text",
+       "text": "아래",
+       "styles": {}
+      }
+     ],
+     "children": []
+    }
+   ],
+   "bn_blocks": [
+    {
+     "id": "d0",
+     "type": "paragraph",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default",
+      "textAlignment": "left"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "위",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "dv",
+     "type": "divider",
+     "props": {},
+     "children": []
+    },
+    {
+     "id": "d1",
+     "type": "paragraph",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default",
+      "textAlignment": "left"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "아래",
+       "styles": {}
+      }
+     ],
+     "children": []
+    }
+   ],
+   "update_js": "ARSCgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgoC09wUAAw5ibG9ja0NvbnRhaW5lcgcAgoC09wUBAwlwYXJhZ3JhcGgHAIKAtPcFAgYEAIKAtPcFAwPsnIQoAIKAtPcFAg9iYWNrZ3JvdW5kQ29sb3IBdwdkZWZhdWx0KACCgLT3BQIJdGV4dENvbG9yAXcHZGVmYXVsdCgAgoC09wUCDXRleHRBbGlnbm1lbnQBdwRsZWZ0KACCgLT3BQECaWQBdwJkMIeCgLT3BQEDDmJsb2NrQ29udGFpbmVyBwCCgLT3BQkDB2RpdmlkZXIoAIKAtPcFCQJpZAF3AmR2h4KAtPcFCQMOYmxvY2tDb250YWluZXIHAIKAtPcFDAMJcGFyYWdyYXBoBwCCgLT3BQ0GBACCgLT3BQ4G7JWE656YKACCgLT3BQ0PYmFja2dyb3VuZENvbG9yAXcHZGVmYXVsdCgAgoC09wUNCXRleHRDb2xvcgF3B2RlZmF1bHQoAIKAtPcFDQ10ZXh0QWxpZ25tZW50AXcEbGVmdCgAgoC09wUMAmlkAXcCZDEA",
+   "update_rust": "AQ6BgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgYC09wUAAw5ibG9ja0NvbnRhaW5lcigAgYC09wUBAmlkAXcCZDAHAIGAtPcFAQMJcGFyYWdyYXBoBwCBgLT3BQMGBACBgLT3BQQD7JyEh4GAtPcFAQMOYmxvY2tDb250YWluZXIoAIGAtPcFBgJpZAF3AmR2BwCBgLT3BQYDB2RpdmlkZXKHgYC09wUGAw5ibG9ja0NvbnRhaW5lcigAgYC09wUJAmlkAXcCZDEHAIGAtPcFCQMJcGFyYWdyYXBoBwCBgLT3BQsGBACBgLT3BQwG7JWE656YAA=="
+  },
+  {
+   "name": "references and mentions",
+   "input": [
+    {
+     "id": "r1",
+     "type": "paragraph",
+     "props": {},
+     "content": [
+      {
+       "type": "text",
+       "text": "티켓 ",
+       "styles": {}
+      },
+      {
+       "type": "reference",
+       "props": {
+        "kind": "TICKET",
+        "id": "00000000-0000-0000-0000-0000000000a1"
+       }
+      },
+      {
+       "type": "text",
+       "text": " 와 문서 ",
+       "styles": {}
+      },
+      {
+       "type": "reference",
+       "props": {
+        "kind": "DOC",
+        "id": "00000000-0000-0000-0000-0000000000a2"
+       }
+      },
+      {
+       "type": "reference",
+       "props": {
+        "kind": "RECORD",
+        "id": "00000000-0000-0000-0000-0000000000a1"
+       }
+      },
+      {
+       "type": "mention",
+       "props": {
+        "userId": "00000000-0000-0000-0000-0000000000a2"
+       }
+      },
+      {
+       "type": "text",
+       "text": " 확인",
+       "styles": {
+        "bold": true
+       }
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "r2",
+     "type": "paragraph",
+     "props": {},
+     "content": [
+      {
+       "type": "mention",
+       "props": {
+        "userId": "00000000-0000-0000-0000-0000000000a1"
+       }
+      }
+     ],
+     "children": []
+    }
+   ],
+   "bn_blocks": [
+    {
+     "id": "r1",
+     "type": "paragraph",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default",
+      "textAlignment": "left"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "티켓 ",
+       "styles": {}
+      },
+      {
+       "type": "reference",
+       "props": {
+        "kind": "TICKET",
+        "id": "00000000-0000-0000-0000-0000000000a1"
+       }
+      },
+      {
+       "type": "text",
+       "text": " 와 문서 ",
+       "styles": {}
+      },
+      {
+       "type": "reference",
+       "props": {
+        "kind": "DOC",
+        "id": "00000000-0000-0000-0000-0000000000a2"
+       }
+      },
+      {
+       "type": "reference",
+       "props": {
+        "kind": "RECORD",
+        "id": "00000000-0000-0000-0000-0000000000a1"
+       }
+      },
+      {
+       "type": "mention",
+       "props": {
+        "userId": "00000000-0000-0000-0000-0000000000a2"
+       }
+      },
+      {
+       "type": "text",
+       "text": " 확인",
+       "styles": {
+        "bold": true
+       }
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "r2",
+     "type": "paragraph",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default",
+      "textAlignment": "left"
+     },
+     "content": [
+      {
+       "type": "mention",
+       "props": {
+        "userId": "00000000-0000-0000-0000-0000000000a1"
+       }
+      }
+     ],
+     "children": []
+    }
+   ],
+   "update_js": "ASKCgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgoC09wUAAw5ibG9ja0NvbnRhaW5lcgcAgoC09wUBAwlwYXJhZ3JhcGgHAIKAtPcFAgYEAIKAtPcFAwfti7DsvJMgh4KAtPcFAwMJcmVmZXJlbmNlKACCgLT3BQcEa2luZAF3BlRJQ0tFVCgAgoC09wUHAmlkAXckMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMGExh4KAtPcFBwYEAIKAtPcFCgwg7JmAIOusuOyEnCCHgoC09wUKAwlyZWZlcmVuY2UoAIKAtPcFEQRraW5kAXcDRE9DKACCgLT3BRECaWQBdyQwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwYTKHgoC09wURAwlyZWZlcmVuY2UoAIKAtPcFFARraW5kAXcGUkVDT1JEKACCgLT3BRQCaWQBdyQwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwYTGHgoC09wUUAwdtZW50aW9uKACCgLT3BRcGdXNlcklkAXckMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMGEyh4KAtPcFFwYGAIKAtPcFGQRib2xkAnt9hIKAtPcFGgcg7ZmV7J24hoKAtPcFHQRib2xkBG51bGwoAIKAtPcFAg9iYWNrZ3JvdW5kQ29sb3IBdwdkZWZhdWx0KACCgLT3BQIJdGV4dENvbG9yAXcHZGVmYXVsdCgAgoC09wUCDXRleHRBbGlnbm1lbnQBdwRsZWZ0KACCgLT3BQECaWQBdwJyMYeCgLT3BQEDDmJsb2NrQ29udGFpbmVyBwCCgLT3BSMDCXBhcmFncmFwaAcAgoC09wUkAwdtZW50aW9uKACCgLT3BSUGdXNlcklkAXckMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMGExKACCgLT3BSQPYmFja2dyb3VuZENvbG9yAXcHZGVmYXVsdCgAgoC09wUkCXRleHRDb2xvcgF3B2RlZmF1bHQoAIKAtPcFJA10ZXh0QWxpZ25tZW50AXcEbGVmdCgAgoC09wUjAmlkAXcCcjIA",
+   "update_rust": "ARyBgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgYC09wUAAw5ibG9ja0NvbnRhaW5lcigAgYC09wUBAmlkAXcCcjEHAIGAtPcFAQMJcGFyYWdyYXBoBwCBgLT3BQMGBACBgLT3BQQH7Yuw7LyTIIeBgLT3BQQDCXJlZmVyZW5jZSgAgYC09wUIBGtpbmQBdwZUSUNLRVQoAIGAtPcFCAJpZAF3JDAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDBhMYeBgLT3BQgGBACBgLT3BQsMIOyZgCDrrLjshJwgh4GAtPcFCwMJcmVmZXJlbmNlKACBgLT3BRIEa2luZAF3A0RPQygAgYC09wUSAmlkAXckMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMGEyh4GAtPcFEgMJcmVmZXJlbmNlKACBgLT3BRUEa2luZAF3BlJFQ09SRCgAgYC09wUVAmlkAXckMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMGExh4GAtPcFFQMHbWVudGlvbigAgYC09wUYBnVzZXJJZAF3JDAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDBhMoeBgLT3BRgGBgCBgLT3BRoEYm9sZAJ7fYSBgLT3BRsHIO2ZleyduIaBgLT3BR4EYm9sZARudWxsh4GAtPcFAQMOYmxvY2tDb250YWluZXIoAIGAtPcFIAJpZAF3AnIyBwCBgLT3BSADCXBhcmFncmFwaAcAgYC09wUiAwdtZW50aW9uKACBgLT3BSMGdXNlcklkAXckMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMGExAA=="
+  },
+  {
+   "name": "unicode and spacing",
+   "input": [
+    {
+     "id": "u1",
+     "type": "paragraph",
+     "props": {},
+     "content": [
+      {
+       "type": "text",
+       "text": "이모지 😀👍🏽 와 결합문자 é  두 칸 공백 ",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "u2",
+     "type": "paragraph",
+     "props": {},
+     "content": [
+      {
+       "type": "text",
+       "text": " 앞뒤 공백 ",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "u3",
+     "type": "paragraph",
+     "props": {},
+     "content": [
+      {
+       "type": "text",
+       "text": "줄바꿈\n두번째 줄",
+       "styles": {}
+      }
+     ],
+     "children": []
+    }
+   ],
+   "bn_blocks": [
+    {
+     "id": "u1",
+     "type": "paragraph",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default",
+      "textAlignment": "left"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "이모지 😀👍🏽 와 결합문자 é  두 칸 공백 ",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "u2",
+     "type": "paragraph",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default",
+      "textAlignment": "left"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": " 앞뒤 공백 ",
+       "styles": {}
+      }
+     ],
+     "children": []
+    },
+    {
+     "id": "u3",
+     "type": "paragraph",
+     "props": {
+      "backgroundColor": "default",
+      "textColor": "default",
+      "textAlignment": "left"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "줄바꿈\n두번째 줄",
+       "styles": {}
+      }
+     ],
+     "children": []
+    }
+   ],
+   "update_js": "ARyCgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgoC09wUAAw5ibG9ja0NvbnRhaW5lcgcAgoC09wUBAwlwYXJhZ3JhcGgHAIKAtPcFAgYEAIKAtPcFAzvsnbTrqqjsp4Ag8J+YgPCfkY3wn4+9IOyZgCDqsrDtlanrrLjsnpAgw6kgIOuRkCDsubgg6rO167CxICgAgoC09wUCD2JhY2tncm91bmRDb2xvcgF3B2RlZmF1bHQoAIKAtPcFAgl0ZXh0Q29sb3IBdwdkZWZhdWx0KACCgLT3BQINdGV4dEFsaWdubWVudAF3BGxlZnQoAIKAtPcFAQJpZAF3AnUxh4KAtPcFAQMOYmxvY2tDb250YWluZXIHAIKAtPcFJAMJcGFyYWdyYXBoBwCCgLT3BSUGBACCgLT3BSYPIOyVnuuSpCDqs7XrsLEgKACCgLT3BSUPYmFja2dyb3VuZENvbG9yAXcHZGVmYXVsdCgAgoC09wUlCXRleHRDb2xvcgF3B2RlZmF1bHQoAIKAtPcFJQ10ZXh0QWxpZ25tZW50AXcEbGVmdCgAgoC09wUkAmlkAXcCdTKHgoC09wUkAw5ibG9ja0NvbnRhaW5lcgcAgoC09wUyAwlwYXJhZ3JhcGgHAIKAtPcFMwYEAIKAtPcFNAnspITrsJTqv4iHgoC09wU0AwloYXJkQnJlYWuHgoC09wU4BgQAgoC09wU5DeuRkOuyiOynuCDspIQoAIKAtPcFMw9iYWNrZ3JvdW5kQ29sb3IBdwdkZWZhdWx0KACCgLT3BTMJdGV4dENvbG9yAXcHZGVmYXVsdCgAgoC09wUzDXRleHRBbGlnbm1lbnQBdwRsZWZ0KACCgLT3BTICaWQBdwJ1MwA=",
+   "update_rust": "AROBgLT3BQAHAQ5kb2N1bWVudC1zdG9yZQMKYmxvY2tHcm91cAcAgYC09wUAAw5ibG9ja0NvbnRhaW5lcigAgYC09wUBAmlkAXcCdTEHAIGAtPcFAQMJcGFyYWdyYXBoBwCBgLT3BQMGBACBgLT3BQQ77J2066qo7KeAIPCfmIDwn5GN8J+PvSDsmYAg6rKw7ZWp66y47J6QIMOpICDrkZAg7Lm4IOqzteuwsSCHgYC09wUBAw5ibG9ja0NvbnRhaW5lcigAgYC09wUhAmlkAXcCdTIHAIGAtPcFIQMJcGFyYWdyYXBoBwCBgLT3BSMGBACBgLT3BSQPIOyVnuuSpCDqs7XrsLEgh4GAtPcFIQMOYmxvY2tDb250YWluZXIoAIGAtPcFLAJpZAF3AnUzBwCBgLT3BSwDCXBhcmFncmFwaAcAgYC09wUuBgQAgYC09wUvCeykhOuwlOq/iIeBgLT3BS8DCWhhcmRCcmVha4eBgLT3BTMGBACBgLT3BTQN65GQ67KI7Ke4IOykhAA="
+  }
+ ]
+}

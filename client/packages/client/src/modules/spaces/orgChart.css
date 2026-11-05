@@ -1,0 +1,31 @@
+.teams-page > div.org-toolbar.org-toolbar { display: flex; flex-direction: row; flex-wrap: wrap; gap: 0.75rem 1rem; align-items: end; padding: var(--space-3, 0.75rem) var(--space-5, 1.25rem); }
+.org-search { flex: 1 1 16rem; max-width: 24rem; }
+.teams-page > div.org-layout.org-layout { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); align-items: start; padding: 0; background: transparent; }
+.teams-page > div.org-layout.has-preview { grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem); }
+.org-tree { display: grid; gap: 1rem; min-width: 0; }
+.org-preview { position: sticky; top: 0.5rem; overflow-wrap: anywhere; padding: var(--space-4, 1rem); display: grid; gap: var(--space-2, 0.5rem); }
+.org-preview-head { display: flex; justify-content: space-between; align-items: start; gap: 0.5rem; }
+.org-preview-head h2 { margin: 0; }
+.org-preview-member { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.team-card-name { all: unset; cursor: pointer; display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
+.team-card-name:focus-visible { outline: 2px solid var(--accent, currentColor); outline-offset: 2px; }
+.team-card.is-selected { outline: 2px solid var(--accent, currentColor); }
+.org-edit-dept { border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.5rem 0.75rem; margin: 0.5rem 0; }
+.org-edit-dept.is-target, .org-edit-zone.is-target { border-style: dashed; }
+.org-edit-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.org-edit-head h2 { margin: 0; flex: 1 1 8rem; overflow-wrap: anywhere; }
+.org-edit-team { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; padding: 0.25rem 0; cursor: grab; }
+.org-edit-zone { border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.5rem 0.75rem; margin: 0.5rem 0; }
+.org-edit-zone h2 { font-size: 1rem; }
+.org-edit-changes { position: sticky; bottom: 0; background: var(--surface, Canvas); border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.5rem 0.75rem; margin-top: 0.75rem; }
+.team-roster-search { max-width: 22rem; }
+.team-channel-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.teams-page > div.team-work-tab.team-work-tab { min-width: 0; padding: 0; background: transparent; }
+.members-filters { align-items: end; flex-wrap: wrap; }
+.person-admin { white-space: nowrap; }
+@media (max-width: 760px) {
+  .teams-page > div.org-layout.has-preview { grid-template-columns: minmax(0, 1fr); }
+  .org-preview { position: static; }
+}
+
+.teams-page > ul.plain-list { margin-inline: var(--space-6); max-width: 1100px; }

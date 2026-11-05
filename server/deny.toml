@@ -1,0 +1,38 @@
+# cargo-deny: `make deny` (everything) and `make licenses` (the licence check alone). Advisories come
+# from the RustSec database. This is the only licence policy of the repository.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+# Each ignore says why it is safe and what would end it; review them when a dependency is updated.
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = "rsa (Marvin timing attack on private-key operations) is only a dev-dependency of the tests, which use it to sign tokens for fake OpenID providers; it is not in core-api, admin-cli or any shipped crate. No fixed release exists." },
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml (quadratic duplicate-attribute check) comes in through object_store, which parses only responses of the configured S3 endpoint, a store the operator runs. The fixed quick-xml 0.41 needs object_store 0.14, which needs reqwest 0.13; ends with that upgrade." },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml (NsReader namespace allocation) comes in through object_store; same scope and end as RUSTSEC-2026-0194." },
+    { id = "RUSTSEC-2026-0215", reason = "smallstr is unmaintained and comes in through yrs (co-editing); it is an advisory about upkeep, not a vulnerability. Ends when yrs drops it." },
+]
+
+[licenses]
+version = 2
+allow = [
+    "MIT", "MIT-0", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause", "ISC",
+    "Zlib", "0BSD", "Unicode-3.0", "Unicode-DFS-2016", "CC0-1.0", "Unlicense", "MPL-2.0", "BSL-1.0", "OpenSSL",
+    "CDLA-Permissive-2.0", "GPL-3.0-only", "GPL-3.0-or-later", "LGPL-3.0-or-later", "LGPL-3.0-only",
+]
+confidence-threshold = 0.9
+# The list is the GPL-3.0-compatible set, not the licences in use today; unused entries are fine.
+unused-allowed-license = "allow"
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

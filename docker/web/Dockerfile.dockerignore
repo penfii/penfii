@@ -1,0 +1,12 @@
+**/.git
+.github
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+coverage
+**/.env
+**/.env.*
+!**/.env.example
+*.pem
+*.key
+**/target

@@ -1,0 +1,46 @@
+[package]
+name = "core-api"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-only"
+
+[[bin]]
+name = "core-api"
+path = "src/main.rs"
+
+# The tests live at the workspace root. `integration` is one binary for everything that needs
+# PostgreSQL (and OpenSearch); each test gets a database of its own from `#[sqlx::test]`.
+[[test]]
+name = "integration"
+path = "../../tests/integration/main.rs"
+
+[[test]]
+name = "contract"
+path = "../../tests/contract.rs"
+
+[dependencies]
+axum = { workspace = true }
+penfii-core = { workspace = true }
+penfii-http-api = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+base64 = { workspace = true }
+chrono = { workspace = true }
+futures-util = { workspace = true }
+http-body-util = { workspace = true }
+jsonwebtoken = { workspace = true }
+penfii-contracts = { workspace = true }
+rand = { workspace = true }
+rsa = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+sqlx = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tower = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+yrs = { workspace = true }

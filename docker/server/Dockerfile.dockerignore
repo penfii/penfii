@@ -1,0 +1,10 @@
+**/target
+**/.git
+.github
+**/.env
+**/.env.*
+!**/.env.example
+*.pem
+*.key
+**/node_modules
+**/dist

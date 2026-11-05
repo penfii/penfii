@@ -1,0 +1,172 @@
+/* Docs and Database screens (the editor has its own sheet, loaded with the editor). */
+.doc-chip { display: inline-flex; align-items: center; gap: 0.25em; padding: 0 0.45em; border-radius: 999px; background: var(--bg-muted); border: 1px solid var(--border-strong); font-size: 0.9em; cursor: pointer; line-height: 1.5; }
+.doc-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.doc-chip.is-unavailable { color: var(--text-muted); background: transparent; border-style: dashed; cursor: default; }
+.doc-chip-user { background: color-mix(in srgb, var(--accent) 12%, transparent); cursor: default; }
+.doc-picker { display: grid; gap: 8px; min-width: min(480px, 90vw); }
+.doc-picker input { width: 100%; padding: 8px 10px; }
+.doc-picker-list { list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow: auto; }
+.doc-picker-list button { width: 100%; text-align: left; padding: 8px 10px; background: transparent; border: 0; border-radius: 6px; display: flex; justify-content: space-between; gap: 12px; cursor: pointer; }
+.doc-picker-list button:hover, .doc-picker-list button:focus-visible { background: var(--bg-muted); }
+.doc-banner { padding: 8px 12px; border-radius: 6px; margin: 8px 0; background: var(--bg-muted); }
+.doc-banner.is-warning { background: #fff4e5; }
+.doc-banner.is-danger { background: #fde8e8; }
+.doc-status { font-size: 0.85rem; color: var(--text-muted); }
+.doc-tree, .doc-tree ul { list-style: none; margin: 0; padding: 0; }
+.doc-tree ul { padding-left: 14px; }
+.doc-tree-row { display: flex; align-items: center; gap: 4px; padding: 2px 4px; border-radius: 6px; }
+.doc-tree-row.is-selected { background: var(--accent-soft); font-weight: 700; }
+.doc-tree-row.is-drop { outline: 2px dashed var(--accent); }
+.doc-tree-row button { background: transparent; border: 0; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
+.doc-tree-row .doc-tree-open { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-tree-actions { display: none; gap: 2px; }
+.doc-tree-row:hover .doc-tree-actions, .doc-tree-row:focus-within .doc-tree-actions { display: inline-flex; }
+.doc-page { display: grid; gap: 12px; max-width: 860px; margin: 0 auto; padding: 16px; }
+.doc-title-input { font-size: 1.8rem; font-weight: 700; border: 0; background: transparent; width: 100%; padding: 4px 0; }
+.doc-title-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.doc-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.doc-comments { border-top: 1px solid var(--border-strong); padding-top: 12px; }
+.doc-split { display: grid; grid-template-columns: minmax(180px, 260px) 1fr; gap: 16px; }
+.doc-split-tree { padding: 12px 8px; border-right: 1px solid var(--border-strong); }
+@media (max-width: 720px) { .doc-split { grid-template-columns: 1fr; } .doc-split-tree { border-right: 0; border-bottom: 1px solid var(--border-strong); } }
+.doc-mention-box { position: relative; }
+.doc-mention-list { position: absolute; z-index: 5; left: 0; right: 0; list-style: none; margin: 2px 0 0; padding: 4px; background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.12); }
+.doc-mention-list button { width: 100%; text-align: left; padding: 6px 8px; background: transparent; border: 0; cursor: pointer; border-radius: 4px; }
+.doc-mention-list button:hover { background: var(--bg-muted); }
+.doc-access { border: 0; padding: 0; display: grid; gap: 6px; min-width: min(460px, 90vw); }
+.doc-access-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
+.doc-access-list li { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.doc-templates { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+
+.db-screen { padding: 16px; display: grid; gap: 12px; align-content: start; }
+.db-table-wrap { overflow-x: auto; }
+.db-table th, .db-table td { text-align: left; padding: 6px 10px; vertical-align: top; }
+.db-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.db-list-row { width: 100%; text-align: left; display: flex; gap: 16px; align-items: baseline; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: transparent; cursor: pointer; }
+.db-list-cells { display: flex; gap: 12px; flex-wrap: wrap; color: var(--text-muted); }
+.db-kanban { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(220px, 1fr); gap: 12px; overflow-x: auto; align-items: start; }
+.db-kanban-column { background: var(--bg-muted); border-radius: 10px; padding: 8px; min-height: 120px; }
+.db-kanban-column.is-drop { outline: 2px dashed var(--accent); }
+.db-kanban-column h3 { margin: 4px 6px 8px; font-size: 0.9rem; }
+.db-kanban-column ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.db-card { width: 100%; text-align: left; display: grid; gap: 4px; padding: 8px 10px; background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: 8px; cursor: grab; }
+.db-record-panel { position: fixed; top: 0; right: 0; bottom: 0; width: min(var(--record-width, 460px), 100vw); background: var(--bg-elevated); border-left: 1px solid var(--border-strong); box-shadow: -8px 0 24px rgba(0,0,0,.08); z-index: 20; display: flex; flex-direction: column; }
+/* The panel itself does not clip, so the resize handle can reach past its edge; the content scrolls inside. */
+.db-record-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 16px; display: grid; gap: 10px; align-content: start; }
+@media (max-width: 960px) { .db-record-panel { width: 100vw; border-left: 0; } .db-record-panel .resize-handle { display: none; } }
+.db-record-fields { display: grid; gap: 10px; margin: 0; }
+.db-record-field { display: grid; gap: 4px; }
+.db-record-field dt { font-size: 0.8rem; color: var(--text-muted); }
+.db-record-field dd { margin: 0; }
+.db-record-field input:not([type=checkbox]), .db-record-field select { width: 100%; padding: 6px 8px; }
+.cell-multi { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; position: relative; }
+.cell-empty { color: var(--text-muted); }
+.status-pill { display: inline-block; padding: 0 0.6em; border-radius: 999px; background: #e5e7eb; font-size: 0.85em; }
+.status-green { background: #d1fae5; } .status-blue { background: #dbeafe; } .status-red { background: #fee2e2; } .status-yellow { background: #fef3c7; }
+.referenced-by { display: grid; gap: 6px; }
+.doc-title { font-size: 1.8rem; font-weight: 700; margin: 0; padding: 4px 0; overflow-wrap: anywhere; }
+.doc-title.is-untitled { color: var(--text-muted); }
+.doc-badge { margin-left: 8px; padding: 0 0.5em; border-radius: 999px; background: var(--bg-muted); border: 1px solid var(--border-strong); font-size: 0.85em; }
+.doc-history { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 4px; max-height: 50vh; overflow: auto; }
+.doc-history-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 4px; border-bottom: 1px solid var(--border-strong); }
+.doc-history-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.doc-history-preview { max-height: 60vh; overflow: auto; }
+.doc-banner-actions { display: flex; gap: 8px; margin-top: 6px; }
+.doc-title-input { border-bottom: 2px solid var(--border-strong); }
+.doc-title-input:focus-visible { border-bottom-color: var(--accent); outline: none; }
+.doc-title-input[aria-invalid="true"] { border-bottom-color: var(--danger); outline: none; }
+.doc-title-input::placeholder { color: var(--text-muted); font-weight: 400; }
+.doc-status.is-warning { color: var(--danger); font-weight: 600; }
+.share-scope { display: grid; gap: 6px; margin-bottom: 8px; }
+.share-scope label { display: flex; align-items: center; gap: 6px; }
+.share-scope-project { display: grid; gap: 6px; margin: 0 0 4px 24px; }
+.share-scope-project label { display: grid; gap: 2px; }
+/* Fieldsets size to their content by default; inside a dialog that pushed selects and the Save button out of view. */
+.share-scope, .doc-access { min-width: 0; max-width: 100%; box-sizing: border-box; }
+.share-scope select, .share-scope-project label, .doc-access select { min-width: 0; max-width: 100%; }
+.share-scope .hint { overflow-wrap: anywhere; }
+.doc-access-list li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(96px, 150px) auto; }
+.doc-access-list li:has(> button:only-child) { display: flex; }
+.doc-access-list li > span { overflow-wrap: anywhere; }
+.share-scope-change { margin: 0 0 8px; padding: 6px 10px; border-radius: 6px; background: var(--surface-2, rgba(0,0,0,.05)); overflow-wrap: anywhere; }
+
+.doc-access h3 { margin: 8px 0 0; }
+.doc-tree-search { width: 100%; margin: 0.4rem 0; box-sizing: border-box; }
+.doc-group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  margin: 0.6rem 0 0.15rem;
+  padding: 0.15rem 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-weight: 650;
+  text-align: start;
+}
+.doc-group-key { flex: none; padding: 0 0.35rem; border-radius: 4px; background: var(--bg-muted); color: var(--text-secondary); font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em; }
+.doc-group-count { margin-left: auto; color: var(--text-muted); font-size: 0.75rem; }
+.doc-draft-bar { display: flex; justify-content: space-between; gap: var(--space-3); align-items: flex-start; margin-bottom: var(--space-3); }
+/* The status text may wrap; the actions keep one line. */
+.doc-meta { display: flex; flex: 1 1 14rem; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.doc-actions { display: flex; flex: none; align-items: center; gap: 8px; margin-left: auto; }
+@media (max-width: 720px) { .doc-actions { flex-wrap: wrap; } }
+
+/* Document page (frame 3.1): a bordered top bar with the path and the actions, then one 760px column. */
+.doc-page { display: flex; flex-direction: column; gap: 0; max-width: none; margin: 0; padding: 0; min-height: 100%; background: var(--bg-elevated); }
+.doc-topbar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 10px; min-height: 60px; padding: 0 var(--space-6); background: var(--bg-elevated); border-bottom: 1px solid var(--border); }
+.doc-crumb { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; color: var(--text-muted); }
+.doc-crumb b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.doc-topbar > .doc-status { margin-left: auto; }
+.doc-actions { gap: 10px; }
+.doc-actions .btn, .doc-actions button { height: 36px; border-radius: 10px; }
+.doc-column { display: grid; gap: 14px; align-content: start; width: min(760px, 100% - 2 * var(--space-5)); margin: 0 auto; padding: 44px 0 var(--space-6); }
+.doc-title, .doc-title-input { font-size: 2.4rem; line-height: 1.2; letter-spacing: -0.02em; }
+.doc-badge { margin: 0; padding: 0.2rem 0.7rem; border: 0; border-radius: 13px; background: var(--accent-soft); color: var(--accent-strong); font-size: 0.75rem; font-weight: 700; }
+.doc-meta { gap: 10px; }
+.doc-meta .doc-status { color: var(--text-muted); font-size: 0.8rem; }
+
+.doc-comments { border-top: 0; padding-top: var(--space-5); }
+.doc-comments h2 { display: flex; align-items: center; gap: var(--space-2); font-size: 0.95rem; font-weight: 700; }
+.count-pill { padding: 0 0.5rem; border-radius: 99px; background: var(--bg); color: var(--text-secondary); font-size: 0.7rem; font-weight: 700; line-height: 1.6; }
+.doc-comments .comment-form { border: 1px solid var(--border-strong); border-radius: 12px; padding: var(--space-3); background: var(--bg-elevated); }
+.doc-comments .comment-form textarea { border: 0; box-shadow: none; padding: 0; background: transparent; }
+.doc-tree-search { height: 36px; border: 0; border-radius: 10px; background: var(--bg); box-shadow: none; padding: 0 var(--space-3); font-size: 0.8rem; }
+
+/* Frame 3.1: the outline and the page facts sit in a right column beside the 760px text. */
+.doc-body { display: flex; align-items: flex-start; flex: 1; }
+.doc-body > .doc-column { flex: 1; min-width: 0; }
+.doc-aside { position: sticky; top: 60px; flex: none; width: 280px; min-height: calc(100vh - 60px); display: grid; align-content: start; gap: var(--space-5); padding: var(--space-5); border-left: 1px solid var(--border); background: var(--bg-elevated); }
+.doc-aside h2 { margin: 0 0 var(--space-2); font-size: 0.7rem; font-weight: 700; letter-spacing: 0.02em; color: var(--text-muted); }
+.doc-outline { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.doc-outline button { width: 100%; padding: 0.3rem 0.6rem; border: 0; border-left: 2px solid var(--border); background: transparent; color: var(--text-secondary); text-align: left; font-size: 0.8rem; cursor: pointer; }
+.doc-outline button:hover { border-left-color: var(--accent); color: var(--text); }
+.doc-facts { display: grid; gap: var(--space-2); margin: 0; font-size: 0.8rem; }
+.doc-facts > div { display: flex; gap: var(--space-3); }
+.doc-facts dt { flex: none; min-width: 3.5rem; color: var(--text-muted); }
+.doc-facts dd { margin: 0; color: var(--text); }
+@media (max-width: 1100px) { .doc-aside { display: none; } }
+
+.doc-body > .doc-column { width: auto; margin: 0; padding-inline: max(var(--space-5), calc((100% - 760px) / 2)); }
+
+/* New document (frame 3.2): a bordered top bar with the draft badge and the actions, then one 760px column with a large
+   title field that has no box. */
+.doc-draft-bar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); min-height: 60px; padding: 0 var(--space-6); background: var(--bg-elevated); border-bottom: 1px solid var(--border); }
+.doc-draft-bar > div:first-child { display: flex; align-items: baseline; gap: var(--space-3); min-width: 0; }
+.doc-draft-bar strong { padding: 0.2rem 0.7rem; border-radius: 13px; background: var(--accent-soft); color: var(--accent-strong); font-size: 0.75rem; }
+.doc-draft-bar .hint { margin: 0; }
+.doc-page > label.field { width: min(760px, 100% - 2 * var(--space-5)); margin: 44px auto 0; }
+.doc-page > label.field > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.doc-page > label.field input { border: 0; box-shadow: none; background: transparent; padding: 0; font-size: 2.4rem; font-weight: 700; letter-spacing: -0.02em; height: auto; }
+.doc-page > label.field input::placeholder { color: var(--border-strong); }
+.doc-page > .doc-editor { width: min(760px, 100% - 2 * var(--space-5)); margin: var(--space-3) auto var(--space-6); }
+
+/* Who can see this (frames 3.3, 3.4): each choice is a card, the chosen one amber. */
+.share-scope { border: 0; padding: 0; margin: 0; display: grid; gap: var(--space-2); }
+.share-scope > legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.share-scope > label { display: flex; align-items: center; gap: var(--space-3); padding: 0.8rem 1rem; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-elevated); cursor: pointer; }
+.share-scope > label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); font-weight: 650; }
+.share-scope input[type="radio"] { accent-color: var(--accent); }
+.share-scope > .hint { margin: 0; padding: 0.6rem 0.9rem; border-radius: 10px; background: var(--bg); }

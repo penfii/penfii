@@ -1,0 +1,17 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  // An export that only its own file uses is not dead code.
+  "ignoreExportsUsedInFile": true,
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/*.mjs"]
+    },
+    "packages/client": {
+      // The live co-editing editor is kept but not mounted (wiki pages use save-and-version). Treating it as
+      // an entry keeps it, its provider and the yjs / y-prosemirror / y-protocols / lib0 dependencies checked.
+      "entry": ["src/modules/docs/DocCollabEditor.tsx!"],
+      // `knip --production` also reports code that only tests use; these files exist for the tests.
+      "project": ["src/**/*.{ts,tsx}!", "!src/test/**!", "!src/**/test{Fixtures,Host}.{ts,tsx}!", "!src/modules/docs/golden.ts!"]
+    }
+  }
+}
