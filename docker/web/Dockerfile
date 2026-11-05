@@ -1,4 +1,4 @@
-FROM node:22.23.3-bookworm-slim AS build
+FROM node:26.12.1-bookworm-slim AS build
 WORKDIR /src
 COPY client/package.json client/package-lock.json client/tsconfig.base.json ./
 COPY client/apps/web/package.json ./apps/web/
