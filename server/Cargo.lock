@@ -372,7 +372,7 @@ name = "core-api"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "futures-util",
  "http-body-util",
@@ -1482,7 +1482,7 @@ name = "penfii-core"
 version = "0.1.0"
 dependencies = [
  "argon2",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "chrono",
  "futures-util",
@@ -1529,7 +1529,7 @@ dependencies = [
 name = "penfii-mcp"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "penfii-contracts",
  "penfii-core",
