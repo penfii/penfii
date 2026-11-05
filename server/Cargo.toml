@@ -23,7 +23,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 argon2 = "0.5"
 sha2 = "0.10"
-rand = "0.8"
+rand = "0.10"
 hex = "0.4"
 tower-http = { version = "0.6", features = ["cors", "set-header", "trace"] }
 tower = { version = "0.5", features = ["util"] }
