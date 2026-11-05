@@ -1,2 +1,6 @@
 [toolchain]
 channel = "1.99.0"
+profile = "minimal"
+# Installed together with the toolchain, so `make quick` has `cargo fmt` and `cargo clippy` on a
+# clean machine and in CI.
+components = ["rustfmt", "clippy"]

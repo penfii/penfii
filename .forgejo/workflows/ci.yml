@@ -1,0 +1,167 @@
+# Forgejo Actions copy of .github/workflows/ci.yml: keep the two in step. Actions are fetched from
+# github.com by full URL (Forgejo's default source does not carry them). The runner needs a
+# `ubuntu-24.04` label, curl, and for the test/docker/gitleaks jobs a Docker socket.
+# What a pull request has to pass. `make check` in server/ and in client/ runs the same steps on a
+# developer machine.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [dev, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # rustfmt, clippy with warnings as errors, the licence check, unused dependencies and the notices file.
+  server-quick:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rustup
+        run: command -v rustup >/dev/null || { curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none; echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"; }
+      - name: Toolchain from server/rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: https://github.com/Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: server
+      - run: make tools
+      - run: make quick
+
+  # Advisories (RustSec), licences, banned and unknown sources, from server/deny.toml.
+  server-deny:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rustup
+        run: command -v rustup >/dev/null || { curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none; echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"; }
+      - name: Toolchain from server/rust-toolchain.toml
+        run: rustup toolchain install
+      - run: make tools
+      - run: make deny
+
+  # The whole server test suite, including the contract test against server/api/openapi.json, on
+  # PostgreSQL 17 and OpenSearch with the nori plugin, in throwaway containers (the `integration`
+  # target builds docker/opensearch and starts both). The migrations are database/migrations.
+  server-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rustup
+        run: command -v rustup >/dev/null || { curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none; echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"; }
+      - name: Toolchain from server/rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: https://github.com/Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: server
+      # Fewer tests at once: on the shared NAS runner (nested Docker, OpenSearch with a 512 MB heap) ~200 parallel
+      # tests make the first index build of the search tests miss OpenSearch's request timeouts (search_unavailable).
+      - run: make integration
+        env:
+          RUST_TEST_THREADS: "4"
+
+  # The Node version is the one the web image uses; the tests are known to behave differently on
+  # other versions.
+  client-check:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: https://github.com/actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.23.3
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Licences
+        run: node scripts/check-licenses.mjs > /dev/null
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run knip
+      # vitest starts one jsdom worker per host core (16 on the NAS runner, which is capped at 8 CPUs) and the
+      # suite's 1 s findBy/waitFor timeouts then fail (timelineLive.test.tsx); a few workers pass.
+      - run: npm test -- --maxWorkers=4
+      - run: npm run build
+
+  # Known vulnerabilities in the packages that ship to the browser.
+  client-audit:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: https://github.com/actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.23.3
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: npm audit --omit=dev
+
+  # The client's copy of the API description (client/packages/contracts/openapi.json) equals
+  # server/api/openapi.json. Fix: `npm run contract:sync` in client/.
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: https://github.com/actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.23.3
+      - run: node client/scripts/sync-openapi.mjs --check
+
+  # docker/compose.yaml is valid with the settings of docker/.env.example, and all three images
+  # (core-api, web, OpenSearch with nori) build from a clean checkout, the way a self-hoster builds them.
+  docker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compose file
+        run: docker compose --env-file docker/.env.example -f docker/compose.yaml config --quiet
+      - name: Images
+        run: docker compose --env-file docker/.env.example -f docker/compose.yaml build
+
+  # Secrets in the whole history of the branch.
+  gitleaks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks
+        run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 detect --source /repo --redact --no-banner --verbose

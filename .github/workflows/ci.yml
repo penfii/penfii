@@ -29,7 +29,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Toolchain from server/rust-toolchain.toml
-        run: rustup toolchain install --profile minimal --component rustfmt --component clippy
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: server
@@ -63,7 +63,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Toolchain from server/rust-toolchain.toml
-        run: rustup toolchain install --profile minimal
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: server
