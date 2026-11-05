@@ -16,7 +16,7 @@ bytes = { workspace = true }
 futures-util = { workspace = true }
 hex = { workspace = true }
 jsonwebtoken = { workspace = true }
-object_store = { version = "0.13", default-features = false, features = ["aws"] }
+object_store = { version = "0.14", default-features = false, features = ["aws"] }
 penfii-contracts = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
