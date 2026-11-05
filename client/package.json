@@ -25,15 +25,15 @@
     "@tiptap/extension-floating-menu": "3.31.3"
   },
   "devDependencies": {
-    "@tanstack/eslint-plugin-query": "5.104.3",
-    "@vitejs/plugin-react": "6.1.1",
-    "eslint": "10.12.0",
+    "@tanstack/eslint-plugin-query": "5.105.1",
+    "@vitejs/plugin-react": "6.1.2",
+    "eslint": "10.14.0",
     "eslint-plugin-react-hooks": "7.1.1",
     "jsdom": "^28.0.0",
-    "knip": "6.41.0",
+    "knip": "6.44.1",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.71.2",
-    "vite": "8.3.1",
-    "vitest": "5.0.4"
+    "typescript-eslint": "8.72.1",
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
   }
 }
