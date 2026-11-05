@@ -37,7 +37,7 @@ clap = { version = "4", features = ["derive"] }
 bytes = "1"
 futures-util = "0.3"
 base64 = "0.22"
-jsonwebtoken = "9"
+jsonwebtoken = "11"
 yrs = "0.28.0"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 rsa = "0.9"
