@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { DocsScreen } from '../modules/docs/DocsScreen'
 import { Link, NavLink, Navigate, useParams, useSearchParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
@@ -138,6 +139,11 @@ function ProjectScreen({ workspaceId, projectId, view }: { workspaceId: string; 
   const space = useQuery({ ...queries.space(workspaceId), enabled: !sample })
   const apiProject = space.data?.projects.find((item) => item.id === projectId)
   const name = sample?.name ?? apiProject?.name
+  // On a phone the section strip scrolls sideways: bring the current section into view when it changes.
+  const tabs = useRef<HTMLElement>(null)
+  useEffect(() => {
+    tabs.current?.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+  }, [view])
   if (!sample && space.isSuccess && !apiProject) {
     return <EmptyState title={t('notFound')} body={t('projects.emptyBody')} />
   }
@@ -155,7 +161,7 @@ function ProjectScreen({ workspaceId, projectId, view }: { workspaceId: string; 
           </div>
           {apiProject ? <ProjectHeaderActions workspaceId={workspaceId} projectId={projectId} /> : null}
         </div>
-        <nav className="project-tabs" aria-label={name ?? t('nav.projects')}>
+        <nav ref={tabs} className="project-tabs" aria-label={name ?? t('nav.projects')}>
           {PROJECT_TABS.map(([id, key]) => (
             <NavLink key={id} end={id === 'overview'} to={id === 'overview' ? `/w/${workspaceId}/projects/${projectId}` : `/w/${workspaceId}/projects/${projectId}/${id}`}>{t(key)}</NavLink>
           ))}

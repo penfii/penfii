@@ -19,6 +19,8 @@ import { ReferencedBy } from '../docs/ReferencedBy'
 import { HistoryTab } from './HistoryTab'
 import { ScheduleSection } from './PlanFields'
 import { SavedButtons } from '../personal/SavedButtons'
+import { Sheet, SheetRow } from '../../design/Sheet'
+import { useIsMobile } from '../../design/useIsMobile'
 import { WatchButton } from '../attention/WatchButton'
 import { TicketPlanning, TicketProperties } from './TicketProperties'
 import { useProjectContext } from './useProjectContext'
@@ -107,6 +109,23 @@ function SiblingNav({ ticket, ctx, onOpen }: { ticket: Ticket; ctx: ProjectConte
   )
 }
 
+/** On a phone the State is chosen from a bottom sheet instead of a native menu. */
+function StatusSheet({ states, currentId, disabled, onPick }: { states: Array<{ id: string; name: string; position: number }>; currentId: string; disabled: boolean; onPick: (id: string) => void }) {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+  const current = states.find((state) => state.id === currentId)
+  return (
+    <>
+      <button type="button" className="btn btn-secondary ticket-status-button" disabled={disabled} aria-haspopup="dialog" aria-label={t('work.panel.status')} onClick={() => setOpen(true)}>{current?.name ?? '—'} <span aria-hidden="true">▾</span></button>
+      <Sheet open={open} title={t('work.panel.status')} onClose={() => setOpen(false)}>
+        {[...states].sort((a, b) => a.position - b.position).map((state) => (
+          <SheetRow key={state.id} selected={state.id === currentId} onClick={() => { setOpen(false); if (state.id !== currentId) onPick(state.id) }}>{state.name}</SheetRow>
+        ))}
+      </Sheet>
+    </>
+  )
+}
+
 /** The panel's top bar: key (click to copy), State, sibling navigation, watch and saved buttons. */
 function TicketHead({ ticket, ctx, workspaceId, busy, stateName, titleHidden, toTop, onStatus, onClose, onOpenTicket }: {
   ticket: Ticket
@@ -122,6 +141,7 @@ function TicketHead({ ticket, ctx, workspaceId, busy, stateName, titleHidden, to
 }) {
   const { t } = useI18n()
   const canEdit = ctx.board.canEdit
+  const mobile = useIsMobile()
   const [copied, setCopied] = useState(false)
 
   async function copyKey() {
@@ -144,9 +164,13 @@ function TicketHead({ ticket, ctx, workspaceId, busy, stateName, titleHidden, to
             <button type="button" className="key-button" onClick={() => void copyKey()} title={t('work.panel.keyCopy')}>
               {copied ? t('work.panel.keyCopied') : ticket.key}
             </button>
-            <select className="ticket-status" aria-label={t('work.panel.status')} value={ticket.statusId} disabled={!canEdit || busy} onChange={(event) => onStatus(event.target.value)}>
-              {ctx.board.states.map((state) => <option key={state.id} value={state.id}>{state.name}</option>)}
-            </select>
+            {mobile ? (
+              <StatusSheet states={ctx.board.states} currentId={ticket.statusId} disabled={!canEdit || busy} onPick={onStatus} />
+            ) : (
+              <select className="ticket-status" aria-label={t('work.panel.status')} value={ticket.statusId} disabled={!canEdit || busy} onChange={(event) => onStatus(event.target.value)}>
+                {ctx.board.states.map((state) => <option key={state.id} value={state.id}>{state.name}</option>)}
+              </select>
+            )}
           </div>
           {titleHidden ? (
             <button type="button" className="compact-title" title={ticket.title} onClick={toTop}>

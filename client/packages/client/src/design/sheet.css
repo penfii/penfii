@@ -1,0 +1,45 @@
+/* Bottom sheet and the phone presentation of dialogs. Shared by every screen; none of it is scoped to the phone shell. */
+/* Sheet (portal'd to body, so not under .mobile-shell). */
+.m-sheet-root { position: fixed; inset: 0; z-index: 90; }
+.m-sheet-backdrop { position: absolute; inset: 0; border: 0; padding: 0; background: rgba(31, 27, 18, .4); }
+.m-sheet {
+  position: absolute; left: 0; right: 0; max-height: 85dvh; display: flex; flex-direction: column;
+  border-radius: 18px 18px 0 0; background: var(--bg-elevated); color: var(--text); box-shadow: var(--shadow-md);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.m-sheet-grip { align-self: center; width: 36px; height: 4px; margin: 8px 0 0; border-radius: 2px; background: var(--border-strong); }
+.m-sheet-head { display: flex; align-items: center; justify-content: space-between; padding: var(--space-2) var(--space-4); }
+.m-sheet-head h2 { margin: 0; font-size: 1rem; }
+.m-sheet-close { min-height: 44px; border: 0; background: none; color: var(--accent-strong); font: inherit; font-weight: 600; cursor: pointer; }
+.m-sheet-body { overflow: auto; padding: 0 var(--space-3) var(--space-3); display: flex; flex-direction: column; gap: 2px; }
+.m-sheet-row { display: flex; align-items: center; gap: var(--space-2); min-height: 52px; padding: 0 var(--space-3); border: 0; border-radius: var(--radius-md); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.m-sheet-row > span { flex: 1; }
+.m-sheet-row small { color: var(--text-muted); }
+.m-sheet-row:active, .m-sheet-row.selected { background: var(--accent-soft); }
+.m-sheet-row.danger { color: var(--danger, #8d3535); }
+.m-sheet-row b { color: var(--accent-strong); }
+
+
+/* Nothing behind an open sheet or dialog scrolls. */
+html.m-scroll-locked { overflow: hidden; }
+.m-sheet-reactions .reaction-bar { display: flex; justify-content: space-around; padding: var(--space-1) 0 var(--space-2); }
+.m-sheet-reactions .reaction-bar button { min-width: 44px; min-height: 44px; border: 0; border-radius: var(--radius-md); background: none; font-size: 1.3rem; cursor: pointer; }
+.m-sheet-reactions .reaction-bar button[aria-pressed="true"] { background: var(--accent-soft); }
+.m-sheet-menu { display: flex; flex-direction: column; }
+.m-sheet-menu > * { display: flex; align-items: center; min-height: 48px; padding: 0 var(--space-3); border: 0; border-radius: var(--radius-md); background: none; color: inherit; font: inherit; text-align: left; text-decoration: none; cursor: pointer; }
+.m-sheet-menu > *:active { background: var(--accent-soft); }
+.m-sheet-menu .menu-danger { color: var(--danger, #8d3535); }
+.m-sheet-menu .menu-separator { min-height: 0; height: 1px; margin: var(--space-1) 0; padding: 0; background: var(--border); }
+
+
+/* Dialogs on a phone: `presentation="sheet"` (the default) is a bottom sheet and `presentation="full"` a
+   full-screen modal, chosen by the caller. The width must equal MOBILE_MAX_WIDTH (useIsMobile.ts); a test checks it. */
+@media (max-width: 640px) {
+  dialog.dialog { margin: auto 0 0; width: 100%; max-width: none; max-height: 88dvh; padding: 0; border: 0; border-radius: 18px 18px 0 0; overflow: auto; padding-bottom: env(safe-area-inset-bottom); }
+  dialog.dialog[data-presentation="full"] { margin: 0; height: 100dvh; max-height: none; border-radius: 0; }
+  .dialog-head { position: sticky; top: 0; z-index: 1; background: var(--bg-elevated); border-bottom: 1px solid var(--border); }
+  .dialog-body input, .dialog-body select, .dialog-body textarea { min-height: 44px; font-size: 16px; }
+  .dialog .dialog-actions { position: sticky; bottom: 0; background: var(--bg-elevated); padding-block: var(--space-2); }
+}
+
+.m-sheet-row:disabled { opacity: .55; cursor: default; }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref
 import type { Message } from '@penfii/contracts'
 import { isApiError, isNotFound, newIdempotencyKey } from '@penfii/api-client'
 import { Link } from 'react-router'
+import { useLeaveOverlay } from '../../shell/overlayTrail'
 import { api } from '../../api'
 import { WatchButton } from '../attention/WatchButton'
 import { dayLabel, formatStamp } from '../../format'
@@ -69,6 +70,8 @@ export function ThreadPanel({
   onClearComment: () => void
 }) {
   const { locale, t } = useI18n()
+  const leave = useLeaveOverlay()
+  const closeTo = conversationHref ?? `/w/${workspaceId}/c/${conversationId}`
   const live = useConversationLive()
   const publishRef = useRef(live.publish)
   publishRef.current = live.publish
@@ -239,7 +242,16 @@ export function ThreadPanel({
           <WatchButton kind="THREAD" targetId={rootId} />
           {unread ? <span className="unread-flag">{t('conversation.unread')}</span> : null}
         </div>
-        <Link className="icon-button thread-close" to={conversationHref ?? `/w/${workspaceId}/c/${conversationId}`} aria-label={t('thread.close')} title={t('thread.close')}><CloseIcon /></Link>
+        <Link
+          className="icon-button thread-close"
+          to={closeTo}
+          onClick={(event) => {
+            // On a phone this steps back out of the thread instead of adding the channel after it (see overlayTrail).
+            if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+            event.preventDefault()
+            leave(closeTo)
+          }}
+          aria-label={t('thread.close')} title={t('thread.close')}><CloseIcon /></Link>
       </header>
       <div className="scroller" ref={setScrollRoot}>
         {origin ? (

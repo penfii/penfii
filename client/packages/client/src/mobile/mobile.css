@@ -1,0 +1,210 @@
+/* Phone layout (<= 640px). Everything is scoped to .mobile-shell so the desktop shell is unaffected. */
+.mobile-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+}
+.mobile-main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.mobile-main > .product-main { flex: 1 1 auto; min-height: 0; width: 100%; }
+.mobile-main > .workspace-nav, .mobile-main > .mobile-list { flex: 1 1 auto; min-height: 0; max-height: none; width: 100%; border: 0; overflow: auto; overscroll-behavior: contain; }
+.mobile-main > .workspace-nav { padding: var(--space-4); background: var(--bg); }
+.mobile-main .nav-resize, .mobile-main .resize-handle { display: none; }
+
+.mobile-bar {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  min-height: 48px;
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+.mobile-bar h1 { margin: 0; font-size: 1rem; font-weight: 700; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 50vw; }
+.mobile-back { justify-self: start; display: inline-flex; align-items: center; gap: 2px; min-height: 44px; padding: 0 var(--space-2); border: 0; background: none; color: var(--accent-strong); font: inherit; font-size: .9rem; font-weight: 600; cursor: pointer; max-width: 100%; overflow: hidden; white-space: nowrap; }
+.mobile-back span { font-size: 1.4rem; line-height: 1; }
+.mobile-bar-end { justify-self: end; display: inline-flex; min-width: 44px; justify-content: flex-end; }
+
+.mobile-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.mobile-tabs::-webkit-scrollbar { display: none; }
+.mobile-tab {
+  position: relative;
+  flex: 0 0 72px;
+  flex-shrink: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  min-height: 56px;
+  color: var(--text-muted);
+  font-size: .7rem; font-weight: 600; text-decoration: none;
+}
+.mobile-tab.active { color: var(--accent-strong); background: var(--accent-soft); }
+.mobile-tab-badge { position: absolute; top: 4px; right: 12px; min-width: 18px; padding: 0 4px; border-radius: 9px; background: var(--danger, #8d3535); color: #fff; font-size: .65rem; line-height: 18px; text-align: center; }
+
+
+.mobile-shortcuts { flex: 0 0 auto; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); padding: var(--space-4) var(--space-4) 0; }
+.mobile-shortcuts a { display: flex; align-items: center; justify-content: center; min-height: 56px; padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-elevated); color: var(--text); font-size: .85rem; font-weight: 650; text-align: center; text-decoration: none; }
+.mobile-shortcuts a:active { background: var(--accent-soft); }
+
+.mobile-list { padding: var(--space-4); background: var(--bg); min-height: 100%; }
+.mobile-list h2 { margin: 0 0 var(--space-3); font-size: 1.25rem; }
+.mobile-list h3, .mobile-list h2.mobile-group { margin: var(--space-4) 0 var(--space-1); color: var(--text-muted); font-size: .75rem; font-weight: 650; }
+.mobile-list ul { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-elevated); overflow: hidden; }
+.mobile-list li + li { border-top: 1px solid var(--border); }
+.mobile-list li a { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding: 0 var(--space-4); color: var(--text); text-decoration: none; }
+.mobile-list li a::after { content: "›"; color: var(--text-muted); font-size: 1.2rem; }
+
+.mobile-segments { display: flex; gap: 2px; margin: var(--space-3) var(--space-4) 0; padding: 3px; border-radius: var(--radius-md); background: var(--bg-sunken, var(--bg-muted)); }
+.mobile-segments a { flex: 1; min-height: 36px; display: flex; align-items: center; justify-content: center; border-radius: calc(var(--radius-md) - 2px); color: var(--text-secondary); font-size: .85rem; font-weight: 600; text-decoration: none; }
+.mobile-segments a.active { background: var(--bg-elevated); color: var(--text); box-shadow: var(--shadow-sm); }
+
+/* Work: the Table layout is reached through the list's display options on a phone, so its button is not offered. */
+.mobile-shell .view-layout[data-layout="TABLE"]:not(.on) { display: none; }
+/* The project's name is already in the top bar; its sections stay a one-line strip that scrolls sideways. */
+.mobile-shell .project-tabs { flex-wrap: nowrap; scrollbar-width: none; padding-inline: var(--space-4); }
+.mobile-shell .project-tabs::-webkit-scrollbar { display: none; }
+.mobile-shell .page-intro { padding-inline: var(--space-4); }
+.mobile-shell .home-page .page-intro { padding-top: var(--space-3); }
+
+/* Messages: no hover toolbar on a phone. A long press opens the actions in a `Sheet`. */
+.mobile-shell .message .hover-actions { display: none; }
+.mobile-shell .message { position: relative; }
+.mobile-shell .message-more { position: absolute; top: 0; right: 0; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: min(44px, 100%); border: 0; background: transparent; color: var(--text-muted); border-radius: var(--radius-md); }
+.mobile-shell .message-more:active { background: var(--bg-muted); }
+.mobile-shell .message-main { padding-inline-end: 40px; }
+.mobile-shell .message { -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
+.mobile-shell .message-main { user-select: text; -webkit-user-select: text; }
+
+.mobile-resume { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; min-height: 44px; padding: 0 var(--space-4); background: var(--accent-soft); color: var(--accent-strong); font-size: .9rem; font-weight: 650; text-decoration: none; }
+
+/* Offline: say so on top and dim the main write controls. The writes themselves are stopped in the API client (setWriteBlocker). */
+.mobile-offline { flex: 0 0 auto; margin: 0; padding: var(--space-2) var(--space-4); background: #3a342a; color: #fff; font-size: .8rem; text-align: center; }
+.mobile-shell.is-offline button[type="submit"], .mobile-shell.is-offline .composer, .mobile-shell.is-offline .create-ticket { opacity: .5; pointer-events: none; }
+
+/* Work toolbar: one row that scrolls sideways instead of five wrapped rows. */
+.mobile-shell .view-bar, .mobile-shell .view-bar > * { min-width: 0; max-width: 100%; }
+.mobile-shell .view-bar { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2) var(--space-4); }
+.mobile-shell .view-tabs, .mobile-shell .view-controls { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; align-items: center; }
+.mobile-shell .view-tabs::-webkit-scrollbar, .mobile-shell .view-controls::-webkit-scrollbar { display: none; }
+.mobile-shell .view-controls > * { flex: 0 0 auto; }
+.mobile-shell .view-controls .view-search { flex: 1 0 140px; min-width: 140px; min-height: 40px; }
+.mobile-shell .view-controls .btn, .mobile-shell .view-tabs .view-tab { min-height: 40px; white-space: nowrap; }
+.mobile-shell .board-toolbar { padding-inline: var(--space-4); }
+
+/* Project screen: the name is in the top bar, so the header keeps only the actions and the section strip. */
+.mobile-shell .project-title-left h1 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.mobile-shell .project-title-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.mobile-shell .project-title-right { gap: var(--space-2); }
+.mobile-shell .project-header { padding-top: var(--space-2); }
+
+/* Pins: a card that says who shares it and who edits it. */
+.mobile-shell .pins-panel { margin: var(--space-4) 0; padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-elevated); }
+.mobile-shell .pins-panel h2 { margin: 0 0 2px; font-size: 1rem; }
+.mobile-shell .pins-panel .pin-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; }
+.mobile-shell .pins-panel .pin-list li { display: flex; align-items: center; justify-content: space-between; min-height: 44px; border-top: 1px solid var(--border); }
+
+/* Ticket panel: a pushed screen with a back control; the close cross is for wider screens. */
+.mobile-shell .ticket-panel > .ticket-panel-head .panel-close { display: none; }
+.mobile-shell .ticket-panel .ticket-siblings { display: none; }
+.mobile-shell .ticket-panel-head { position: sticky; top: 0; z-index: 2; }
+.mobile-shell .detail-panel { position: fixed; inset: 0; z-index: 80; width: auto; max-width: none; border: 0; padding-bottom: env(safe-area-inset-bottom); }
+
+/* Project overview: tiles in two columns, status rows stacked; nothing is squeezed into three narrow cards. */
+.mobile-shell .project-page .metric-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); padding-inline: var(--space-4); }
+.mobile-shell .project-page .metric-row .metric { min-width: 0; }
+.mobile-shell .project-page .status-summary, .mobile-shell .project-page .doc-sheet { padding-inline: var(--space-4); }
+.mobile-shell .project-page .status-summary .metric-row { grid-template-columns: minmax(0, 1fr); padding-inline: 0; }
+.mobile-shell .project-page .doc-sheet { margin-top: var(--space-2); }
+.mobile-shell .project-title-left { display: flex; align-items: center; gap: var(--space-2); }
+
+.mobile-search { width: 100%; min-height: 48px; padding: 0 var(--space-4); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--bg-elevated); color: var(--text); font: inherit; font-size: 16px; }
+.mobile-choice { display: flex; width: 100%; align-items: center; justify-content: space-between; min-height: 48px; padding: 0 var(--space-4); border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.mobile-choice.on { background: var(--accent-soft); color: var(--accent-strong); font-weight: 650; }
+.mobile-list form { margin-bottom: var(--space-3); }
+
+/* Writing a document: a compact bar (status, discard, save) and the editor below it. */
+.mobile-shell .doc-draft-bar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-2) var(--space-4); background: var(--bg-elevated); border-bottom: 1px solid var(--border); }
+.mobile-shell .doc-draft-bar p { display: none; }
+.mobile-shell .doc-draft-bar .doc-actions { flex-wrap: nowrap; flex: 0 0 auto; }
+.mobile-shell .doc-help-bar .hint { display: none; }
+.mobile-shell .doc-page { padding-inline: var(--space-4); }
+
+/* Common states: loading and empty text sit inside the screen's margins. */
+.mobile-main .product-main > .hint, .mobile-main .page-scroll > .hint, .mobile-main .board-empty { padding: var(--space-4); }
+.mobile-main [role="status"].hint { text-align: center; color: var(--text-muted); }
+
+/* Narrow phones (320px): header actions wrap, list rows stay inside the screen. */
+.mobile-shell .project-title-row { flex-wrap: wrap; }
+.mobile-shell .create-ticket { white-space: nowrap; }
+.mobile-shell .work-scroll { overflow-x: hidden; min-width: 0; }
+.mobile-shell .work-list, .mobile-shell .list-section, .mobile-shell .list-rows, .mobile-shell .list-row { min-width: 0; max-width: 100%; box-sizing: border-box; }
+.mobile-shell .list-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); }
+.mobile-shell .list-row-open { flex: 1 1 100%; min-width: 0; text-align: left; }
+.mobile-shell .list-row-title { overflow-wrap: anywhere; }
+.mobile-shell .list-row-meta { display: flex; flex-wrap: wrap; gap: var(--space-1); min-width: 0; }
+
+/* Account block at the top of Settings. */
+.mobile-account { margin-bottom: var(--space-4); }
+.mobile-account-id { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; }
+.mobile-account-id span { display: flex; flex-direction: column; min-width: 0; }
+.mobile-account-id small { color: var(--text-muted); overflow-wrap: anywhere; }
+.mobile-account-rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-elevated); overflow: hidden; }
+.mobile-account-rows li + li { border-top: 1px solid var(--border); }
+.mobile-account-rows li > button:not(.btn) { display: flex; width: 100%; align-items: center; justify-content: space-between; min-height: 48px; padding: 0 var(--space-4); border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.mobile-account-rows small { color: var(--text-muted); }
+.mobile-account-logout { padding: var(--space-2) var(--space-4); }
+
+/* The content areas of the phone shell that scroll on their own are frozen with the page while a sheet is open. */
+html.m-scroll-locked .mobile-main :is(.page-scroll, .work-scroll, .workspace-nav, .mobile-list, .doc-split-main) { overflow: hidden; }
+.mobile-shell .list-row-check + .list-row-open { flex-basis: calc(100% - 32px); }
+.mobile-shell .phone-bulk { bottom: 0; }
+/* A Thread is its own screen on a phone: the channel's header (title, members, visibility) is not repeated above it. */
+.mobile-shell[data-thread] .conversation-frame > .context-bar { display: none; }
+/* A phone has no hover: the page actions of a doc in the tree (add a child, move, delete) are always shown. */
+.mobile-shell .doc-tree-actions { display: inline-flex; }
+.mobile-shell .doc-tree-row button { min-width: 36px; min-height: 36px; }
+.mobile-shell .card-top { width: 2.2rem; height: 2.2rem; }
+.mobile-shell .ticket-card-top { padding-inline-end: 5.4rem; }
+.mobile-shell .doc-tree-row { min-width: 0; }
+.mobile-shell .doc-tree-row .doc-tree-open { min-width: 0; flex: 1 1 0; }
+.mobile-shell .doc-tree-actions { flex: none; }
+/* The doc's top bar holds its name and up to six actions: on a phone they wrap onto their own row instead of running off the screen. */
+.mobile-shell .doc-topbar { flex-wrap: wrap; min-height: 0; padding: var(--space-2) var(--space-4); row-gap: var(--space-2); }
+.mobile-shell .doc-topbar .doc-actions { flex: 1 1 100%; flex-wrap: wrap; margin-left: 0; gap: var(--space-2); }
+.mobile-shell .doc-topbar .doc-actions .btn, .mobile-shell .doc-topbar .doc-actions button { min-height: 40px; }
+/* A long row (a member with many teams, a table of days) fits the screen: it wraps, or scrolls inside its own box. */
+.mobile-shell .plain-list { grid-template-columns: minmax(0, 1fr); }
+.mobile-shell .person-line { min-width: 0; }
+.mobile-shell .person-line > .hint { flex: 1 1 100%; min-width: 0; overflow-wrap: anywhere; }
+.mobile-shell :not(.admin-table-wrap) > .record-table { display: block; max-width: calc(100% - 2rem); overflow-x: auto; }
+.mobile-shell .person-button { max-width: 100%; min-width: 0; text-align: left; white-space: normal; }
+.mobile-shell .person-button * { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+.mobile-shell .plan-settings { grid-template-columns: minmax(0, 1fr); }
+.mobile-shell .plan-settings input, .mobile-shell .plan-settings select { max-width: 100%; box-sizing: border-box; }
+.mobile-shell fieldset { min-width: 0; }
+.mobile-shell .calendar-holidays .prop-inline { flex-wrap: wrap; }
+.mobile-shell .org-tree { grid-template-columns: minmax(0, 1fr); }
+.mobile-shell .org-tree > .card { min-width: 0; }
+/* The row menus sit at the right edge of a full-width list on a phone: open them towards the left, not off the screen. */
+.mobile-shell .row-menu .menu-panel.left { left: auto; right: 0; max-width: calc(100vw - 2 * var(--space-4)); }
+/* The conversation's title is already in the top bar: its own header keeps what is not (where it lives, who is in it). */
+.mobile-shell .conversation-frame > .context-bar h1 { display: none; }
+.mobile-shell .conversation-frame > .context-bar { flex-wrap: wrap; gap: var(--space-2); padding-block: var(--space-2); }
+.mobile-shell .conversation-frame > .context-bar .context-actions { flex-wrap: wrap; }
+/* Touch targets: small controls that sit next to each other or in lists are at least ~40px to hit. */
+.mobile-shell .icon-button, .mobile-shell .icon-add { min-width: 40px; min-height: 40px; display: inline-flex; align-items: center; justify-content: center; }
+.mobile-shell .tree-fold, .mobile-shell .tree-more, .mobile-shell .doc-group { min-height: 40px; }
+.mobile-shell .view-layout { min-height: 36px; }
+.mobile-shell .list-row-open { min-height: 40px; }
+.mobile-shell .reply-count, .mobile-shell .author-link, .mobile-shell .chip, .mobile-shell .saved-open, .mobile-shell .quick-add-trigger { min-height: 36px; }
+.mobile-shell .reply-count, .mobile-shell .author-link { display: inline-flex; align-items: center; }
+.mobile-shell input[type="checkbox"], .mobile-shell input[type="radio"] { width: 22px; height: 22px; }

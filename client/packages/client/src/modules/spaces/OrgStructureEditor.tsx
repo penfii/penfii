@@ -296,7 +296,7 @@ function DepartmentSettings({
     }
   }
   return (
-    <Dialog open title={t('orgEdit.settingsTitle', { name: department.name })} onClose={onClose}>
+    <Dialog open title={t('orgEdit.settingsTitle', { name: department.name })} onClose={onClose} presentation="full">
       <form
         onSubmit={(event) => {
           event.preventDefault()

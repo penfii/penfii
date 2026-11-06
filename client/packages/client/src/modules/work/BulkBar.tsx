@@ -10,9 +10,11 @@ import { PRIORITIES } from './ticketModel'
 import type { WorkTicket } from './viewModel'
 import { queries } from '../../queries'
 
-type Field = 'STATUS' | 'ASSIGNEE' | 'PRIORITY' | 'ADD_LABELS' | 'REMOVE_LABELS' | 'SPRINT' | 'ADD_MILESTONES' | 'REMOVE_MILESTONES'
+export type Field = 'STATUS' | 'ASSIGNEE' | 'PRIORITY' | 'ADD_LABELS' | 'REMOVE_LABELS' | 'SPRINT' | 'ADD_MILESTONES' | 'REMOVE_MILESTONES'
 
 /** Fields that mean something only inside one Project (a State, a Sprint, a label...). */
+export const BULK_FIELDS: Field[] = ['STATUS', 'ASSIGNEE', 'PRIORITY', 'ADD_LABELS', 'REMOVE_LABELS', 'SPRINT', 'ADD_MILESTONES', 'REMOVE_MILESTONES']
+
 const ONE_PROJECT: Field[] = ['STATUS', 'ADD_LABELS', 'REMOVE_LABELS', 'SPRINT', 'ADD_MILESTONES', 'REMOVE_MILESTONES']
 
 export function failureKey(item: BulkItemResult): MessageKey | null {
@@ -32,29 +34,8 @@ export function failureKey(item: BulkItemResult): MessageKey | null {
   }
 }
 
-/**
- * One change for the Tickets chosen in a Table. Every Ticket goes through the same command a
- * single edit uses, so a Ticket that may not take the change is refused with its own reason while
- * the others still change; the result is never summed into a plain "done".
- */
-export function BulkBar({
-  workspaceId,
-  selected,
-  result,
-  names,
-  onClear,
-  onResult,
-}: {
-  workspaceId: string
-  selected: WorkTicket[]
-  /** The last result stays on screen after the selection is gone, so a full success is still reported. */
-  result: BulkResult | null
-  /** Key and title of every Ticket the result may mention. */
-  names: Map<string, { key: string; title: string }>
-  onClear: () => void
-  /** Called with the result, so the page can refresh and keep the failed Tickets selected. */
-  onResult: (result: BulkResult | null) => void
-}) {
+/** The choice of one change for the chosen Tickets and its request; the desktop bar and the phone sheet both use it. */
+export function useBulkForm(workspaceId: string, selected: WorkTicket[], onResult: (result: BulkResult | null) => void) {
   const { t } = useI18n()
   const projectIds = [...new Set(selected.map((ticket) => ticket.projectId))]
   const single = projectIds.length === 1 ? projectIds[0] : null
@@ -115,8 +96,34 @@ export function BulkBar({
     bulk.mutate(change())
   }
 
-  const failed = result?.items.filter((item) => !item.ok) ?? []
+  return { field, setField, value, setValue, options, locked, needsValue, ready, apply, bulk }
+}
 
+/**
+ * One change for the Tickets chosen in a Table. Every Ticket goes through the same command a
+ * single edit uses, so a Ticket that may not take the change is refused with its own reason while
+ * the others still change; the result is never summed into a plain "done".
+ */
+export function BulkBar({
+  workspaceId,
+  selected,
+  result,
+  names,
+  onClear,
+  onResult,
+}: {
+  workspaceId: string
+  selected: WorkTicket[]
+  /** The last result stays on screen after the selection is gone, so a full success is still reported. */
+  result: BulkResult | null
+  /** Key and title of every Ticket the result may mention. */
+  names: Map<string, { key: string; title: string }>
+  onClear: () => void
+  /** Called with the result, so the page can refresh and keep the failed Tickets selected. */
+  onResult: (result: BulkResult | null) => void
+}) {
+  const { t } = useI18n()
+  const { field, setField, value, setValue, options, locked, needsValue, ready, apply, bulk } = useBulkForm(workspaceId, selected, onResult)
   return (
     <div className="bulk-bar" role="region" aria-label={t('bulk.title')}>
       <div className="bulk-controls">
@@ -124,7 +131,7 @@ export function BulkBar({
         <label className="view-select">
           <span>{t('bulk.field')}</span>
           <select value={field} onChange={(event) => { setField(event.target.value as Field); setValue('') }}>
-            {(['STATUS', 'ASSIGNEE', 'PRIORITY', 'ADD_LABELS', 'REMOVE_LABELS', 'SPRINT', 'ADD_MILESTONES', 'REMOVE_MILESTONES'] as Field[]).map((item) => (
+            {BULK_FIELDS.map((item) => (
               <option key={item} value={item}>{t(`bulk.field.${item}`)}</option>
             ))}
           </select>
@@ -143,7 +150,17 @@ export function BulkBar({
       </div>
       {locked ? <small className="field-hint">{t('bulk.oneProject')}</small> : null}
       {bulk.isError ? <p className="board-error" role="alert">{t('bulk.error')}</p> : null}
-      {result ? (
+      <BulkResultView result={result} names={names} />
+    </div>
+  )
+}
+
+/** The outcome of the last change: a count, and a reason for every Ticket that was refused. */
+export function BulkResultView({ result, names }: { result: BulkResult | null; names: Map<string, { key: string; title: string }> }) {
+  const { t } = useI18n()
+  if (!result) return null
+  const failed = result.items.filter((item) => !item.ok)
+  return (
         <div className={failed.length > 0 ? 'bulk-result has-failures' : 'bulk-result'} role="status">
           <strong>{t('bulk.result', { total: String(result.total), ok: String(result.succeeded), failed: String(result.failed) })}</strong>
           {failed.length > 0 ? (
@@ -161,7 +178,5 @@ export function BulkBar({
             </ul>
           ) : null}
         </div>
-      ) : null}
-    </div>
   )
 }

@@ -53,7 +53,7 @@ export function NewDocDialog({
   }
 
   return (
-    <Dialog open={open} title={t('docs.new.title')} onClose={onClose}>
+    <Dialog open={open} title={t('docs.new.title')} onClose={onClose} presentation="full">
       <form
         onSubmit={(event) => {
           event.preventDefault()

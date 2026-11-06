@@ -114,7 +114,7 @@ function CreateDialogs({
                   : ''
 
   return (
-    <Dialog open={kind != null} title={title} onClose={onClose}>
+    <Dialog open={kind != null} title={title} onClose={onClose} presentation="full">
       {notice ? <p className="form-error">{notice}</p> : null}
       {unavailable ? (
         <>

@@ -66,7 +66,7 @@ export function SavedPage({ workspaceId }: { workspaceId: string }) {
   )
 }
 
-function Favorites({ workspaceId }: { workspaceId: string }) {
+export function Favorites({ workspaceId }: { workspaceId: string }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
   const favorites = useQuery(queries.favorites(workspaceId))
@@ -191,7 +191,7 @@ function Favorites({ workspaceId }: { workspaceId: string }) {
   )
 }
 
-function Later({ workspaceId }: { workspaceId: string }) {
+export function Later({ workspaceId }: { workspaceId: string }) {
   const { t } = useI18n()
   const [state, setState] = useState<LaterState>('ACTIVE')
   return (

@@ -1,14 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { isNotFound } from '@penfii/api-client'
-import { NavLink, useLocation, useNavigate, useParams } from 'react-router'
-import { api } from '../api'
-import { Avatar, Button, Dialog, Field, useDismiss } from '../design/ui'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { NavLink, useLocation, useParams } from 'react-router'
+import { Avatar, Button, useDismiss } from '../design/ui'
 import { useI18n } from '../i18n/I18nProvider'
 import { LogoutButton, useSession } from '../modules/identity'
-import { queryKeys } from '../queryKeys'
-import { queries } from '../queries'
-import { errorText } from '../ui/errorText'
 import { NotFoundState } from '../ui/NotFoundState'
 import { ContextSidebar } from './ContextSidebar'
 import { DETAIL_WIDTH, OVERLAY_MAX_WIDTH, THREAD_DEFAULT, THREAD_MIN, THREAD_WIDTH_KEY, readStoredWidth, shouldCollapseNav } from './paneWidth'
@@ -19,9 +13,9 @@ import { useUserSocket } from '../modules/attention/useUserSocket'
 import { CommandPalette } from '../modules/attention/CommandPalette'
 import { ShortcutHelpProvider } from '../modules/help/ShortcutHelp'
 import { useUnread } from '../modules/attention/useUnread'
-import { IconChat, IconDocs, IconHome, IconInbox, IconProjects, IconSearch, IconSettings, IconTeams } from './icons'
-
-export const LAST_WORKSPACE_KEY = 'penfii.lastWorkspace'
+import { IconSettings } from './icons'
+import { NAV_AREAS, activeArea } from './navAreas'
+import { HelpDialog, StatusDialog, WorkspaceCreate, useActiveWorkspace, useSnooze } from './account'
 
 /**
  * App Shell은 Global Nav, Context Sidebar, Main, 선택 시 열리는 Detail Panel이다.
@@ -74,34 +68,19 @@ export function WorkspaceShell({
   useEffect(() => { if (!navCollapsed) setNavRevealed(false) }, [navCollapsed])
   useUserSocket()
   const unread = useUnread(workspaceId ?? '')
-  const workspaces = useQuery(queries.workspaces())
-  const space = useQuery({ ...queries.space(workspaceId ?? ''), enabled: Boolean(workspaceId) })
+  const { workspaces, workspace, space, notFound } = useActiveWorkspace(workspaceId)
 
-  useEffect(() => {
-    if (!workspaceId) return
-    try {
-      sessionStorage.setItem(LAST_WORKSPACE_KEY, workspaceId)
-    } catch {
-      // The switcher still works from the loaded workspace list.
-    }
-  }, [workspaceId])
+  if (!workspaceId || notFound) return <NotFoundState escape />
 
-  if (!workspaceId) return <NotFoundState escape />
-  const workspace = workspaces.data?.find((item) => item.id === workspaceId)
-  if (workspaces.isSuccess && !workspace) return <NotFoundState escape />
-  if (space.isError && isNotFound(space.error)) return <NotFoundState escape />
-
-  const chatActive = section === 'chat' || location.pathname.includes('/c/')
-  const area = section === 'account' ? 'settings' : section
-  const rail = [
-    { id: 'home', href: `/w/${workspaceId}`, label: t('nav.home'), icon: <IconHome />, active: area === 'home' },
-    { id: 'inbox', href: `/w/${workspaceId}/inbox`, label: t('nav.inbox'), icon: <IconInbox />, active: area === 'inbox' },
-    { id: 'chat', href: `/w/${workspaceId}/chat`, label: t('nav.chat'), icon: <IconChat />, active: chatActive },
-    { id: 'projects', href: `/w/${workspaceId}/projects`, label: t('nav.projects'), icon: <IconProjects />, active: area === 'projects' },
-    { id: 'docs', href: `/w/${workspaceId}/docs`, label: t('nav.docs'), icon: <IconDocs />, active: area === 'docs' },
-    { id: 'teams', href: `/w/${workspaceId}/directory`, label: t('nav.teams'), icon: <IconTeams />, active: area === 'teams' },
-    { id: 'search', href: `/w/${workspaceId}/search`, label: t('nav.search'), icon: <IconSearch />, active: area === 'search' },
-  ]
+  const current = activeArea(section, location.pathname)
+  // Settings sits at the foot of the rail; the other areas are its links.
+  const rail = NAV_AREAS.filter((item) => item.id !== 'settings').map(({ id, path, label, Icon }) => ({
+    id,
+    href: `/w/${workspaceId}${path}`,
+    label: t(label),
+    icon: <Icon />,
+    active: current === id,
+  }))
 
   return (
     <ShortcutHelpProvider><CreateProvider workspaceId={workspaceId} space={space.data}>
@@ -130,7 +109,7 @@ export function WorkspaceShell({
             </NavLink>
           ))}
           <div className="rail-spacer" />
-          <NavLink to={`/w/${workspaceId}/settings`} className={area === 'settings' ? 'rail-link active' : 'rail-link'} aria-current={area === 'settings' ? 'page' : undefined}>
+          <NavLink to={`/w/${workspaceId}/settings`} className={current === 'settings' ? 'rail-link active' : 'rail-link'} aria-current={current === 'settings' ? 'page' : undefined}>
             <IconSettings />
             {t('nav.settings')}
           </NavLink>
@@ -150,7 +129,7 @@ export function WorkspaceShell({
         </nav>
         <ContextSidebar
           workspaceId={workspaceId}
-          section={chatActive ? 'chat' : area}
+          section={current}
           navWidth={navPane.width}
           navMin={navPane.min}
           navMax={navPane.max}
@@ -230,30 +209,13 @@ function UserMenu({
   workspaces: Array<{ id: string; name: string }>
 }) {
   const { t } = useI18n()
-  const queryClient = useQueryClient()
-  const prefs = useQuery(queries.notificationPreferences())
   const [open, setOpen] = useState(false)
   const [help, setHelp] = useState(false)
   const [statusOpen, setStatusOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   useDismiss(open, () => setOpen(false), ref)
   const status = [statusEmoji, statusText].filter(Boolean).join(' ')
-  async function snooze() {
-    const current = prefs.data
-    if (!current) return
-    try {
-      await api.saveNotificationPreferences({
-        level: current.level,
-        dnd: { ...current.dnd, enabled: true, snoozeUntil: new Date(Date.now() + 3_600_000).toISOString() },
-        external: current.external,
-        expectedVersion: current.version,
-      })
-      await queryClient.invalidateQueries({ queryKey: queryKeys.notificationPreferences })
-      setOpen(false)
-    } catch {
-      // Preferences stay as they were; the notifications page reports a conflict.
-    }
-  }
+  const snooze = useSnooze()
   return (
     <div className="popover" ref={ref}>
       <button type="button" className="user-button" aria-label={name || t('account.title')} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
@@ -272,7 +234,7 @@ function UserMenu({
           <button type="button" onClick={() => { setOpen(false); setStatusOpen(true) }}>{t('menu.status')}</button>
           <NavLink to={`/w/${workspaceId}/settings`} onClick={() => setOpen(false)}>{t('menu.profile')}</NavLink>
           <NavLink to={`/w/${workspaceId}/settings/account`} onClick={() => setOpen(false)}>{t('nav.settings')}</NavLink>
-          <button type="button" onClick={() => void snooze()}>{t('menu.dnd')}</button>
+          <button type="button" onClick={() => void snooze().then((saved) => saved && setOpen(false))}>{t('menu.dnd')}</button>
           {workspaces.length > 1 ? workspaces.map((item) => (
             <NavLink key={item.id} to={`/w/${item.id}`} onClick={() => setOpen(false)}>
               {t('menu.switch')}: {item.name}
@@ -292,134 +254,8 @@ function UserMenu({
         statusText={statusText}
         statusClearAt={statusClearAt}
       />
-      <Dialog open={help} title={t('help.open')} onClose={() => setHelp(false)}>
-        <p>{t('help.body')}</p>
-      </Dialog>
+      <HelpDialog open={help} onClose={() => setHelp(false)} />
     </div>
-  )
-}
-
-function StatusDialog({
-  open,
-  onClose,
-  displayName,
-  jobTitle,
-  timeZone,
-  statusEmoji,
-  statusText,
-  statusClearAt,
-}: {
-  open: boolean
-  onClose: () => void
-  displayName: string
-  jobTitle: string
-  timeZone: string
-  statusEmoji: string
-  statusText: string
-  statusClearAt: string
-}) {
-  const { t } = useI18n()
-  const queryClient = useQueryClient()
-  const [emoji, setEmoji] = useState(statusEmoji)
-  const [text, setText] = useState(statusText)
-  const [clearAt, setClearAt] = useState(statusClearAt ? toLocalInput(statusClearAt) : '')
-  const [error, setError] = useState<string | null>(null)
-  useEffect(() => {
-    if (!open) return
-    setEmoji(statusEmoji)
-    setText(statusText)
-    setClearAt(statusClearAt ? toLocalInput(statusClearAt) : '')
-    setError(null)
-  }, [open, statusEmoji, statusText, statusClearAt])
-  return (
-    <Dialog open={open} title={t('menu.status')} onClose={onClose}>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault()
-          setError(null)
-          void api.updateProfile({
-            displayName,
-            jobTitle: jobTitle || null,
-            timeZone: timeZone || null,
-            statusEmoji: emoji.trim() || null,
-            statusText: text.trim() || null,
-            statusClearAt: clearAt ? new Date(clearAt).toISOString() : null,
-          }).then(async () => {
-            await queryClient.invalidateQueries({ queryKey: queryKeys.me })
-            onClose()
-          }).catch((caught: unknown) => setError(errorText(caught, t('error.generic'))))
-        }}
-      >
-        <Field label={t('profile.status')}>
-          <input value={emoji} onChange={(event) => setEmoji(event.target.value)} maxLength={16} />
-        </Field>
-        <Field label={t('profile.statusText')}>
-          <input value={text} onChange={(event) => setText(event.target.value)} maxLength={80} />
-        </Field>
-        <Field label={t('profile.statusClear')}>
-          <input type="datetime-local" value={clearAt} onChange={(event) => setClearAt(event.target.value)} />
-        </Field>
-        {error ? <p className="form-error">{error}</p> : null}
-        <Button type="submit">{t('account.save')}</Button>
-      </form>
-    </Dialog>
-  )
-}
-
-function toLocalInput(iso: string): string {
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) return ''
-  const pad = (value: number) => String(value).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
-}
-
-function WorkspaceCreate() {
-  const { t } = useI18n()
-  const queryClient = useQueryClient()
-  const navigate = useNavigate()
-  const creation = useQuery(queries.workspaceCreation())
-  const [open, setOpen] = useState(false)
-  const [name, setName] = useState('')
-  const [timeZone, setTimeZone] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC')
-  const [error, setError] = useState<string | null>(null)
-  const zones = useMemo(() => {
-    const all = Intl.supportedValuesOf('timeZone')
-    const current = Intl.DateTimeFormat().resolvedOptions().timeZone
-    return current && !all.includes(current) ? [current, ...all] : all
-  }, [])
-  // Only the first Workspace of an instance can be created; afterwards the server refuses.
-  if (!creation.data) return null
-  return (
-    <>
-      <button type="button" onClick={() => setOpen(true)}>{t('workspaces.create')}</button>
-      <Dialog open={open} title={t('workspaces.create')} onClose={() => setOpen(false)}>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault()
-            setError(null)
-            void api.createWorkspace({ name: name.trim(), timeZone }).then(async (created) => {
-              setName('')
-              await queryClient.invalidateQueries({ queryKey: queryKeys.workspaces })
-              setOpen(false)
-              void navigate(`/w/${created.id}`)
-            }).catch((caught: unknown) => setError(errorText(caught, t('error.generic'))))
-          }}
-        >
-          <Field label={t('workspaces.name')}>
-            <input required value={name} onChange={(event) => setName(event.target.value)} />
-          </Field>
-          <Field label={t('workspaces.timeZone')}>
-            <select value={timeZone} onChange={(event) => setTimeZone(event.target.value)}>
-              {zones.map((zone) => (
-                <option key={zone} value={zone}>{zone}</option>
-              ))}
-            </select>
-          </Field>
-          {error ? <p className="form-error">{error}</p> : null}
-          <Button type="submit">{t('workspaces.create')}</Button>
-        </form>
-      </Dialog>
-    </>
   )
 }
 

@@ -73,7 +73,7 @@ export function BatchAssignDialog({ open, workspaceId, people, teams, onClose, o
   }
 
   return (
-    <Dialog open={open} title={t('batch.title', { count: String(people.length) })} onClose={close}>
+    <Dialog open={open} title={t('batch.title', { count: String(people.length) })} onClose={close} presentation="full">
       {teams.length === 0 ? <p className="hint">{t('batch.noTeams')}</p> : (
         <>
           <Field label={t('batch.team')}>

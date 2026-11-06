@@ -9,6 +9,7 @@ export const queryClient = new QueryClient({
         return failureCount < 1
       },
     },
-    mutations: { retry: false },
+    // Never queued: offline a write is refused at once (see offlineWrites), not held and sent on reconnect.
+    mutations: { retry: false, networkMode: 'always' },
   },
 })

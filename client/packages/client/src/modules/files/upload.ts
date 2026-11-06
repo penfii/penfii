@@ -1,3 +1,4 @@
+import { assertWritable } from '@penfii/api-client'
 import type { FileObject } from '@penfii/contracts'
 
 /** The server answered the upload with an error status. */
@@ -14,6 +15,12 @@ export function putFile(fileId: string, file: File, onProgress: (ratio: number) 
 } {
   const xhr = new XMLHttpRequest()
   const done = new Promise<FileObject>((resolve, reject) => {
+    try {
+      assertWritable()
+    } catch (cause) {
+      reject(cause)
+      return
+    }
     xhr.open('PUT', `/v1/files/${fileId}/content`)
     xhr.withCredentials = true
     xhr.setRequestHeader('X-Penfii-Client', '1')

@@ -50,7 +50,7 @@ export function ReferencePicker({
   void projectId
   const title = kind === 'TICKET' ? t('docs.picker.ticket') : t('docs.picker.doc')
   return (
-    <Dialog open title={title} onClose={onClose}>
+    <Dialog open title={title} onClose={onClose} presentation="full">
       <div className="doc-picker">
         <input
           autoFocus

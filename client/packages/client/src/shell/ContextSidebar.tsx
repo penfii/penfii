@@ -1,3 +1,4 @@
+import { settingsGroups } from './settingsEntries'
 import { DocTree } from '../modules/docs/DocTree'
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -160,24 +161,16 @@ function SettingsNav({ workspaceId }: { workspaceId: string }) {
   const role = useWorkspaceRole(workspaceId)
   return (
     <>
-      <section className="tree-block">
-        <h3>{t('settings.group.mine')}</h3>
-        <ul>
-          <li><NavLink end className="tree-link" to={`/w/${workspaceId}/settings`}>{t('settings.profile')}</NavLink></li>
-          <li><NavLink className="tree-link" to={`/w/${workspaceId}/settings/account`}>{t('settings.account')}</NavLink></li>
-          <li><NavLink className="tree-link" to={`/w/${workspaceId}/settings/notifications`}>{t('settings.notifications')}</NavLink></li>
-          <li><NavLink className="tree-link" to={`/w/${workspaceId}/settings/appearance`}>{t('settings.appearance')}</NavLink></li>
-          <li><NavLink className="tree-link" to={`/w/${workspaceId}/settings/apps`}>{t('settings.apps')}</NavLink></li>
-        </ul>
-      </section>
-      {isWorkspaceManager(role) ? (
-        <section className="tree-block">
-          <h3>{t('settings.group.workspace')}</h3>
+      {settingsGroups(isWorkspaceManager(role)).map((group) => (
+        <section key={group.id} className="tree-block">
+          <h3>{t(group.heading)}</h3>
           <ul>
-            <li><NavLink className="tree-link" to={`/w/${workspaceId}/settings/admin`}>{t('settings.workspace')}</NavLink></li>
+            {group.entries.map((entry) => (
+              <li key={entry.id}><NavLink end={entry.path === ''} className="tree-link" to={`/w/${workspaceId}/settings${entry.path}`}>{t(entry.label)}</NavLink></li>
+            ))}
           </ul>
         </section>
-      ) : null}
+      ))}
     </>
   )
 }

@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
-import { Link } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
+import { useIsMobile } from '../../design/useIsMobile'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { newIdempotencyKey } from '@penfii/api-client'
 import type { EstimateUnit, Milestone, ProjectPlanning, Sprint, SprintOutcome, SprintResult } from '@penfii/contracts'
@@ -30,6 +31,8 @@ export function PlanningPage({ workspaceId, projectId }: { workspaceId: string; 
   const { t } = useI18n()
   const queryClient = useQueryClient()
   const [mode, setMode] = useState<Mode>('sprints')
+  const [search] = useSearchParams()
+  const mobile = useIsMobile()
   const [failure, setFailure] = useState<Failure>(null)
   const planning = useQuery(queries.projectPlanning(projectId))
   useProjectLive(projectId)
@@ -62,20 +65,25 @@ export function PlanningPage({ workspaceId, projectId }: { workspaceId: string; 
   if (planning.isPending) return <p className="hint" role="status">{t('loading')}</p>
   if (planning.isError) return <p className="board-error" role="alert">{t('planning.error.generic')}</p>
   const data = planning.data
+  // A Sprint opens as its own phone screen only if it is one of this Project's Sprints; any other id shows the list.
+  const detailId = mobile ? search.get('sprintDetail') : null
+  const detail = detailId ? data.sprints.find((sprint) => sprint.id === detailId) ?? null : null
   return (
     <div className="planning-page">
-      <Tabs
-        tabs={[
-          { id: 'sprints', label: t('planning.tab.sprints') },
-          { id: 'milestones', label: t('planning.tab.milestones') },
-        ]}
-        value={mode}
-        onChange={(id) => setMode(id as Mode)}
-      />
+      {detail ? null : (
+        <Tabs
+          tabs={[
+            { id: 'sprints', label: t('planning.tab.sprints') },
+            { id: 'milestones', label: t('planning.tab.milestones') },
+          ]}
+          value={mode}
+          onChange={(id) => setMode(id as Mode)}
+        />
+      )}
       {failure ? <p className="board-error" role="alert">{t(failure === 'conflict' ? 'planning.error.conflict' : failure === 'state' ? 'planning.error.state' : 'planning.error.generic')}</p> : null}
       {!data.canManage ? <p className="board-note" role="note">{t('planning.readOnly')}</p> : null}
-      {mode === 'sprints' ? (
-        <SprintSection projectId={projectId} workspaceId={workspaceId} planning={data} run={run} />
+      {mode === 'sprints' || detail ? (
+        <SprintSection projectId={projectId} workspaceId={workspaceId} planning={data} run={run} detail={detail} />
       ) : (
         <MilestoneSection projectId={projectId} workspaceId={workspaceId} planning={data} run={run} />
       )}
@@ -94,9 +102,13 @@ function useProjectRows(projectId: string, workspaceId: string) {
   return { board: board.data, tickets: board.data ? workTicketsFromBoard(board.data, name, channels) : [] }
 }
 
-function SprintSection({ projectId, workspaceId, planning, run }: { projectId: string; workspaceId: string; planning: ProjectPlanning; run: Run }) {
+function SprintSection({ projectId, workspaceId, planning, run, detail }: { projectId: string; workspaceId: string; planning: ProjectPlanning; run: Run; detail: Sprint | null }) {
   const { t } = useI18n()
   const manage = planning.canManage
+  const mobile = useIsMobile()
+  const [params, setParams] = useSearchParams()
+  // On a phone a Sprint opens as its own screen (a pushed history entry), not as a section inside the list.
+  const openDetail = mobile ? (sprint: Sprint) => { const next = new URLSearchParams(params); next.set('sprintDetail', sprint.id); setParams(next) } : undefined
   const [creating, setCreating] = useState(false)
   const [closing, setClosing] = useState<Sprint | null>(null)
   const [canceling, setCanceling] = useState<Sprint | null>(null)
@@ -105,21 +117,22 @@ function SprintSection({ projectId, workspaceId, planning, run }: { projectId: s
   // The next Sprint begins the day after the latest one ends.
   const lastEnd = planning.sprints.reduce<string>((latest, sprint) => (sprint.endsOn > latest ? sprint.endsOn : latest), '')
 
-  const open = planning.sprints.filter((sprint) => sprint.state === 'PLANNED' || sprint.state === 'ACTIVE')
-  const ended = planning.sprints.filter((sprint) => sprint.state === 'COMPLETED' || sprint.state === 'CANCELED')
+  const shown = detail ? [detail] : planning.sprints
+  const open = shown.filter((sprint) => sprint.state === 'PLANNED' || sprint.state === 'ACTIVE')
+  const ended = shown.filter((sprint) => sprint.state === 'COMPLETED' || sprint.state === 'CANCELED')
   return (
     <div className="planning-body">
-      <VelocityPanel projectId={projectId} />
-      {planning.sprints.length === 0 ? <p className="hint" data-empty="sprints">{t(manage ? 'planning.sprint.empty' : 'planning.sprint.emptyReadOnly')}</p> : null}
+      {detail ? null : <VelocityPanel projectId={projectId} />}
+      {shown.length === 0 ? <p className="hint" data-empty="sprints">{t(manage ? 'planning.sprint.empty' : 'planning.sprint.emptyReadOnly')}</p> : null}
       {open.map((sprint) => (
-        <SprintCard key={sprint.id} sprint={sprint} projectId={projectId} workspaceId={workspaceId} manage={manage} run={run} activeSprint={activeSprint} onStart={() => setStarting(sprint)} onClose={() => setClosing(sprint)} onCancel={() => setCanceling(sprint)} />
+        <SprintCard key={sprint.id} sprint={sprint} projectId={projectId} workspaceId={workspaceId} manage={manage} run={run} activeSprint={activeSprint} onStart={() => setStarting(sprint)} onClose={() => setClosing(sprint)} onCancel={() => setCanceling(sprint)} onDetail={openDetail} detail={detail !== null} />
       ))}
       {ended.length > 0 ? <h3 className="planning-ended">{t('planning.sprint.ended')}</h3> : null}
       {ended.map((sprint) => (
-        <SprintCard key={sprint.id} sprint={sprint} projectId={projectId} workspaceId={workspaceId} manage={manage} run={run} activeSprint={activeSprint} onStart={() => undefined} onClose={() => undefined} onCancel={() => undefined} />
+        <SprintCard key={sprint.id} sprint={sprint} projectId={projectId} workspaceId={workspaceId} manage={manage} run={run} activeSprint={activeSprint} onStart={() => undefined} onClose={() => undefined} onCancel={() => undefined} onDetail={openDetail} detail={detail !== null} />
       ))}
-      <small className="field-hint">{t('planning.sprint.hint')}</small>
-      {manage ? <Button type="button" onClick={() => setCreating(true)}>{t('planning.sprint.new')}</Button> : null}
+      {detail ? null : <small className="field-hint">{t('planning.sprint.hint')}</small>}
+      {manage && !detail ? <Button type="button" onClick={() => setCreating(true)}>{t('planning.sprint.new')}</Button> : null}
       {creating ? <SprintCreateDialog projectId={projectId} startsAfter={lastEnd} run={run} onDone={() => setCreating(false)} /> : null}
       {starting ? <SprintStartDialog sprint={starting} workspaceId={workspaceId} run={run} onDone={() => setStarting(null)} /> : null}
       {closing ? <CloseDialog sprint={closing} run={run} onDone={() => setClosing(null)} /> : null}
@@ -138,9 +151,11 @@ function SprintSection({ projectId, workspaceId, planning, run }: { projectId: s
   )
 }
 
-function SprintCard({ sprint, projectId, workspaceId, manage, run, activeSprint, onStart, onClose, onCancel }: { sprint: Sprint; projectId: string; workspaceId: string; manage: boolean; run: Run; activeSprint: Sprint | null; onStart: () => void; onClose: () => void; onCancel: () => void }) {
+function SprintCard({ sprint, projectId, workspaceId, manage, run, activeSprint, onStart, onClose, onCancel, onDetail, detail = false }: { sprint: Sprint; projectId: string; workspaceId: string; manage: boolean; run: Run; activeSprint: Sprint | null; onStart: () => void; onClose: () => void; onCancel: () => void; onDetail?: (sprint: Sprint) => void; detail?: boolean }) {
   const { t } = useI18n()
-  const [expanded, setExpanded] = useState(sprint.state === 'ACTIVE')
+  const [open, setOpen] = useState(sprint.state === 'ACTIVE')
+  // A phone shows the tickets on the Sprint's own screen; the list keeps one summary card per Sprint.
+  const expanded = detail || (!onDetail && open)
   const isOpen = sprint.state === 'PLANNED' || sprint.state === 'ACTIVE'
   return (
     <article className={`planning-item sprint-card state-${sprint.state.toLowerCase()}`}>
@@ -149,9 +164,11 @@ function SprintCard({ sprint, projectId, workspaceId, manage, run, activeSprint,
         <Badge tone={sprint.state === 'ACTIVE' ? 'accent' : 'neutral'}>{t(`planning.sprint.state.${sprint.state}`)}</Badge>
         <small>{sprint.startsOn} – {sprint.endsOn}</small>
         {sprint.timeZone && sprint.estimateUnit ? <small className="sprint-basis">{t('planning.sprint.zoneUnit', { zone: sprint.timeZone, unit: t(`work.estimate.unit.${sprint.estimateUnit}`) })}</small> : null}
-        <button type="button" className="btn btn-ghost" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
-          {expanded ? t('planning.sprint.hideTickets') : t('planning.sprint.showTickets')}
-        </button>
+        {detail ? null : (
+          <button type="button" className="btn btn-ghost" aria-expanded={onDetail ? undefined : expanded} onClick={() => (onDetail ? onDetail(sprint) : setOpen((value) => !value))}>
+            {expanded ? t('planning.sprint.hideTickets') : t('planning.sprint.showTickets')}
+          </button>
+        )}
         <Link className="btn btn-ghost" to={`/w/${workspaceId}/projects/${projectId}/work?sprint=${sprint.id}&layout=board`}>{t('planning.sprint.board')}</Link>
       </div>
       {sprint.goal ? <p className="hint">{sprint.goal}</p> : null}
@@ -314,7 +331,7 @@ function SprintCreateDialog({ projectId, startsAfter, run, onDone }: { projectId
   }
 
   return (
-    <Dialog open title={t('planning.sprint.new')} onClose={onDone}>
+    <Dialog open title={t('planning.sprint.new')} onClose={onDone} presentation="full">
       <form className="view-form planning-form" onSubmit={(event) => void create(event)}>
         <input aria-label={t('planning.sprint.name')} placeholder={t('planning.sprint.name')} value={name} maxLength={80} autoFocus onChange={(event) => setName(event.target.value)} />
         <input aria-label={t('planning.sprint.goal')} placeholder={t('planning.sprint.goal')} value={goal} maxLength={500} onChange={(event) => setGoal(event.target.value)} />

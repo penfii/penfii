@@ -138,6 +138,15 @@ export function BoardLayout({
     void drop(ticket.id, target, byOrder && (at.length > 0 || !target.hierarchical) ? placementAt(at, at.length, ticket.id) : null)
   }
 
+  /** A phone cannot drag: a card goes to a State column chosen by name (the same move as Alt+←/→, to any column). */
+  function moveTo(ticket: Ticket, columnId: string) {
+    const target = columns.find((column) => column.id === columnId)
+    if (!target || target.stateId === null) return
+    const at = siblingIds(target, ticket)
+    void drop(ticket.id, target, byOrder && (at.length > 0 || !target.hierarchical) ? placementAt(at, at.length, ticket.id) : null)
+  }
+  const moveChoices = columns.filter((column) => column.stateId !== null).map((column) => ({ id: column.id, name: column.name }))
+
   function reorderBy(ticket: Ticket, step: -1 | 1) {
     if (!byOrder) return
     const column = columns.find((item) => item.tickets.some((entry) => entry.id === ticket.id))
@@ -234,6 +243,8 @@ export function BoardLayout({
                 open(id)
               }}
               onMoveBy={moveBy}
+              moveChoices={moveChoices}
+              onMoveTo={moveTo}
               onReorder={reorderBy}
               moveToTopFor={(ticket) => moveToTopFor(column, ticket)}
               onSetWip={setWip}

@@ -576,6 +576,19 @@ const ko = {
   'appearance.light': '밝게',
   'appearance.dark': '어둡게',
   'appearance.system': '시스템 설정 따름',
+  // Phone layout
+  'mobile.back': '뒤로',
+  'mobile.backTo': '{name}(으)로 돌아가기',
+  'mobile.save': '저장',
+  'offline.write': '오프라인이라 변경할 수 없습니다. 연결된 뒤 다시 시도해 주세요.',
+  'mobile.offline': '오프라인입니다. 이미 불러온 내용만 읽을 수 있습니다.',
+  'mobile.resume': '이어서 쓰기 {count}개',
+  'mobile.attach.media': '사진·동영상',
+  'mobile.attach.camera': '카메라로 찍기',
+  'mobile.attach.files': '파일',
+  'mobile.tabs': '주요 메뉴',
+  'mobile.vault': '내 보관함',
+  'mobile.homeShortcuts': '바로가기',
 }
 
 export type MessageKey = keyof typeof ko
@@ -1147,6 +1160,19 @@ const en: Record<MessageKey, string> = {
   'appearance.light': 'Light',
   'appearance.dark': 'Dark',
   'appearance.system': 'Use system setting',
+  // Phone layout
+  'mobile.back': 'Back',
+  'mobile.backTo': 'Back to {name}',
+  'mobile.save': 'Save',
+  'offline.write': 'You are offline, so this change was not made. Try again once you are connected.',
+  'mobile.offline': 'You are offline. You can read what is already loaded.',
+  'mobile.resume': 'Continue writing: {count}',
+  'mobile.attach.media': 'Photos and videos',
+  'mobile.attach.camera': 'Take a photo',
+  'mobile.attach.files': 'Files',
+  'mobile.tabs': 'Main menu',
+  'mobile.vault': 'My library',
+  'mobile.homeShortcuts': 'Shortcuts',
 }
 
 export const messages: Record<Locale, Record<MessageKey, string>> = {

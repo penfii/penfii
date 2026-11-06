@@ -190,6 +190,27 @@ export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): voi
   unauthorizedHandler = handler
 }
 
+type WriteBlocker = () => boolean
+
+let writeBlocker: WriteBlocker | null = null
+let blockedListener: (() => void) | null = null
+
+/**
+ * While the blocker answers true no request that changes data leaves the browser: it fails at once with
+ * `ApiError(0, 'offline')`, and `onBlocked` is told so the app can say why. One place stops every write, whichever screen or mutation asks for it.
+ */
+export function setWriteBlocker(blocker: WriteBlocker | null, onBlocked?: () => void): void {
+  writeBlocker = blocker
+  blockedListener = onBlocked ?? null
+}
+
+/** For a write that does not go through `request` (a file upload): throws what `request` would throw. */
+export function assertWritable(): void {
+  if (!writeBlocker?.()) return
+  blockedListener?.()
+  throw new ApiError(0, 'offline', 'You are offline')
+}
+
 function subscriptionPath(kind: WatchTargetKind, targetId: string): string {
   const base = kind === 'TICKET' ? 'tickets' : kind === 'PROJECT' ? 'projects' : 'messages'
   return `/v1/${base}/${targetId}/subscription`
@@ -254,6 +275,7 @@ function errorBody(text: string, status: number): { code: string; message: strin
 
 async function request(path: string, options: RequestOptions = {}): Promise<unknown> {
   const method = options.method ?? 'GET'
+  if (method !== 'GET') assertWritable()
   const headers = new Headers()
   headers.set('Accept', 'application/json')
   if (options.rawBody) headers.set('Content-Type', options.contentType ?? 'application/octet-stream')

@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useDismiss } from '../../design/ui'
+import { Sheet } from '../../design/Sheet'
+import { useIsMobile } from '../../design/useIsMobile'
 
 /**
  * A small panel that opens under its button. It closes on an outside click or Escape and hands
- * focus back to the button, so keyboard users never get lost in the Board toolbar.
+ * focus back to the button, so keyboard users never get lost in the Board toolbar. On a phone the
+ * panel is a bottom `Sheet` instead, which brings its own backdrop, Escape, focus and scroll rules.
  */
 export function Popover({
   label,
@@ -26,6 +29,7 @@ export function Popover({
   wide?: boolean
   children: (close: () => void) => ReactNode
 }) {
+  const mobile = useIsMobile()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const button = useRef<HTMLButtonElement>(null)
@@ -41,10 +45,10 @@ export function Popover({
     const box = panelRef.current?.getBoundingClientRect()
     if (box && box.right > window.innerWidth - 4) setFlip(true)
   }, [open])
-  useDismiss(open, close, ref)
+  useDismiss(open && !mobile, close, ref)
 
   useEffect(() => {
-    if (!open) return
+    if (!open || mobile) return
     function onKey(event: KeyboardEvent) {
       if (event.key !== 'Escape') return
       event.stopPropagation()
@@ -53,7 +57,7 @@ export function Popover({
     }
     document.addEventListener('keydown', onKey, true)
     return () => document.removeEventListener('keydown', onKey, true)
-  }, [open])
+  }, [open, mobile])
 
   return (
     <div className="pop" ref={ref}>
@@ -62,7 +66,12 @@ export function Popover({
         {iconOnly ? null : label}
         {badge}
       </button>
-      {open ? (
+      {open && mobile ? (
+        <Sheet open title={label} onClose={() => { close(); button.current?.focus() }}>
+          {children(close)}
+        </Sheet>
+      ) : null}
+      {open && !mobile ? (
         <div ref={panelRef} className={['pop-panel', align === 'end' || flip ? 'align-end' : '', wide ? 'wide' : ''].filter(Boolean).join(' ')} role="dialog" aria-label={label}>
           {children(close)}
         </div>

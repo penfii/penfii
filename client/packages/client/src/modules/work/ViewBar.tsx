@@ -4,6 +4,7 @@ import { Button } from '../../design/ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { FilterPanel } from './FilterPanel'
 import { Popover } from './Popover'
+import { useIsMobile } from '../../design/useIsMobile'
 import { SORT_FIELDS, TABLE_COLUMNS, DEFAULT_TABLE_COLUMNS, filterCount, groupsFor, layoutsFor } from './viewModel'
 
 export type ViewSaveError = 'nameTaken' | 'conflict' | 'forbidden' | 'generic' | null
@@ -63,6 +64,7 @@ export function ViewBar({
   actions?: ReactNode
 }) {
   const { t } = useI18n()
+  const mobile = useIsMobile()
   const active = views.find((view) => view.id === activeId)
   const count = filterCount(definition.filter)
   const groups = groupsFor(target, layout)
@@ -103,7 +105,7 @@ export function ViewBar({
 
       <div className="view-layouts" role="group" aria-label={t('view.layout')}>
         {layoutsFor(target).map((item) => (
-          <button key={item} type="button" className={item === layout ? 'view-layout on' : 'view-layout'} aria-pressed={item === layout} onClick={() => onLayout(item)}>
+          <button key={item} type="button" data-layout={item} className={item === layout ? 'view-layout on' : 'view-layout'} aria-pressed={item === layout} onClick={() => onLayout(item)}>
             {t(`view.layout.${item}`)}
           </button>
         ))}
@@ -121,31 +123,20 @@ export function ViewBar({
         <Popover label={t('view.filter')} badge={count > 0 ? <span className="pop-count">{count}</span> : null}>
           {() => <FilterPanel filter={definition.filter} labels={labels} members={members} types={types} planning={planning} channels={channels} projects={projects} onChange={(filter) => onChange({ ...definition, filter })} />}
         </Popover>
-        <label className="view-select">
-          <span>{t('view.group')}</span>
-          <select value={definition.group} onChange={(event) => onChange({ ...definition, group: event.target.value as ViewDefinition['group'] })}>
-            {groups.map((group) => (
-              <option key={group} value={group}>{t(`view.group.${group}`)}</option>
-            ))}
-          </select>
-        </label>
-        <label className="view-select">
-          <span>{t('view.sort')}</span>
-          <select value={definition.sort.field} onChange={(event) => onChange({ ...definition, sort: { ...definition.sort, field: event.target.value as ViewDefinition['sort']['field'] } })}>
-            {SORT_FIELDS.map((field) => (
-              <option key={field} value={field}>{t(`view.sort.${field}`)}</option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="button"
-          className="btn btn-secondary view-dir"
-          aria-label={t(`view.sort.${definition.sort.dir}`)}
-          title={t(`view.sort.${definition.sort.dir}`)}
-          onClick={() => onChange({ ...definition, sort: { ...definition.sort, dir: definition.sort.dir === 'ASC' ? 'DESC' : 'ASC' } })}
-        >
-          {definition.sort.dir === 'ASC' ? '↑' : '↓'}
-        </button>
+        {mobile ? (
+          <Popover label={t('view.sortGroup')} className="btn btn-secondary pop-trigger">
+            {() => (
+              <div className="filter-panel">
+                <div className="filter-panel-head"><strong>{t('view.sortGroup')}</strong></div>
+                <SortGroupControls definition={definition} groups={groups} onChange={onChange} />
+              </div>
+            )}
+          </Popover>
+        ) : (
+          <div className="view-inline-order">
+            <SortGroupControls definition={definition} groups={groups} onChange={onChange} />
+          </div>
+        )}
         <Popover label={t('view.display')} align="end">
           {() => <DisplayPanel definition={definition} layout={layout} wide={target !== 'PROJECT'} onChange={onChange} />}
         </Popover>
@@ -171,9 +162,45 @@ export function ViewBar({
   )
 }
 
+/** Group, sort field and direction. The wide toolbar shows them inline and a phone inside one sheet; the controls are the same. */
+function SortGroupControls({ definition, groups, onChange }: { definition: ViewDefinition; groups: readonly ViewDefinition['group'][]; onChange: (definition: ViewDefinition) => void }) {
+  const { t } = useI18n()
+  const { sort } = definition
+  return (
+    <>
+      <label className="view-select">
+        <span>{t('view.group')}</span>
+        <select value={definition.group} onChange={(event) => onChange({ ...definition, group: event.target.value as ViewDefinition['group'] })}>
+          {groups.map((group) => (
+            <option key={group} value={group}>{t(`view.group.${group}`)}</option>
+          ))}
+        </select>
+      </label>
+      <label className="view-select">
+        <span>{t('view.sort')}</span>
+        <select value={sort.field} onChange={(event) => onChange({ ...definition, sort: { ...sort, field: event.target.value as ViewDefinition['sort']['field'] } })}>
+          {SORT_FIELDS.map((field) => (
+            <option key={field} value={field}>{t(`view.sort.${field}`)}</option>
+          ))}
+        </select>
+      </label>
+      <button
+        type="button"
+        className="btn btn-secondary view-dir"
+        aria-label={t(`view.sort.${sort.dir}`)}
+        title={t(`view.sort.${sort.dir}`)}
+        onClick={() => onChange({ ...definition, sort: { ...sort, dir: sort.dir === 'ASC' ? 'DESC' : 'ASC' } })}
+      >
+        {sort.dir === 'ASC' ? '↑' : '↓'}
+      </button>
+    </>
+  )
+}
+
 /** Presentation only: nothing here changes which Tickets a View shows. */
 function DisplayPanel({ definition, layout, wide, onChange }: { definition: ViewDefinition; layout: ViewLayout; wide: boolean; onChange: (definition: ViewDefinition) => void }) {
   const { t } = useI18n()
+  const mobile = useIsMobile()
   const display = definition.display
   const chosen = new Set<TableColumn>(display.columns.length > 0 ? display.columns : DEFAULT_TABLE_COLUMNS)
   const set = (patch: Partial<ViewDefinition['display']>) => onChange({ ...definition, display: { ...display, ...patch } })
@@ -201,9 +228,9 @@ function DisplayPanel({ definition, layout, wide, onChange }: { definition: View
         <input type="checkbox" checked={display.compact} onChange={(event) => set({ compact: event.target.checked })} />
         <span>{t('view.display.compact')}</span>
       </label>
-      {layout === 'TABLE' ? (
+      {layout === 'TABLE' || (layout === 'LIST' && mobile) ? (
         <fieldset className="filter-group">
-          <legend>{t('view.display.columns')}</legend>
+          <legend>{mobile ? t('view.display.fields') : t('view.display.columns')}</legend>
           {TABLE_COLUMNS.map((column) => (
             <label key={column} className="filter-choice">
               <input type="checkbox" checked={chosen.has(column) || (wide && column === 'PROJECT')} disabled={column === 'KEY' || column === 'TITLE' || (wide && column === 'PROJECT')} onChange={() => toggleColumn(column)} />

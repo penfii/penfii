@@ -11,7 +11,8 @@ import { LocaleToggle, useI18n } from '../i18n/I18nProvider'
 import { ConnectedApps, SignInMethods, useReauth, useSession } from '../modules/identity'
 import { queryKeys } from '../queryKeys'
 import { queries } from '../queries'
-import { LAST_WORKSPACE_KEY, WorkspaceShell } from '../shell/WorkspaceShell'
+import { WorkspaceShell } from '../shell/WorkspaceShell'
+import { LAST_WORKSPACE_KEY } from '../shell/account'
 import { ProfileSettings } from './ProfileSettings'
 
 export function SettingsPage() {

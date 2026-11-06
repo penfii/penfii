@@ -5,7 +5,7 @@ import { Button, Dialog, EmptyState, Field } from '../design/ui'
 import { useI18n } from '../i18n/I18nProvider'
 import { queryKeys } from '../queryKeys'
 import { queries } from '../queries'
-import { LAST_WORKSPACE_KEY } from '../shell/WorkspaceShell'
+import { LAST_WORKSPACE_KEY } from '../shell/account'
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router'
@@ -68,7 +68,7 @@ function WorkspaceCreateDialog({ open, onClose }: { open: boolean; onClose: () =
   const [error, setError] = useState<string | null>(null)
   const zones = Intl.supportedValuesOf('timeZone')
   return (
-    <Dialog open={open} title={t('workspaces.create')} onClose={onClose}>
+    <Dialog open={open} title={t('workspaces.create')} onClose={onClose} presentation="full">
       <form
         onSubmit={(event) => {
           event.preventDefault()

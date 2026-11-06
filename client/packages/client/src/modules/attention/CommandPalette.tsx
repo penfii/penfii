@@ -65,7 +65,7 @@ export function CommandPalette({ workspaceId }: { workspaceId: string }) {
   }, [workspaceId, trimmed, remote.data, navigate, t])
 
   return (
-    <Dialog open={open} title={t('palette.title')} onClose={() => setOpen(false)}>
+    <Dialog open={open} title={t('palette.title')} onClose={() => setOpen(false)} presentation="full">
       <div className="palette">
         <input
           ref={input}

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import { CloseIcon, DownloadIcon } from '../../design/icons'
 import { IconButton } from '../../design/ui'
+import { useSheetBack } from '../../design/sheetHistory'
 import { CsvTableView, useCsv } from './CsvPreview'
 
 /** One thing the viewer can show. Images and videos can be paged through; a table opens alone. */
@@ -39,6 +40,8 @@ export function MediaViewerHost() {
   const { t } = useI18n()
   const [open, setOpen] = useState<Open | null>(current)
   const [videoFailed, setVideoFailed] = useState<string | null>(null)
+  // On a phone Back closes the viewer before it leaves the screen, like a sheet.
+  useSheetBack(open !== null, closeMediaViewer)
 
   useEffect(() => {
     listeners.add(setOpen)

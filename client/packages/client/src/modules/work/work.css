@@ -301,6 +301,7 @@
 .view-tab.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); font-weight: 650; }
 .view-tab-mark { font-size: .66rem; color: var(--text-muted); font-weight: 500; }
 .view-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.view-inline-order { display: contents; }
 .view-search { width: 12rem; max-width: 100%; padding-block: .3rem; }
 .view-select { display: inline-flex; align-items: center; gap: var(--space-1); font-size: .8rem; color: var(--text-muted); }
 .view-select select { width: auto; padding-block: .3rem; }
@@ -839,3 +840,14 @@
 .comment-composer textarea { border-radius: 20px; background: var(--bg); border-color: transparent; padding: 0.6rem 1rem; }
 .sprint-actual-line { font-size: 0.75rem; opacity: 0.8; }
 .sprint-periods { list-style: none; margin: 0.25rem 0; padding: 0; }
+
+/* Phone select mode: the List's rows are chosen, and the bar holds what can be done with them. */
+.phone-bulk { position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-top: 1px solid var(--accent); background: var(--accent-soft); }
+.phone-bulk strong { flex: 1 1 100%; }
+.phone-bulk .btn { min-height: 44px; }
+.list-row-check { width: 22px; height: 22px; margin: 0 var(--space-1) 0 0; flex: none; }
+.list-row.checked { background: var(--accent-soft); }
+.m-sheet-apply { width: 100%; min-height: 44px; margin-top: var(--space-2); }
+
+/* Phone: a card is moved to another State by name, since it cannot be dragged. Sits left of the move-to-top button. */
+.card-move { position: absolute; top: .3rem; right: 2.7rem; z-index: 2; width: 2.2rem; height: 2.2rem; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border-strong); border-radius: var(--radius-sm, 6px); background: var(--bg-elevated); color: var(--text-secondary); font-size: .95rem; line-height: 1; }

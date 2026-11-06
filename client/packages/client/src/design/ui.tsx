@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ReactNode, type RefObject, type SelectHTMLAttributes } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { CloseIcon } from './icons'
+import { useSheetBack } from './sheetHistory'
+import { useScrollLock } from './sheetBehavior'
+import { useIsMobile } from './useIsMobile'
+import './sheet.css'
 
 export function useDismiss(open: boolean, onClose: () => void, ref: RefObject<HTMLElement | null>) {
   useEffect(() => {
@@ -75,32 +79,66 @@ export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
   return <select {...props} />
 }
 
+/**
+ * How a dialog is shown on a phone. `sheet` is a short decision at the bottom of the screen;
+ * `full` fills the screen, for a dialog that asks for text or a choice from a list. The default
+ * is `sheet`; wider screens show every dialog the same way.
+ */
+export type DialogPresentation = 'sheet' | 'full'
+
 export function Dialog({
   open,
   title,
   onClose,
   children,
+  presentation = 'sheet',
+  closeWithBack = true,
 }: {
   open: boolean
   title: string
   onClose: () => void
   children: ReactNode
+  presentation?: DialogPresentation
+  /** On a phone the system Back closes the dialog first. A dialog that answers a navigation the router is holding back opts out. */
+  closeWithBack?: boolean
 }) {
   const { t } = useI18n()
+  const mobile = useIsMobile()
   const ref = useRef<HTMLDialogElement>(null)
+  useScrollLock(open && mobile)
+  useSheetBack(open && closeWithBack, onClose)
   const titleId = useId()
+  // What had focus when the dialog opened. A dialog that closes in place gives focus back by itself; one that
+  // is removed while open (callers mount one on demand) would drop it on <body>, so it is given back here.
+  const opener = useRef<HTMLElement | null>(null)
   useEffect(() => {
     const dialog = ref.current
     if (!dialog) return
-    if (open && !dialog.open) dialog.showModal()
+    if (open && !dialog.open) {
+      opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+      dialog.showModal()
+    }
     if (!open && dialog.open) dialog.close()
   }, [open])
+  useEffect(() => {
+    return () => {
+      const back = opener.current
+      setTimeout(() => {
+        if (back?.isConnected && (document.activeElement === document.body || document.activeElement === null)) back.focus()
+      })
+    }
+  }, [])
   return (
     <dialog
       ref={ref}
       className="dialog"
+      data-presentation={presentation}
       aria-labelledby={titleId}
       onClose={onClose}
+      // A sheet closes when its dimmed backdrop is tapped (the click lands on the dialog element itself).
+      onClick={(event) => {
+        if (mobile && presentation === 'sheet' && event.target === ref.current) onClose()
+      }}
       onCancel={(event) => {
         event.preventDefault()
         onClose()

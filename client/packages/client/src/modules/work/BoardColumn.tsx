@@ -33,6 +33,8 @@ export function BoardColumn({
   onOpen,
   onOpenRef,
   onMoveBy,
+  moveChoices,
+  onMoveTo,
   onReorder,
   moveToTopFor,
   onSetWip,
@@ -61,6 +63,8 @@ export function BoardColumn({
   /** Opens a parent shown as context. */
   onOpenRef: (ticketId: string) => void
   onMoveBy: (ticket: Ticket, step: -1 | 1) => void
+  moveChoices: Array<{ id: string; name: string }>
+  onMoveTo: (ticket: Ticket, columnId: string) => void
   onReorder: (ticket: Ticket, step: -1 | 1) => void
   /** Returns null when moving this card to the top would change nothing. */
   moveToTopFor: (ticket: Ticket) => (() => void) | null
@@ -169,6 +173,9 @@ export function BoardColumn({
                 showState={showState}
                 onOpen={() => onOpen(ticket)}
                 onMoveBy={(step) => onMoveBy(ticket, step)}
+                moveChoices={canEdit && canDrop ? moveChoices : undefined}
+                currentColumnId={column.id}
+                onMoveTo={(columnId) => onMoveTo(ticket, columnId)}
                 onReorder={(step) => onReorder(ticket, step)}
                 onMoveToTop={canEdit && canDrop ? (moveToTopFor(ticket) ?? undefined) : undefined}
               />

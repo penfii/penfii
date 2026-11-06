@@ -21,6 +21,9 @@ import { MessageReference } from './ReplyQuote'
 import { presentMessage } from './messages'
 import { REACTION_EMOJI, reactionCount, reactionPressed, withToggledReaction } from './reactions'
 import { useShown } from './useShown'
+import { Sheet } from '../../design/Sheet'
+import { useIsMobile } from '../../design/useIsMobile'
+import { useLongPress } from '../../design/useLongPress'
 import { queryKeys } from '../../queryKeys'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -73,11 +76,22 @@ export function MessageRow({
   const { locale, t } = useI18n()
   const ref = useShown(scrollRoot, message.streamSeq, onVisible)
   const [editDoc, setEditDoc] = useState<RichTextDoc | null>(null)
+  const editBox = useRef<HTMLDivElement>(null)
+  const editing = editDoc !== null
+  // On a phone the composer sits right under the list: bring the whole edit form, with its buttons, into view.
+  useEffect(() => {
+    if (editing) editBox.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [editing])
   const [expectedVersion, setExpectedVersion] = useState(message.version)
   const [conflictBody, setConflictBody] = useState<RichTextDoc | null | undefined>(undefined)
   const [history, setHistory] = useState<MessageVersion[] | null>(null)
   const { confirm, dialog: confirmDialog } = useConfirm()
   const [more, setMore] = useState(false)
+  // On a phone a long press opens the message's actions as a bottom sheet (the hover toolbar needs a mouse).
+  const [sheet, setSheet] = useState(false)
+  const mobile = useIsMobile()
+  const press = useLongPress(() => setSheet(true), mobile)
+  const closeMenu = () => { setMore(false); setSheet(false) }
   const menuRef = useRef<HTMLDivElement>(null)
   const toggleRef = useRef<HTMLButtonElement>(null)
   // The menu hangs below the message; at the end of the list it is brought into view instead of left under the composer.
@@ -202,7 +216,7 @@ export function MessageRow({
     const text = message.body ? plainText(message.body) : ''
     try {
       await navigator.clipboard.writeText(text)
-      setMore(false)
+      closeMenu()
     } catch {
       setError(t('message.copyFailed'))
     }
@@ -229,6 +243,85 @@ export function MessageRow({
     )
   ) : null
 
+  // In the phone's sheet a reaction is a one-step choice: it is sent and the sheet closes.
+  const reactionBar = (after?: () => void) => (
+  <div className="reaction-bar" aria-label={t('reactions.toggle')}>
+    {REACTION_EMOJI.map((emoji) => {
+      const reaction = (message.reactions ?? []).find((item) => item.emoji === emoji)
+      const pressed = reactionPressed(reaction, currentUserId)
+      return (
+        <button
+          key={emoji}
+          type="button"
+          aria-pressed={pressed}
+          aria-label={`${t('reactions.toggle')} ${emoji}`}
+          disabled={busyEmoji === emoji}
+          onClick={() => { void toggleReaction(emoji); after?.() }}
+        >
+          {emoji}
+        </button>
+      )
+    })}
+  </div>
+  )
+  const menuItems = (
+    <>
+    {threadHref ? <Link role="menuitem" to={threadHref} onClick={() => closeMenu()}>{t('message.openThread')}</Link> : null}
+    {onComment ? (
+      <button type="button" role="menuitem" aria-pressed={commentActive ?? false} onClick={() => { closeMenu(); onComment() }}>
+        {t('message.threadReply')}
+      </button>
+    ) : null}
+    {onReply ? (
+      <button type="button" role="menuitem" aria-pressed={replyActive ?? false} onClick={() => { closeMenu(); onReply() }}>
+        {t('message.threadReply')}
+      </button>
+    ) : null}
+    <button type="button" role="menuitem" onClick={() => void copyText()}>
+      {t('message.copy')}
+    </button>
+    {conversationId && !message.deleted ? (
+      <button type="button" role="menuitem" onClick={() => { closeMenu(); makeTicket() }}>
+        {t('message.makeTicket')}
+      </button>
+    ) : null}
+    <button type="button" role="menuitem" onClick={() => { closeMenu(); void saveForLater(message.id) }}>
+      {t('saved.later.addMessage')}
+    </button>
+    <button type="button" role="menuitem" onClick={() => { closeMenu(); onManualUnread(message.streamSeq) }}>
+      {t('message.markUnread')}
+    </button>
+    {mine ? (
+      <>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            if (!message.body) return
+            setEditDoc(message.body)
+            closeMenu()
+            setExpectedVersion(message.version)
+            setConflictBody(undefined)
+          }}
+        >
+          {t('message.edit')}
+        </button>
+        <button type="button" role="menuitem" onClick={() => { closeMenu(); void showHistory() }}>
+          {t('message.history')}
+        </button>
+      </>
+    ) : null}
+    {canDeleteMessage(message, currentUserId, channelRole) ? (
+      <>
+        <hr className="menu-separator" />
+        <button type="button" role="menuitem" className="menu-danger" onClick={() => { closeMenu(); void remove() }}>
+          {t('message.delete')}
+        </button>
+      </>
+    ) : null}
+    </>
+  )
+
   return (
     <article
       ref={ref}
@@ -236,6 +329,7 @@ export function MessageRow({
       data-stream-seq={message.streamSeq}
       data-message-id={message.id}
       onMouseLeave={() => setMore(false)}
+      {...press}
     >
       <div className="message-gutter">
         {compact ? null : <Avatar name={names[message.authorId] || message.authorDisplayName || message.authorId} />}
@@ -288,7 +382,7 @@ export function MessageRow({
         </div>
       ) : null}
       {editDoc ? (
-        <div className="edit-box">
+        <div className="edit-box" ref={editBox}>
           <RichTextEditor value={editDoc} baseline={message.body} onChange={setEditDoc} label={t('edit.local')} autoFocus />
           <Button type="button" onClick={() => void saveEdit()}>
             {t('message.save')}
@@ -333,24 +427,7 @@ export function MessageRow({
       ) : null}
       {!message.deleted ? (
         <div className="hover-actions">
-          <div className="reaction-bar" aria-label={t('reactions.toggle')}>
-            {REACTION_EMOJI.map((emoji) => {
-              const reaction = (message.reactions ?? []).find((item) => item.emoji === emoji)
-              const pressed = reactionPressed(reaction, currentUserId)
-              return (
-                <button
-                  key={emoji}
-                  type="button"
-                  aria-pressed={pressed}
-                  aria-label={`${t('reactions.toggle')} ${emoji}`}
-                  disabled={busyEmoji === emoji}
-                  onClick={() => void toggleReaction(emoji)}
-                >
-                  {emoji}
-                </button>
-              )
-            })}
-          </div>
+          {reactionBar()}
           {threadHref ? (
             <Link
               className="thread-open"
@@ -371,62 +448,22 @@ export function MessageRow({
           </button>
           {more ? (
             <div className="hover-menu" role="menu" aria-label={t('message.more')} ref={menuRef} onKeyDown={onMenuKey}>
-              {threadHref ? <Link role="menuitem" to={threadHref} onClick={() => setMore(false)}>{t('message.openThread')}</Link> : null}
-              {onComment ? (
-                <button type="button" role="menuitem" aria-pressed={commentActive ?? false} onClick={() => { setMore(false); onComment() }}>
-                  {t('message.threadReply')}
-                </button>
-              ) : null}
-              {onReply ? (
-                <button type="button" role="menuitem" aria-pressed={replyActive ?? false} onClick={() => { setMore(false); onReply() }}>
-                  {t('message.threadReply')}
-                </button>
-              ) : null}
-              <button type="button" role="menuitem" onClick={() => void copyText()}>
-                {t('message.copy')}
-              </button>
-              {conversationId && !message.deleted ? (
-                <button type="button" role="menuitem" onClick={() => { setMore(false); makeTicket() }}>
-                  {t('message.makeTicket')}
-                </button>
-              ) : null}
-              <button type="button" role="menuitem" onClick={() => { setMore(false); void saveForLater(message.id) }}>
-                {t('saved.later.addMessage')}
-              </button>
-              <button type="button" role="menuitem" onClick={() => { setMore(false); onManualUnread(message.streamSeq) }}>
-                {t('message.markUnread')}
-              </button>
-              {mine ? (
-                <>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      if (!message.body) return
-                      setEditDoc(message.body)
-                      setMore(false)
-                      setExpectedVersion(message.version)
-                      setConflictBody(undefined)
-                    }}
-                  >
-                    {t('message.edit')}
-                  </button>
-                  <button type="button" role="menuitem" onClick={() => { setMore(false); void showHistory() }}>
-                    {t('message.history')}
-                  </button>
-                </>
-              ) : null}
-              {canDeleteMessage(message, currentUserId, channelRole) ? (
-                <>
-                  <hr className="menu-separator" />
-                  <button type="button" role="menuitem" className="menu-danger" onClick={() => { setMore(false); void remove() }}>
-                    {t('message.delete')}
-                  </button>
-                </>
-              ) : null}
+            {menuItems}
             </div>
           ) : null}
         </div>
+      ) : null}
+      {mobile && !message.deleted ? (
+        // There is no hover on a phone: this is the visible way to the actions (a long press does the same).
+        <button type="button" className="message-more" aria-haspopup="dialog" aria-label={t('message.more')} onClick={() => setSheet(true)}>
+          <MoreIcon />
+        </button>
+      ) : null}
+      {sheet ? (
+        <Sheet open title={t('message.more')} onClose={closeMenu}>
+          <div className="m-sheet-reactions">{reactionBar(closeMenu)}</div>
+          <div className="m-sheet-menu" role="menu" aria-label={t('message.more')}>{menuItems}</div>
+        </Sheet>
       ) : null}
       {laterNote ? <p className="hint" role="status">{laterNote}</p> : null}
       {history && !message.deleted ? (

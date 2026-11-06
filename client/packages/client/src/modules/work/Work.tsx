@@ -10,6 +10,7 @@ import { queries } from '../../queries'
 import { BoardLayout } from './Board'
 import { BoardSettings } from './BoardSettings'
 import { BulkBar } from './BulkBar'
+import { PhoneBulk } from './PhoneBulk'
 import { ListLayout, type ListReorder } from './ListLayout'
 import { moveErrorKey } from './moveErrors'
 import { useProjectLive } from './live'
@@ -22,6 +23,7 @@ import { useWorkView, type WorkTarget } from './useWorkView'
 import { ViewBar } from './ViewBar'
 import { buildSections, siblingIds, tableColumns, workTicketsFromBoard, type Section, type WorkTicket } from './viewModel'
 import { GearIcon } from '../../design/icons'
+import { useIsMobile } from '../../design/useIsMobile'
 
 /**
  * Work: one Ticket dataset shown as a Board, a List or a Table, from wherever the person is. A
@@ -59,9 +61,20 @@ function sectionLabels(t: ReturnType<typeof useI18n>['t']) {
   }
 }
 
+/**
+ * A phone has no Table: a saved Table view is shown as a List, and the Table's columns become the fields a
+ * List row shows. On a wider screen the layout is the view's own and a row shows everything.
+ */
+function usePhoneLayout(view: ViewState, wide: boolean) {
+  const mobile = useIsMobile()
+  const layout = mobile && view.layout === 'TABLE' ? 'LIST' : view.layout
+  return { layout, mobile, rowFields: mobile ? new Set(tableColumns(view.definition, wide)) : undefined }
+}
+
 // ---- Project scope ------------------------------------------------------------------------
 
 function ProjectWork({ target, view, message, setMessage }: { target: Extract<WorkTarget, { kind: 'PROJECT' }>; view: ViewState; message: string; setMessage: (message: string) => void }) {
+  const { layout, mobile, rowFields } = usePhoneLayout(view, false)
   const { t } = useI18n()
   const { projectId, workspaceId } = target
   const queryClient = useQueryClient()
@@ -83,11 +96,13 @@ function ProjectWork({ target, view, message, setMessage }: { target: Extract<Wo
   )
   const [selection, setSelection] = useState<Set<string>>(() => new Set())
   const [bulkResult, setBulkResult] = useState<BulkResult | null>(null)
+  const [selecting, setSelecting] = useState(false)
   const [busy, setBusy] = useState<Set<string>>(() => new Set())
   useEffect(() => {
     setSelection(new Set())
     setBulkResult(null)
-  }, [view.layout, projectId])
+    setSelecting(false)
+  }, [layout, projectId])
 
   if (board.isPending) return <div className="board-loading" aria-label={t('loading')}><span /><span /><span /></div>
   if (board.isError || !data) {
@@ -100,7 +115,7 @@ function ProjectWork({ target, view, message, setMessage }: { target: Extract<Wo
 
   const definition = view.definition
   const labelSet = sectionLabels(t)
-  const sections = view.layout === 'BOARD' ? [] : buildSections(tickets, definition, { states: data.states, sprints: planning.data?.sprints, members: members.data ?? [], labels: labelSet })
+  const sections = layout === 'BOARD' ? [] : buildSections(tickets, definition, { states: data.states, sprints: planning.data?.sprints, members: members.data ?? [], labels: labelSet })
   // The count of Tickets the View shows, whatever the layout draws.
   const shown = new Set(buildSections(tickets, { ...definition, group: 'NONE' }, { labels: labelSet }).flatMap((section) => section.tickets.map((ticket) => ticket.id))).size
   const total = tickets.length
@@ -178,7 +193,7 @@ function ProjectWork({ target, view, message, setMessage }: { target: Extract<Wo
     <>
       <ViewBar
         target="PROJECT"
-        layout={view.layout}
+        layout={layout}
         isAdmin={data.canManageWorkflow}
         views={view.views}
         activeId={view.active?.id ?? null}
@@ -209,18 +224,19 @@ function ProjectWork({ target, view, message, setMessage }: { target: Extract<Wo
       <div className="board-toolbar">
         {!data.canEdit ? <p className="board-note" role="note">{t('work.board.readOnly')}</p> : <span />}
         {shown !== total ? <small className="field-hint">{t('view.filter.result', { shown: String(shown), total: String(total) })}</small> : null}
-        {data.canEdit && view.layout !== 'BOARD' ? <Button type="button" variant="secondary" onClick={() => openCreate({ projectId })}>{t('work.addTicket')}</Button> : null}
+        {data.canEdit && layout !== 'BOARD' ? <Button type="button" variant="secondary" onClick={() => openCreate({ projectId })}>{t('work.addTicket')}</Button> : null}
+        {mobile && layout === 'LIST' && data.canEdit && total > 0 ? <Button type="button" variant="secondary" aria-pressed={selecting} onClick={() => { setSelecting((on) => !on); setSelection(new Set()); setBulkResult(null) }}>{t('bulk.select')}</Button> : null}
       </div>
-      {view.layout === 'BOARD' ? (
+      {layout === 'BOARD' ? (
         <BoardLayout projectId={projectId} data={data} definition={definition} planning={planning.data} members={members.data ?? []} message={message} onMessage={setMessage} />
       ) : (
         <>
           {message ? <p className="board-error" role="alert">{message}</p> : null}
-          {view.layout === 'TABLE' && (chosen.length > 0 || bulkResult) ? <BulkBar workspaceId={workspaceId} selected={chosen} result={bulkResult} names={new Map(tickets.map((ticket) => [ticket.id, { key: ticket.key, title: ticket.title }]))} onClear={() => { setSelection(new Set()); setBulkResult(null) }} onResult={afterBulk} /> : null}
+          {layout === 'TABLE' && (chosen.length > 0 || bulkResult) ? <BulkBar workspaceId={workspaceId} selected={chosen} result={bulkResult} names={new Map(tickets.map((ticket) => [ticket.id, { key: ticket.key, title: ticket.title }]))} onClear={() => { setSelection(new Set()); setBulkResult(null) }} onResult={afterBulk} /> : null}
           {total === 0 ? <p className="board-empty">{t('work.board.empty')}</p> : null}
           {total > 0 && sections.length === 0 ? <p className="board-empty">{t('work.list.noMatch')}</p> : null}
           <div className="work-scroll">
-            {view.layout === 'LIST' ? (
+            {layout === 'LIST' ? (
               <ListLayout
                 sections={sections}
                 selectedId={selectedId}
@@ -235,6 +251,8 @@ function ProjectWork({ target, view, message, setMessage }: { target: Extract<Wo
                   open(id)
                 }}
                 onState={(ticket, stateId) => void changeState(ticket, stateId)}
+                fields={rowFields}
+                select={selecting ? { chosen: selection, onToggle: (id) => setSelection((current) => toggleAll(current, [id], !current.has(id))) } : undefined}
               />
             ) : (
               <TableLayout
@@ -257,6 +275,7 @@ function ProjectWork({ target, view, message, setMessage }: { target: Extract<Wo
               />
             )}
           </div>
+          {selecting && layout === 'LIST' ? <PhoneBulk workspaceId={workspaceId} selected={chosen} result={bulkResult} names={new Map(tickets.map((ticket) => [ticket.id, { key: ticket.key, title: ticket.title }]))} onAll={() => setSelection((current) => (current.size >= shown ? new Set() : new Set(sections.flatMap((section) => section.tickets).map((ticket) => ticket.id))))} onDone={() => { setSelecting(false); setSelection(new Set()); setBulkResult(null) }} onResult={afterBulk} /> : null}
         </>
       )}
     </>
@@ -289,6 +308,7 @@ function WideWork({
   setMessage: (message: string) => void
   title?: string
 }) {
+  const { layout, mobile, rowFields } = usePhoneLayout(view, true)
   const { t } = useI18n()
   const queryClient = useQueryClient()
   const { selectedId, open } = useTicketPanel()
@@ -298,11 +318,13 @@ function WideWork({
   const dataset = useQuery({ ...queries.scopeDataset(target.workspaceId, scope, lens, narrowed), refetchOnWindowFocus: true, placeholderData: (previous) => previous })
   const [selection, setSelection] = useState<Set<string>>(() => new Set())
   const [bulkResult, setBulkResult] = useState<BulkResult | null>(null)
+  const [selecting, setSelecting] = useState(false)
   const [busy, setBusy] = useState<Set<string>>(() => new Set())
   useEffect(() => {
     setSelection(new Set())
     setBulkResult(null)
-  }, [view.layout, lens])
+    setSelecting(false)
+  }, [layout, lens])
 
   const tickets: WorkTicket[] = useMemo(() => dataset.data?.tickets ?? [], [dataset.data])
   const projects: ScopeProject[] = dataset.data?.projects ?? []
@@ -350,13 +372,19 @@ function WideWork({
   }
 
   const chosen = tickets.filter((ticket) => selection.has(ticket.id))
+  function afterWideBulk(result: BulkResult | null) {
+    setBulkResult(result)
+    if (!result) return
+    setSelection(new Set(result.items.filter((item) => !item.ok).map((item) => item.ticketId)))
+    void Promise.all([queryClient.invalidateQueries({ queryKey: queryKeys.all.scopeDataset }), queryClient.invalidateQueries({ queryKey: queryKeys.all.ticket })])
+  }
   const definitionForBar: ViewDefinition = definition
 
   return (
     <>
       <ViewBar
         target={target.kind}
-        layout={view.layout}
+        layout={layout}
         isAdmin={false}
         views={view.views}
         activeId={view.active?.id ?? null}
@@ -382,10 +410,11 @@ function WideWork({
       <div className="board-toolbar">
         <small className="field-hint">{t('work.wide.hint')}</small>
         {shown !== tickets.length ? <small className="field-hint">{t('view.filter.result', { shown: String(shown), total: String(tickets.length) })}</small> : null}
+        {mobile && layout === 'LIST' && tickets.length > 0 ? <Button type="button" variant="secondary" aria-pressed={selecting} onClick={() => { setSelecting((on) => !on); setSelection(new Set()); setBulkResult(null) }}>{t('bulk.select')}</Button> : null}
       </div>
       {dataset.data.truncated ? <p className="board-note" role="note">{t('work.wide.truncated')}</p> : null}
       {message ? <p className="board-error" role="alert">{message}</p> : null}
-      {view.layout === 'TABLE' && (chosen.length > 0 || bulkResult) ? (
+      {layout === 'TABLE' && (chosen.length > 0 || bulkResult) ? (
         <BulkBar
           workspaceId={target.workspaceId}
           selected={chosen}
@@ -395,18 +424,13 @@ function WideWork({
             setSelection(new Set())
             setBulkResult(null)
           }}
-          onResult={(result) => {
-            setBulkResult(result)
-            if (!result) return
-            setSelection(new Set(result.items.filter((item) => !item.ok).map((item) => item.ticketId)))
-            void Promise.all([queryClient.invalidateQueries({ queryKey: queryKeys.all.scopeDataset }), queryClient.invalidateQueries({ queryKey: queryKeys.all.ticket })])
-          }}
+          onResult={afterWideBulk}
         />
       ) : null}
       {tickets.length === 0 ? <p className="board-empty">{t('work.wide.empty')}</p> : null}
       {tickets.length > 0 && sections.length === 0 ? <p className="board-empty">{t('work.list.noMatch')}</p> : null}
       <div className="work-scroll">
-        {view.layout === 'LIST' ? (
+        {layout === 'LIST' ? (
           <ListLayout
             sections={sections as Section[]}
             selectedId={selectedId}
@@ -419,6 +443,8 @@ function WideWork({
               open(id)
             }}
             onState={(ticket, stateId) => void changeState(ticket, stateId)}
+            fields={rowFields}
+            select={selecting ? { chosen: selection, onToggle: (id) => setSelection((current) => toggleAll(current, [id], !current.has(id))) } : undefined}
           />
         ) : (
           <TableLayout
@@ -440,6 +466,20 @@ function WideWork({
           />
         )}
       </div>
+      {selecting && layout === 'LIST' ? (
+        <PhoneBulk
+          workspaceId={target.workspaceId}
+          selected={chosen}
+          result={bulkResult}
+          names={new Map(tickets.map((ticket) => [ticket.id, { key: ticket.key, title: ticket.title }]))}
+          onAll={() => setSelection((current) => {
+            const all = sections.flatMap((section) => section.tickets).filter((ticket) => editable.get(ticket.projectId)).map((ticket) => ticket.id)
+            return current.size >= all.length ? new Set() : new Set(all)
+          })}
+          onDone={() => { setSelecting(false); setSelection(new Set()); setBulkResult(null) }}
+          onResult={afterWideBulk}
+        />
+      ) : null}
     </>
   )
 }

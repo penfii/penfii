@@ -356,7 +356,7 @@ export function DocPageView({
           <Button onClick={leaveEditing}>{t('docs.edit.discard.confirm')}</Button>
         </div>
       </Dialog>
-      <Dialog open={templateOpen} title={t('docs.template.save')} onClose={() => setTemplateOpen(false)}>
+      <Dialog open={templateOpen} title={t('docs.template.save')} onClose={() => setTemplateOpen(false)} presentation="full">
         <label className="field">
           <span>{t('docs.template.name')}</span>
           <input value={templateName} onChange={(event) => setTemplateName(event.target.value)} />

@@ -1,6 +1,7 @@
 import { useCallback, useState, type FormEvent, type ReactNode } from 'react'
 import { isApiError } from '@penfii/api-client'
 import { api } from '../../api'
+import { useSheetBack } from '../../design/sheetHistory'
 import { useI18n } from '../../i18n/I18nProvider'
 
 /**
@@ -13,6 +14,7 @@ export function useReauth(): { run: <T>(action: () => Promise<T>) => Promise<T |
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  useSheetBack(pending !== null, () => pending?.cancel())
 
   const run = useCallback(
     async <T,>(action: () => Promise<T>): Promise<T | undefined> => {

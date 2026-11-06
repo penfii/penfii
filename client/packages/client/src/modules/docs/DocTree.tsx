@@ -4,6 +4,7 @@ import type { DocNode } from '@penfii/contracts'
 import { Button, Dialog, Select } from '../../design/ui'
 import { queries } from '../../queries'
 import { NewDocDialog } from './NewDocDialog'
+import './knowledge.css'
 import type { ShareScope } from './ShareScopePicker'
 import { useI18n } from '../../i18n/I18nProvider'
 import { ancestorIds, buildTree, canMoveUnder, expandAll, findInForest, flatten, forestHas, groupByProject, matchingDocs } from './treeModel'
@@ -362,7 +363,7 @@ export function DocTree({
           <Button onClick={() => confirm && void remove(confirm)}>{t('docs.delete')}</Button>
         </div>
       </Dialog>
-      <Dialog open={moving !== null} title={t('docs.tree.move')} onClose={() => setMoving(null)}>
+      <Dialog open={moving !== null} title={t('docs.tree.move')} onClose={() => setMoving(null)} presentation="full">
         <label className="field">
           <span>{t('docs.tree.moveUnder')}</span>
           <Select value={moveTarget} onChange={(event) => setMoveTarget(event.target.value)}>

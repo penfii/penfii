@@ -7,6 +7,7 @@ import { formatDue, isOverdue, isPriority } from './ticketModel'
 import { formatEstimate } from './planValues'
 import { BlockedChip } from './WorkChips'
 import type { Section, WorkTicket } from './viewModel'
+import type { TableColumn } from '@penfii/contracts'
 
 export type ListReorder = {
   /** Whether the row has a neighbour to swap with; a parent among parents has none. */
@@ -32,6 +33,8 @@ export function ListLayout({
   reorder,
   onOpen,
   onState,
+  fields,
+  select,
 }: {
   sections: Section[]
   selectedId: string | null
@@ -45,8 +48,13 @@ export function ListLayout({
   reorder?: ListReorder
   onOpen: (id: string) => void
   onState: (ticket: WorkTicket, stateId: string) => void
+  /** On a phone the Table's columns are the fields a row shows; without it every field shows. */
+  fields?: ReadonlySet<TableColumn>
+  /** Phone select mode: a row is chosen instead of opened, and its State and order controls rest. */
+  select?: { chosen: ReadonlySet<string>; onToggle: (id: string) => void }
 }) {
   const { t, locale } = useI18n()
+  const show = (column: TableColumn) => !fields || fields.has(column)
   return (
     <div className={compact ? 'work-list compact' : 'work-list'}>
       {sections.map((section) => (
@@ -73,7 +81,9 @@ export function ListLayout({
               const ticket = row.ticket as WorkTicket
               const done = ticket.stateCategory === 'DONE' || ticket.stateCategory === 'CANCELED'
               const overdue = isOverdue(ticket.dueOn, done)
-              const editable = canEdit(ticket) && !busy.has(ticket.id)
+              const editable = canEdit(ticket) && !busy.has(ticket.id) && !select
+              const pickable = select && canEdit(ticket) && !busy.has(ticket.id)
+              const chosen = Boolean(select?.chosen.has(ticket.id))
               const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
                 if (!reorder || !event.altKey || !canEdit(ticket)) return
                 if (event.key === 'ArrowUp') {
@@ -90,17 +100,20 @@ export function ListLayout({
               return (
                 <li
                   key={ticket.id}
-                  className={['list-row', row.nested ? 'nested' : '', ticket.id === selectedId ? 'selected' : '', done ? 'is-done' : ''].filter(Boolean).join(' ')}
+                  className={['list-row', row.nested ? 'nested' : '', ticket.id === selectedId ? 'selected' : '', chosen ? 'checked' : '', done ? 'is-done' : ''].filter(Boolean).join(' ')}
                   data-ticket-id={ticket.id}
                   aria-busy={busy.has(ticket.id)}
                 >
+                  {select ? (
+                    <input type="checkbox" className="list-row-check" aria-label={t('bulk.rowSelect', { key: ticket.key })} checked={chosen} disabled={!pickable} onChange={() => select.onToggle(ticket.id)} />
+                  ) : null}
                   <button
                     type="button"
                     className="list-row-open"
                     aria-current={ticket.id === selectedId ? 'true' : undefined}
                     aria-keyshortcuts={reorder && canEdit(ticket) ? 'Alt+ArrowUp Alt+ArrowDown Alt+Home' : undefined}
                     aria-label={t('work.board.openTicket', { key: ticket.key })}
-                    onClick={() => onOpen(ticket.id)}
+                    onClick={() => (select ? (pickable ? select.onToggle(ticket.id) : undefined) : onOpen(ticket.id))}
                     onKeyDown={onKeyDown}
                   >
                     <small className="ticket-key">{ticket.key}</small>
@@ -108,35 +121,37 @@ export function ListLayout({
                     <strong className="list-row-title">{ticket.title}</strong>
                   </button>
                   <span className="list-row-meta">
-                    <StateMenu ticket={ticket} known={states} disabled={!editable} onPick={(id) => onState(ticket, id)} />
+                    {show('STATE') ? <StateMenu ticket={ticket} known={states} disabled={!editable} onPick={(id) => onState(ticket, id)} /> : null}
                     <BlockedChip ticket={ticket} />
                     {wide ? (
                       <span className="where-chip" title={ticket.channelName ? `${ticket.projectName} · # ${ticket.channelName}` : ticket.projectName}>
                         {ticket.projectName}
                         {ticket.channelName ? <small> # {ticket.channelName}</small> : null}
                       </span>
-                    ) : ticket.channelName ? (
+                    ) : ticket.channelName && show('CHANNEL') ? (
                       <span className="where-chip"># {ticket.channelName}</span>
                     ) : null}
-                    {isPriority(ticket.priority) ? <span className={`priority-chip priority-${ticket.priority.toLowerCase()}`}>{t(`work.priority.${ticket.priority}`)}</span> : null}
-                    {ticket.sprint ? <span className="sprint-chip" title={ticket.sprint.name}>{ticket.sprint.name}</span> : null}
-                    {ticket.labels.slice(0, 2).map((label) => (
+                    {show('PRIORITY') && isPriority(ticket.priority) ? <span className={`priority-chip priority-${ticket.priority.toLowerCase()}`}>{t(`work.priority.${ticket.priority}`)}</span> : null}
+                    {show('SPRINT') && ticket.sprint ? <span className="sprint-chip" title={ticket.sprint.name}>{ticket.sprint.name}</span> : null}
+                    {(show('LABELS') ? ticket.labels.slice(0, 2) : []).map((label) => (
                       <span key={label.id} className="label-chip">{label.name}</span>
                     ))}
-                    {ticket.dueOn ? (
+                    {show('DUE_ON') && ticket.dueOn ? (
                       <time dateTime={ticket.dueOn} className={overdue ? 'ticket-due overdue' : 'ticket-due'} title={overdue ? t('work.card.overdue') : undefined}>
                         {formatDue(ticket.dueOn, locale)}
                       </time>
                     ) : null}
-                    {ticket.estimate ? <span className="estimate-chip" title={t('work.card.estimate', { estimate: formatEstimate(ticket.estimate) })}>{formatEstimate(ticket.estimate)}</span> : null}
-                    {ticket.assigneeName ? (
+                    {fields?.has('MILESTONE') ? ticket.milestones.map((milestone) => <span key={milestone.id} className="label-chip">{milestone.name}</span>) : null}
+                    {fields?.has('PARENT') && ticket.parent ? <span className="ticket-parent" title={ticket.parent.title}><small className="ticket-key">{ticket.parent.key}</small></span> : null}
+                    {show('ESTIMATE') && ticket.estimate ? <span className="estimate-chip" title={t('work.card.estimate', { estimate: formatEstimate(ticket.estimate) })}>{formatEstimate(ticket.estimate)}</span> : null}
+                    {show('ASSIGNEE') && ticket.assigneeName ? (
                       <span className="ticket-assignee" title={ticket.assigneeName}>
                         <Avatar name={ticket.assigneeName} />
                         <span>{ticket.assigneeName}</span>
                       </span>
                     ) : null}
                   </span>
-                  {reorder && canEdit(ticket) ? (
+                  {reorder && canEdit(ticket) && !select ? (
                     <span className="list-row-order">
                       {reorder.canStep(ticket, section) ? (
                         <>

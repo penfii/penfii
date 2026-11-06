@@ -67,7 +67,7 @@ export function ChannelMembersDialog({
   }
 
   return (
-    <Dialog open={open} title={t('channel.addPeople.title')} onClose={onClose}>
+    <Dialog open={open} title={t('channel.addPeople.title')} onClose={onClose} presentation="full">
       <p className="hint">{t('channel.addPeople.hint')}</p>
       <h3>{t('channel.addPeople.members')}</h3>
       <ul className="directory-list" aria-label={t('channel.addPeople.members')}>

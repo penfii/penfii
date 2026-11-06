@@ -51,7 +51,7 @@ export function AvatarCropDialog({
   }
 
   return (
-    <Dialog open title={t('profile.cropTitle')} onClose={onCancel}>
+    <Dialog open title={t('profile.cropTitle')} onClose={onCancel} presentation="full">
       <p className="hint">{t('profile.cropHint')}</p>
       <div
         className="crop-frame"

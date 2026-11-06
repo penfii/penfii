@@ -109,7 +109,7 @@ export function AccessDialog({
   }
 
   return (
-    <Dialog open={open} title={target.title} onClose={onClose}>
+    <Dialog open={open} title={target.title} onClose={onClose} presentation="full">
       <ShareScopePicker workspaceId={workspaceId} name="doc-visibility" value={scope} onChange={setScope} disabled={!manage || busy} suggestedProjectId={target.createdInProjectId ?? null} />
       {scopeChanged ? <p className="share-scope-change" role="status">{t('docs.access.change', { from: nowLabel, to: nextLabel })}</p> : null}
       <fieldset disabled={!manage || busy} className="doc-access">

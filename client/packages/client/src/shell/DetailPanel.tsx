@@ -10,6 +10,7 @@ import { CreateTicketPanel } from '../modules/work/CreateTicketPanel'
 import type { PaneControls } from './ResizeHandle'
 import { ChooseProjectPanel } from '../modules/work/ChooseProjectPanel'
 import { announceTicket } from '../modules/work/fromChat'
+import { useLeaveOverlay } from './overlayTrail'
 import { CREATE_KEYS, chatSourceFromParams, createContextFromParams, isCreatePanel, ticketIdFromPanel } from '../modules/work/panelParam'
 
 const statusLabel: Record<TaskStatus, 'shell.board.backlog' | 'projects.todo' | 'projects.doing' | 'projects.done'> = {
@@ -25,6 +26,9 @@ export function DetailPanel({ ticketPane, bindClose }: { ticketPane?: PaneContro
   const navigate = useNavigate()
   const location = useLocation()
   const [params, setParams] = useSearchParams()
+  const leaveTo = useLeaveOverlay()
+  // Close by going to the same page with these query keys; on a phone this steps back when it can (see overlayTrail).
+  const leaveWith = (next: URLSearchParams) => leaveTo(location.pathname + (next.toString() ? `?${next.toString()}` : ''))
   const panel = params.get('panel')
   const closeRef = useRef<() => void>(() => {})
   useLayoutEffect(() => {
@@ -42,7 +46,7 @@ export function DetailPanel({ ticketPane, bindClose }: { ticketPane?: PaneContro
   function close() {
     const next = new URLSearchParams(params)
     next.delete('panel')
-    setParams(next)
+    leaveWith(next)
   }
 
   const createContext = isCreatePanel(panel) ? createContextFromParams(params) : null
@@ -53,7 +57,7 @@ export function DetailPanel({ ticketPane, bindClose }: { ticketPane?: PaneContro
       for (const key of CREATE_KEYS) next.delete(key)
       if (createContext.parentId) next.set('panel', panelOpen('ticket', createContext.parentId))
       else next.delete('panel')
-      setParams(next)
+      leaveWith(next)
     }
     const { source } = createContext
     const created = source
@@ -85,7 +89,7 @@ export function DetailPanel({ ticketPane, bindClose }: { ticketPane?: PaneContro
       const next = new URLSearchParams(params)
       for (const key of CREATE_KEYS) next.delete(key)
       next.delete('panel')
-      setParams(next)
+      leaveWith(next)
     }
     closeRef.current = leave
     return (

@@ -1,6 +1,8 @@
-import type { DragEvent, KeyboardEvent } from 'react'
+import { useState, type DragEvent, type KeyboardEvent } from 'react'
 import type { Ticket, WorkflowState } from '@penfii/contracts'
 import { Avatar } from '../../design/ui'
+import { Sheet, SheetRow } from '../../design/Sheet'
+import { useIsMobile } from '../../design/useIsMobile'
 import { useI18n } from '../../i18n/I18nProvider'
 import { formatDue, isOverdue, isPriority } from './ticketModel'
 import { formatEstimate } from './planValues'
@@ -21,6 +23,9 @@ export function TicketCard({
   showState = false,
   onOpen,
   onMoveBy,
+  moveChoices,
+  currentColumnId,
+  onMoveTo,
   onReorder,
   onMoveToTop,
 }: {
@@ -34,11 +39,17 @@ export function TicketCard({
   showState?: boolean
   onOpen: () => void
   onMoveBy: (step: -1 | 1) => void
+  /** On a phone, where a card cannot be dragged: the State columns it can be moved to. */
+  moveChoices?: Array<{ id: string; name: string }>
+  currentColumnId?: string
+  onMoveTo?: (columnId: string) => void
   onReorder: (step: -1 | 1) => void
   /** Puts the card at the top of its place in the shared order; absent when that is not meaningful here. */
   onMoveToTop?: () => void
 }) {
   const { t, locale } = useI18n()
+  const mobile = useIsMobile()
+  const [moveOpen, setMoveOpen] = useState(false)
   const done = state?.category === 'DONE' || state?.category === 'CANCELED'
   const overdue = isOverdue(ticket.dueOn, done)
   const kind = ticket.hierarchyKind
@@ -142,6 +153,16 @@ export function TicketCard({
           {moving ? <span role="status">{t('work.card.moving')}</span> : null}
         </span>
       </button>
+      {mobile && moveChoices && onMoveTo && !moving ? (
+        <>
+          <button type="button" className="card-move" aria-haspopup="dialog" aria-label={t('work.card.moveTo', { key: ticket.key })} onClick={() => setMoveOpen(true)}>⇄</button>
+          <Sheet open={moveOpen} title={t('work.card.moveTo', { key: ticket.key })} onClose={() => setMoveOpen(false)}>
+            {moveChoices.map((choice) => (
+              <SheetRow key={choice.id} selected={choice.id === currentColumnId} onClick={() => { setMoveOpen(false); if (choice.id !== currentColumnId) onMoveTo(choice.id) }}>{choice.name}</SheetRow>
+            ))}
+          </Sheet>
+        </>
+      ) : null}
       {onMoveToTop && !moving ? (
         <button type="button" className="card-top" aria-label={t('work.card.moveTop', { key: ticket.key })} title={`${t('work.card.moveTop', { key: ticket.key })} (Alt+Home)`} onClick={onMoveToTop}>
           ⤒

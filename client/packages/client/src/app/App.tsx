@@ -9,11 +9,14 @@ import { NotFoundState } from '../ui/NotFoundState'
 import { RenderBoundary, RenderFailure } from '../ui/RenderBoundary'
 import '../styles.css'
 import { queryClient } from './queryClient'
+import { OfflineWrites } from './offlineWrites'
 import { RequireAuth } from './RequireAuth'
 import { rememberReturn } from './returnTo'
 import { MediaViewerHost } from '../modules/files/mediaViewer'
 import { applyTheme, readTheme } from '../design/theme'
 import { WorkspaceShell } from '../shell/WorkspaceShell'
+import { MobileShell } from '../mobile/MobileShell'
+import { useIsMobile } from '../design/useIsMobile'
 
 /** A page loaded on first visit, so the first screen does not wait for every other page. */
 function page<M>(load: () => Promise<M>, name: keyof M) {
@@ -82,13 +85,14 @@ function ThemeSync() {
 
 function Shell({ section, children }: { section: 'home' | 'inbox' | 'chat' | 'projects' | 'docs' | 'teams' | 'search' | 'settings'; children: ReactNode }) {
   const location = useLocation()
+  const Frame = useIsMobile() ? MobileShell : WorkspaceShell
   return (
     <RequireAuth>
-      <WorkspaceShell section={section}>
+      <Frame section={section}>
         <RenderBoundary resetKey={location.pathname}>
           <Suspense fallback={<Loading />}>{children}</Suspense>
         </RenderBoundary>
-      </WorkspaceShell>
+      </Frame>
     </RequireAuth>
   )
 }
@@ -147,6 +151,7 @@ export function App() {
   return (
     <I18nProvider>
       <ThemeSync />
+      <OfflineWrites />
       <MediaViewerHost />
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
