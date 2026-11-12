@@ -10,7 +10,7 @@ COPY client/apps ./apps
 COPY client/packages ./packages
 RUN npm run build
 
-FROM caddy:2.11.7-alpine
+FROM caddy:2.11.9-alpine
 COPY docker/web/Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /src/apps/web/dist /srv
 EXPOSE 80
