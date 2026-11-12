@@ -1,4 +1,4 @@
-FROM rust:1.99.0-bookworm AS build
+FROM rust:1.99.1-bookworm AS build
 WORKDIR /src/server
 COPY server/Cargo.toml server/Cargo.lock server/rust-toolchain.toml ./
 COPY server/apps ./apps
