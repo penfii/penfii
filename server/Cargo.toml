@@ -40,5 +40,5 @@ base64 = "0.22"
 jsonwebtoken = "9"
 yrs = "0.28.0"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
-rsa = "0.9"
+rsa = "0.10"
 tokio-tungstenite = "0.29"
