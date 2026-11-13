@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Conversation, ConversationChange, Message, ServerFrame } from '@penfii/contracts'
 import { api } from '../../api'
+import { openLiveSocket, type LiveSocket } from '../../realtime/liveSocket'
 import { readAllChanges } from './realtime'
 
 type LiveContextValue = {
@@ -101,11 +102,9 @@ export function ConversationLiveProvider({
 
   useEffect(() => {
     const epoch = generation.current
-    let socket: WebSocket | null = null
+    let live: LiveSocket | null = null
     let closed = false
-    let timer = 0
     let flushTimer = 0
-    let startTimer = 0
     const flush = () => {
       flushTimer = 0
       if (generation.current !== epoch) {
@@ -124,37 +123,22 @@ export function ConversationLiveProvider({
       if (flushTimer) return
       flushTimer = window.setTimeout(flush, 0)
     }
-    const connect = () => {
-      if (closed || generation.current !== epoch || typeof WebSocket !== 'function') return
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      socket = new WebSocket(
-        `${protocol}//${window.location.host}/v1/ws?conversationId=${encodeURIComponent(conversationId)}`,
-      )
-      socket.onopen = () => {
-        if (generation.current !== epoch) return
-        socket?.send(JSON.stringify({ v: 1, type: 'hello', afterChangeSeq: afterRef.current }))
+    const onFrame = (data: string) => {
+      if (generation.current !== epoch) return
+      const frame = parseFrame(data)
+      if (!frame) return
+      if (frame.type === 'resync_required') {
+        setResyncCount((count) => count + 1)
+        const from = afterRef.current
+        void readAllChanges(conversationId, from)
+          .then((caughtUp) => {
+            if (generation.current !== epoch) return
+            enqueue(caughtUp)
+          })
+          .catch(() => undefined)
+        return
       }
-      socket.onmessage = (event) => {
-        if (generation.current !== epoch || typeof event.data !== 'string') return
-        const frame = parseFrame(event.data)
-        if (!frame) return
-        if (frame.type === 'resync_required') {
-          setResyncCount((count) => count + 1)
-          const from = afterRef.current
-          void readAllChanges(conversationId, from)
-            .then((caughtUp) => {
-              if (generation.current !== epoch) return
-              enqueue(caughtUp)
-            })
-            .catch(() => undefined)
-          return
-        }
-        enqueue([asChange(frame)])
-      }
-      socket.onclose = () => {
-        if (closed || generation.current !== epoch) return
-        timer = window.setTimeout(connect, 1500)
-      }
+      enqueue([asChange(frame)])
     }
     void api
       .getConversation(conversationId)
@@ -163,8 +147,14 @@ export function ConversationLiveProvider({
         afterRef.current = conversation.lastChangeSeq
         setSnapshot(conversation)
         setSnapshotError(null)
-        // The cursor is the snapshot's. Connecting before this read would replay the whole log.
-        startTimer = window.setTimeout(connect, 0)
+        // The cursor is the snapshot's. Connecting before this read would replay the whole log. The cursor is read again
+        // for every connection, so a reconnect continues from the last change received.
+        live = openLiveSocket({
+          path: () => `/v1/ws?conversationId=${encodeURIComponent(conversationId)}`,
+          hello: () => ({ v: 1, type: 'hello', afterChangeSeq: afterRef.current }),
+          probe: () => api.getConversation(conversationId),
+          onFrame,
+        })
       })
       .catch((caught: unknown) => {
         if (closed || generation.current !== epoch) return
@@ -172,11 +162,9 @@ export function ConversationLiveProvider({
       })
     return () => {
       closed = true
-      window.clearTimeout(startTimer)
-      window.clearTimeout(timer)
+      live?.close()
       window.clearTimeout(flushTimer)
       bufferRef.current = []
-      socket?.close()
     }
   }, [conversationId])
 

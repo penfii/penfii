@@ -28,6 +28,7 @@ export function TicketCard({
   onMoveTo,
   onReorder,
   onMoveToTop,
+  pick,
 }: {
   ticket: Ticket
   state: WorkflowState | undefined
@@ -46,6 +47,8 @@ export function TicketCard({
   onReorder: (step: -1 | 1) => void
   /** Puts the card at the top of its place in the shared order; absent when that is not meaningful here. */
   onMoveToTop?: () => void
+  /** A checkbox to choose the card for a bulk archive/trash; absent where that is not offered. */
+  pick?: { checked: boolean; onToggle: () => void }
 }) {
   const { t, locale } = useI18n()
   const mobile = useIsMobile()
@@ -93,6 +96,15 @@ export function TicketCard({
       draggable={draggable && !moving}
       onDragStart={onDragStart}
     >
+      {pick ? (
+        <input
+          type="checkbox"
+          className="card-pick"
+          checked={pick.checked}
+          aria-label={t('bulk.lifecycle.pick', { key: ticket.key })}
+          onChange={pick.onToggle}
+        />
+      ) : null}
       <button
         type="button"
         className="task-card-open ticket-card-open"

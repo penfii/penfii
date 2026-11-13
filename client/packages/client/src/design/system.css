@@ -321,7 +321,9 @@ input[type="checkbox"], input[type="radio"] { width: auto; padding: 0; box-shado
 
 /* Long unbroken values (tokens, URLs) wrap inside a dialog instead of widening it. */
 .dialog-body > * { min-width: 0; }
-.invite-token, .dialog-body p { overflow-wrap: anywhere; }
+.dialog-body p { overflow-wrap: anywhere; }
+.invite-link { display: flex; gap: 8px; align-items: center; }
+.invite-link input { flex: 1; min-width: 0; }
 .dialog-head h2 { min-width: 0; overflow-wrap: anywhere; }
 .dialog-head .icon-button { flex: none; margin-left: var(--space-2); }
 
@@ -365,3 +367,11 @@ button.secondary.danger-outline { height: 36px; color: #b4452f; font-size: 0.8re
 .dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-3); }
 .callout { border: 1px solid var(--border); border-radius: var(--radius-md, 10px); padding: var(--space-2) var(--space-3); margin: var(--space-2) 0; overflow-wrap: anywhere; }
 .doc-comments .comment-list { margin-bottom: var(--space-3); }
+
+/* Row actions menu (ActionMenu): the overflow button, its menu on a desktop, and the destructive row. */
+.action-menu { position: relative; display: inline-flex; }
+.action-menu-panel { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; min-width: 12rem; display: grid; padding: var(--space-1); border: 1px solid var(--border-strong, var(--border)); border-radius: var(--radius-md); background: var(--bg-elevated); box-shadow: var(--shadow-md, 0 4px 16px rgb(0 0 0 / .18)); }
+.action-menu-item { display: block; width: 100%; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); white-space: nowrap; }
+.action-menu-item:hover:not(:disabled), .action-menu-item:focus-visible { background: var(--bg-muted); }
+.action-menu-item.danger { color: var(--danger, #8d3535); border-top: 1px solid var(--border); border-radius: 0 0 var(--radius-sm) var(--radius-sm); margin-top: var(--space-1); padding-top: var(--space-2); }
+.action-menu-item:disabled { opacity: .55; }

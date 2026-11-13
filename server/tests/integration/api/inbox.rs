@@ -27,13 +27,13 @@ pub(super) async fn member(world: &World, workspace_id: Uuid, tag: &str) -> (Uui
     (user_id_of(world, &email).await, cookie)
 }
 
-fn mention_doc(user: Uuid, text: &str) -> Value {
+pub(super) fn mention_doc(user: Uuid, text: &str) -> Value {
     json!({"type":"doc","content":[{"type":"paragraph","content":[
         {"type":"mention","attrs":{"occurrenceId":Uuid::new_v4(),"kind":"USER","userId":user}},
         {"type":"text","text":text}]}]})
 }
 
-async fn send_doc(
+pub(super) async fn send_doc(
     world: &World,
     cookie: &str,
     conversation: Uuid,
@@ -63,6 +63,14 @@ pub(super) async fn inbox(world: &World, cookie: &str, workspace_id: Uuid, query
     .await;
     assert_eq!(s, StatusCode::OK, "{v}");
     v
+}
+
+/// The `thread.reply` items a person has. They are `replies` now; `watching` is no longer a type.
+async fn thread_replies(world: &World, cookie: &str, workspace_id: Uuid) -> Vec<String> {
+    kinds(&inbox(world, cookie, workspace_id, "").await)
+        .into_iter()
+        .filter(|k| k == "thread.reply")
+        .collect()
 }
 
 pub(super) fn kinds(page: &Value) -> Vec<String> {
@@ -204,14 +212,14 @@ async fn inbox_reaches_the_right_people_once_for_messages_and_threads(pool: PgPo
     attention_now(ws, world).await;
     send_doc(world, &n, general, doc("n 답글"), Some(root_id), None).await;
     attention_now(ws, world).await;
-    let watch_page = inbox(world, &o, ws, "?filter=watching").await;
+    let watch_page = thread_replies(world, &o, ws).await;
     assert_eq!(
-        kinds(&watch_page),
+        watch_page,
         vec!["thread.reply", "thread.reply", "thread.reply"],
-        "the starter follows both of their threads: {watch_page}"
+        "the starter follows both of their threads: {watch_page:?}"
     );
     assert_eq!(
-        kinds(&inbox(world, &m, ws, "?filter=watching").await),
+        thread_replies(world, &m, ws).await,
         vec!["thread.reply"],
         "m follows after replying, hears n only"
     );
@@ -238,12 +246,12 @@ async fn inbox_reaches_the_right_people_once_for_messages_and_threads(pool: PgPo
         "later replies do not undo the refusal: {status}"
     );
     assert_eq!(
-        kinds(&inbox(world, &m, ws, "?filter=watching").await).len(),
+        thread_replies(world, &m, ws).await.len(),
         1,
         "nothing new after unwatching"
     );
 
-    // Mute: general noise stops, a direct mention still arrives.
+    // Mute: it does not hold back a thread the person is in (that is addressed to them), and a direct mention arrives too.
     let (s, _, _) = call(
         &world.app,
         "PUT",
@@ -254,10 +262,7 @@ async fn inbox_reaches_the_right_people_once_for_messages_and_threads(pool: PgPo
     )
     .await;
     assert_eq!(s, StatusCode::OK);
-    let before = inbox(world, &o, ws, "?filter=watching").await["items"]
-        .as_array()
-        .unwrap()
-        .len();
+    let before = thread_replies(world, &o, ws).await.len();
     send_doc(world, &n, general, doc("muted reply"), Some(root_id), None).await;
     send_doc(
         world,
@@ -272,35 +277,20 @@ async fn inbox_reaches_the_right_people_once_for_messages_and_threads(pool: PgPo
     )
     .await;
     attention_now(ws, world).await;
-    assert_eq!(
-        inbox(world, &o, ws, "?filter=watching").await["items"]
-            .as_array()
-            .unwrap()
-            .len(),
-        before
-    );
+    assert_eq!(thread_replies(world, &o, ws).await.len(), before + 1);
     assert_eq!(
         kinds(&inbox(world, &o, ws, "?filter=mentions").await),
         vec!["mention.user"]
     );
 
-    // Level DIRECT_ONLY keeps only the direct kinds.
+    // Level DIRECT_ONLY keeps the direct kinds, and a thread reply to someone in the thread is one.
     let (s, p, _) = call(&world.app, "PUT", "/v1/me/notification-preferences", Some(&n), None,
         Some(json!({"level":"DIRECT_ONLY","dnd":{"enabled":false,"schedule":null,"snoozeUntil":null},"external":{},"expectedVersion":0}))).await;
     assert_eq!(s, StatusCode::OK, "{p}");
-    let n_before = inbox(world, &n, ws, "?filter=watching").await["items"]
-        .as_array()
-        .unwrap()
-        .len();
+    let n_before = thread_replies(world, &n, ws).await.len();
     send_doc(world, &o, general, doc("o again"), Some(root_id), None).await;
     attention_now(ws, world).await;
-    assert_eq!(
-        inbox(world, &n, ws, "?filter=watching").await["items"]
-            .as_array()
-            .unwrap()
-            .len(),
-        n_before
-    );
+    assert_eq!(thread_replies(world, &n, ws).await.len(), n_before + 1);
     let (s, stale, _) = call(&world.app, "PUT", "/v1/me/notification-preferences", Some(&n), None,
         Some(json!({"level":"ALL","dnd":{"enabled":false,"schedule":null,"snoozeUntil":null},"external":{},"expectedVersion":0}))).await;
     assert_eq!(s, StatusCode::CONFLICT, "{stale}");
@@ -914,4 +904,236 @@ async fn dependency_released_is_about_the_freed_ticket_and_asks_whether_that_tic
     assert_eq!(mine[0]["subject"]["id"], d_id.as_str());
     let held: i64 = sqlx::query_scalar("SELECT count(*) FROM penfii.inbox_items WHERE recipient_id=$1 AND notification_kind='dependency.released'").bind(m_id).fetch_one(&world.pool).await.unwrap();
     assert_eq!(held, 1, "no item was stored for the Ticket m cannot open");
+}
+
+async fn inbox_command(
+    world: &World,
+    cookie: &str,
+    item: &Value,
+    command: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let id = item["id"].as_str().unwrap();
+    let (s, v, _) = call(
+        &world.app,
+        "POST",
+        &format!("/v1/inbox/{id}/commands/{command}"),
+        Some(cookie),
+        None,
+        Some(body),
+    )
+    .await;
+    (s, v)
+}
+
+fn ids(page: &Value) -> Vec<String> {
+    page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn the_archive_is_a_view_ordered_by_when_items_were_archived_and_snoozed_items_are_optional(
+    pool: PgPool,
+) {
+    let world = &World::new(pool).await;
+    let ws = workspace(world, &format!("fea2-ar-{}", Uuid::new_v4())).await;
+    let (m_id, m) = member(world, ws, "m").await;
+    let (_, other) = member(world, ws, "x").await;
+    let (project_id, _) = new_project(world, ws, "Archive tickets").await;
+    grant_user(world, &project_id, m_id, "VIEWER").await;
+    for n in 0..3 {
+        let (s, t) = make_ticket(
+            world,
+            &project_id,
+            &format!("fea2-t{n}"),
+            json!({"title": format!("Task {n}"), "assigneeId": m_id}),
+        )
+        .await;
+        assert_eq!(s, StatusCode::CREATED, "{t}");
+    }
+    attention_now(ws, world).await;
+    let page = inbox(world, &m, ws, "").await;
+    let items = page["items"].as_array().unwrap().clone();
+    assert_eq!(items.len(), 3, "{page}");
+    // Newest first: items[0] is the newest. Archive the oldest first, then the newest.
+    let (oldest, middle, newest) = (&items[2], &items[1], &items[0]);
+
+    let (s, a1) = inbox_command(
+        world,
+        &m,
+        oldest,
+        "archive",
+        json!({"expectedVersion": oldest["version"]}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{a1}");
+    assert!(a1["archivedAt"].is_string(), "archive records when: {a1}");
+    let (s, a2) = inbox_command(
+        world,
+        &m,
+        newest,
+        "archive",
+        json!({"expectedVersion": newest["version"]}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{a2}");
+
+    // The Inbox no longer lists them, the archive does, last archived first (not by creation).
+    let inbox_ids = ids(&inbox(world, &m, ws, "").await);
+    assert_eq!(inbox_ids, vec![middle["id"].as_str().unwrap().to_owned()]);
+    let archive = inbox(world, &m, ws, "?view=archived").await;
+    assert_eq!(
+        ids(&archive),
+        vec![
+            newest["id"].as_str().unwrap().to_owned(),
+            oldest["id"].as_str().unwrap().to_owned()
+        ],
+        "{archive}"
+    );
+    assert!(archive["items"][0]["archivedAt"].is_string());
+    assert_eq!(archive["items"][0]["state"], "ARCHIVED");
+    // Read and snooze options do not apply in the archive.
+    let archive_unread = inbox(
+        world,
+        &m,
+        ws,
+        "?view=archived&state=unread&includeSnoozed=true",
+    )
+    .await;
+    assert_eq!(ids(&archive_unread).len(), 2);
+    // Archive paging follows the same order with a stable cursor.
+    let p1 = inbox(world, &m, ws, "?view=archived&limit=1").await;
+    assert_eq!(ids(&p1), vec![newest["id"].as_str().unwrap().to_owned()]);
+    let cursor = p1["nextCursor"].as_str().expect("more").to_owned();
+    let p2 = inbox(
+        world,
+        &m,
+        ws,
+        &format!("?view=archived&limit=1&cursor={cursor}"),
+    )
+    .await;
+    assert_eq!(ids(&p2), vec![oldest["id"].as_str().unwrap().to_owned()]);
+    // Someone else's archive is empty; an unknown view is refused.
+    assert!(ids(&inbox(world, &other, ws, "?view=archived").await).is_empty());
+    let (s, _) = get_as(world, &m, &format!("/v1/workspaces/{ws}/inbox?view=trash")).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+
+    // An archived item is not snoozed (it comes back by hand).
+    let (s, refused) = inbox_command(
+        world,
+        &m,
+        &archive["items"][0],
+        "snooze",
+        json!({"expectedVersion": archive["items"][0]["version"], "until": (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339()}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{refused}");
+
+    // Unarchive puts it back in the Inbox as READ and clears archivedAt.
+    let (s, back) = inbox_command(
+        world,
+        &m,
+        &archive["items"][0],
+        "unarchive",
+        json!({"expectedVersion": archive["items"][0]["version"]}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{back}");
+    assert_eq!(back["state"], "READ");
+    assert!(back["archivedAt"].is_null());
+    assert_eq!(ids(&inbox(world, &m, ws, "").await).len(), 2);
+    assert_eq!(ids(&inbox(world, &m, ws, "?view=archived").await).len(), 1);
+
+    // A row archived before the column existed is listed by creation time and reports it.
+    sqlx::query("UPDATE penfii.inbox_items SET archived_at=NULL WHERE id=$1")
+        .bind(Uuid::parse_str(oldest["id"].as_str().unwrap()).unwrap())
+        .execute(&world.pool)
+        .await
+        .unwrap();
+    let legacy = inbox(world, &m, ws, "?view=archived").await;
+    assert_eq!(
+        legacy["items"][0]["archivedAt"],
+        legacy["items"][0]["createdAt"]
+    );
+
+    // Snoozed items are left out unless asked for; the unread count never counts them.
+    let (s, sn) = inbox_command(
+        world,
+        &m,
+        middle,
+        "snooze",
+        json!({"expectedVersion": middle["version"], "until": (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339()}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{sn}");
+    let hidden = inbox(world, &m, ws, "").await;
+    assert!(!ids(&hidden).contains(&middle["id"].as_str().unwrap().to_owned()));
+    let shown = inbox(world, &m, ws, "?includeSnoozed=true").await;
+    let snoozed = shown["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == middle["id"])
+        .expect("snoozed item listed on request");
+    assert!(snoozed["snoozedUntil"].is_string());
+    assert_eq!(hidden["unreadCount"], shown["unreadCount"]);
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn several_types_are_one_union_and_a_type_names_its_kinds(pool: PgPool) {
+    let world = &World::new(pool).await;
+    let ws = workspace(world, &format!("fea2-ty-{}", Uuid::new_v4())).await;
+    let (m_id, m) = member(world, ws, "m").await;
+    let (project_id, _) = new_project(world, ws, "Type tickets").await;
+    grant_user(world, &project_id, m_id, "VIEWER").await;
+    let (s, t) = make_ticket(
+        world,
+        &project_id,
+        "fea2-ty-a",
+        json!({"title":"Assigned","assigneeId":m_id}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{t}");
+    attention_now(ws, world).await;
+    let all = kinds(&inbox(world, &m, ws, "").await);
+    assert_eq!(all, vec!["ticket.assigned"]);
+    // OR: the union holds the item once; a type without it holds nothing; `all` and nothing are alike.
+    assert_eq!(
+        kinds(&inbox(world, &m, ws, "?filter=mentions,assignments").await),
+        all
+    );
+    assert_eq!(
+        kinds(&inbox(world, &m, ws, "?filter=assignments,assignments").await),
+        all
+    );
+    assert!(kinds(&inbox(world, &m, ws, "?filter=mentions,replies").await).is_empty());
+    assert_eq!(kinds(&inbox(world, &m, ws, "?filter=all").await), all);
+    assert_eq!(kinds(&inbox(world, &m, ws, "?filter=").await), all);
+    // AND with unread.
+    assert_eq!(
+        kinds(&inbox(world, &m, ws, "?filter=assignments&state=unread").await),
+        all
+    );
+    // An unknown type is refused.
+    let (s, _) = get_as(
+        world,
+        &m,
+        &format!("/v1/workspaces/{ws}/inbox?filter=mentions,bogus"),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    // The kinds each type names are fixed by the code, thread.reply only under replies.
+    let kinds_of = |f: &str| penfii_core::inbox::kinds_for_filter(f).unwrap().unwrap();
+    assert_eq!(kinds_of("replies"), vec!["reply.direct", "thread.reply"]);
+    assert!(!kinds_of("watching").contains(&"thread.reply"));
+    assert!(
+        kinds_of("mentions,replies,assignments,reminders,invitations")
+            .iter()
+            .all(|k| *k != "dependency.released")
+    );
+    assert!(penfii_core::inbox::kinds_for_filter("").unwrap().is_none());
 }

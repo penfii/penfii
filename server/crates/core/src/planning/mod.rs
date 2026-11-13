@@ -9,6 +9,7 @@ mod dependencies;
 mod derived;
 mod milestones;
 mod order;
+mod sprint_archive;
 mod sprints;
 mod views;
 
@@ -20,11 +21,15 @@ pub use milestones::{
 };
 pub use order::Placement;
 pub(crate) use order::{append_order, lock_project, reposition};
-pub(crate) use sprints::{SPRINT_COLUMNS, sprint_from};
-pub use sprints::{
-    SprintCommand, SprintInput, SprintUpdate, assign_sprint, create_sprint, sprint_close_preview,
-    sprint_command, sprint_results, update_sprint,
+pub use sprint_archive::{
+    ArchiveCounts, SprintArchive, archive_schedule, cancel_archive, reschedule_archive, run_due,
+    run_due_notices, spawn as spawn_archive_scheduler, sprint_project_id,
 };
+pub use sprints::{
+    CloseChoice, SprintCommand, SprintInput, SprintUpdate, assign_sprint, create_sprint,
+    sprint_close_preview, sprint_command, sprint_results, update_sprint,
+};
+pub(crate) use sprints::{SPRINT_COLUMNS, sprint_from};
 pub use views::{
     EstimateFilter, ViewDefinition, ViewDisplay, ViewFilter, ViewSort, ViewTarget, create_view,
     delete_view, list_views, update_view,
@@ -39,10 +44,7 @@ use crate::error::CoreError;
 use crate::project_role::require_project_role;
 
 fn is_unique(error: &sqlx::Error) -> bool {
-    error
-        .as_database_error()
-        .and_then(|e| e.code())
-        .is_some_and(|code| code == "23505")
+    matches!(error, sqlx::Error::Database(db) if db.is_unique_violation())
 }
 
 fn version_conflict(current: i64) -> CoreError {

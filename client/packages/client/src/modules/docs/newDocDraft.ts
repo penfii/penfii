@@ -83,19 +83,3 @@ export function clearNewDocDraft(userId: string, workspaceId: string): void {
     // A private window can refuse storage. Leaving the key is the same as having none.
   }
 }
-
-/** Logout drops every account's new-document draft on this browser. */
-export function clearAllNewDocDrafts(): void {
-  const store = storage()
-  if (!store) return
-  try {
-    const keys: string[] = []
-    for (let index = 0; index < store.length; index += 1) {
-      const key = store.key(index)
-      if (key?.startsWith(`${PREFIX}:`)) keys.push(key)
-    }
-    for (const key of keys) store.removeItem(key)
-  } catch {
-    // See clearNewDocDraft.
-  }
-}

@@ -46,7 +46,7 @@ impl KnowledgeConfig {
     /// Reads the environment. An unset variable keeps its default; a set one must be a positive
     /// integer.
     pub fn from_env() -> Result<Self, String> {
-        Self::from_lookup(|name| std::env::var(name).ok())
+        Self::from_lookup(|name| crate::config::get(&crate::config::process_env, name))
     }
 
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, String> {

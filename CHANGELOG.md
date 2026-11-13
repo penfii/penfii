@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Settings that cannot be read now stop the start.** Before, a value that was set but wrong was ignored or replaced by a default: a limit such as `PENFII_FILE_MAX_BYTES=100MB`, `PENFII_WEBHOOK_KEK`, the day counts of the trash and MCP retention, the MCP lifetimes, and `PENFII_REAUTH_WINDOW_SECONDS` became "not set", a `PENFII_MCP_DEFAULT_POLICY` that was not `read_only` or `closed` (a typo included) became `standard`, which allows writes, and a switch other than its one accepted spelling was off. core-api now refuses to start and names the variable. Empty values still count as not set. Check `docker/.env` (and any other environment) before updating; see [Configuration](docs/configuration.md#how-the-server-reads-its-settings).
+- **Settings that belong together must be set together.** The four `PENFII_S3_*` settings, `PENFII_OPENSEARCH_USER` with `_PASSWORD`, and a sign-in provider's client id with its secret used to switch the feature off quietly when one was missing; now one without the others stops the start. A Microsoft provider that is multi-tenant and has no `PENFII_AUTH_MICROSOFT_ALLOWED_TENANTS`, and a generic OIDC provider listed without its issuer or pair, are refused too (they were skipped with a warning).
+- **Switches take `1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off`** in any case, everywhere (`PENFII_COOKIE_SECURE=true` now works); other words stop the start. An empty `PENFII_ALLOWED_ORIGINS` now means "not set" (the dev server origins), as for every other setting, instead of "no extra origin".
+- **A JSON request body that names the same key twice in one object, anywhere in it (inside a free-form value too), is refused with `400 validation`.** The last one used to win silently. Handlers now read the body straight into their type, so the wording of a JSON error can differ (it may carry a line and column); the code and status are the same. The conversation commands (messages, reactions, read state), whose idempotency key is a hash of the body as sent, still read the body as a document, with the same refusal of a repeated key.
+- `/readyz` also reports the event consumers' backlog (`checks.workers`, `receipts`) and is `degraded` when a delivery waits more than 5 minutes or is `DEAD`; the status code stays `200`. A panic in a background worker's loop ends core-api so the container is restarted; a panic inside one event or pass is that unit's failure (see [Operations](docs/operations.md#background-workers)).
+- Board sockets now carry archive, trash, restore and purge of a ticket and a Sprint's archive; a request handler that panics answers `500 internal`.
+
 ## 0.1.0
 
 The first public release. Penfii is early software: the HTTP API, the database schema and the settings can still change between 0.x releases, and there is no tested upgrade path. See [Known limitations](docs/known-limitations.md).

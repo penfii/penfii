@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
-use crate::extract::{self, Actor, Q, RawJson};
+use crate::extract::{Actor, Body, Q};
 
 use axum::Router;
 use axum::routing::{get, post, put};
@@ -61,6 +61,11 @@ struct InboxQuery {
     filter: Option<String>,
     #[serde(default)]
     state: Option<String>,
+    /// `inbox` (default) or `archived`.
+    #[serde(default)]
+    view: Option<String>,
+    #[serde(default)]
+    include_snoozed: Option<bool>,
     #[serde(default)]
     cursor: Option<String>,
     #[serde(default)]
@@ -77,8 +82,12 @@ async fn inbox_list(
         &state.pool,
         user_id,
         id,
-        query.filter.as_deref().unwrap_or("all"),
-        query.state.as_deref() == Some("unread"),
+        penfii_core::inbox::ListOptions {
+            view: penfii_core::inbox::View::parse(query.view.as_deref())?,
+            filter: query.filter.as_deref().unwrap_or("all"),
+            unread_only: query.state.as_deref() == Some("unread"),
+            include_snoozed: query.include_snoozed.unwrap_or(false),
+        },
         query.cursor.as_deref(),
         query.limit,
     )
@@ -98,10 +107,9 @@ async fn inbox_command(
     State(state): State<AppState>,
     Path((id, command)): Path<(Uuid, String)>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<InboxCommandBody>,
 ) -> Result<Response, ApiError> {
     use penfii_core::inbox::Command;
-    let body: InboxCommandBody = extract::parse(raw)?;
     let command = match command.as_str() {
         "read" => Command::Read,
         "unread" => Command::Unread,
@@ -131,9 +139,8 @@ async fn inbox_read_all(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<ReadAllBody>,
 ) -> Result<Response, ApiError> {
-    let body: ReadAllBody = extract::parse(raw)?;
     let changed = penfii_core::inbox::read_all(
         &state.pool,
         user_id,
@@ -269,9 +276,8 @@ struct PreferencesBody {
 async fn put_preferences(
     State(state): State<AppState>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<PreferencesBody>,
 ) -> Result<Response, ApiError> {
-    let body: PreferencesBody = extract::parse(raw)?;
     let saved = penfii_core::preferences::save(
         &state.pool,
         user_id,

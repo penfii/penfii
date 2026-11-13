@@ -38,7 +38,7 @@ export function LeaveChannelButton({
     } catch (failure) {
       const last = isApiError(failure) && failure.code === 'last_manager'
       setLastManager(last)
-      setError(last ? t('channel.leave.lastManager') : errorText(failure, t('error.generic')))
+      setError(last ? t('channel.leave.lastManager') : errorText(failure, t('error.generic'), t('error.dbUnavailable')))
     }
   }
 

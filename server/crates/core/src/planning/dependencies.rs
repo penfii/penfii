@@ -12,7 +12,7 @@ use super::order::lock_project;
 use crate::error::CoreError;
 use crate::platform::{self, ChangeNotice};
 use crate::project_role::{channel_allowed, require_project_role};
-use crate::work::{load_live_ticket, record_change};
+use crate::work::{load_live_ticket, load_readable_ticket, record_change};
 
 fn edge_from(
     row: &sqlx::postgres::PgRow,
@@ -88,7 +88,7 @@ async fn dependencies_of(
          JOIN penfii.tickets o ON o.id=CASE WHEN d.successor_id=$1 THEN d.predecessor_id ELSE d.successor_id END
          JOIN penfii.workflow_statuses s ON s.id=o.status_id
          WHERE (d.successor_id=$1 OR d.predecessor_id=$1)
-           AND o.archived_at IS NULL AND o.trashed_at IS NULL AND o.purged_at IS NULL
+           AND o.trashed_at IS NULL AND o.purged_at IS NULL
          ORDER BY d.created_at, d.id",
     )
     .bind(ticket.id)
@@ -162,7 +162,7 @@ pub async fn ticket_dependencies(
     ticket_id: Uuid,
 ) -> Result<TicketDependencies, CoreError> {
     let mut tx = pool.begin().await?;
-    let ticket = load_live_ticket(&mut tx, ticket_id, false).await?;
+    let ticket = load_readable_ticket(&mut tx, ticket_id).await?;
     let (_, role) = require_project_role(&mut tx, ticket.project_id, actor_id, false).await?;
     if !channel_allowed(&mut tx, ticket.channel_id, actor_id).await? {
         return Err(CoreError::NotFound);

@@ -10,10 +10,12 @@ mod organization;
 mod personal;
 mod planning;
 mod project;
+mod push;
 mod reports;
 mod scope;
 mod session;
 mod tickets;
+mod webhooks;
 mod workflow;
 mod workspace;
 
@@ -42,9 +44,11 @@ pub(crate) fn routes() -> Router<AppState> {
         .merge(reports::routes())
         .merge(scope::routes())
         .merge(conversation::routes())
+        .merge(webhooks::routes())
         .merge(files::routes())
         .merge(personal::routes())
         .merge(inbox::routes())
+        .merge(push::routes())
 }
 
 fn finish<T: Serialize>(state: &AppState, outcome: Outcome<T>) -> Result<Response, ApiError> {

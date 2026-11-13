@@ -1,5 +1,6 @@
 import { Route, RouterProvider, Routes, createBrowserRouter } from 'react-router'
-import { QueryClientProvider } from '@tanstack/react-query'
+import { registerServiceWorker } from '../modules/push/registerServiceWorker'
+import { QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query'
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, type ComponentType, type ReactNode } from 'react'
 import { setUnauthorizedHandler } from '@penfii/api-client'
 import { useLocation, useNavigate } from 'react-router'
@@ -10,13 +11,14 @@ import { RenderBoundary, RenderFailure } from '../ui/RenderBoundary'
 import '../styles.css'
 import { queryClient } from './queryClient'
 import { OfflineWrites } from './offlineWrites'
+import { NoticeHost } from '../design/notices'
 import { RequireAuth } from './RequireAuth'
 import { rememberReturn } from './returnTo'
+import { adoptUser, endUserSession } from './userBoundary'
+import { queries } from '../queries'
 import { MediaViewerHost } from '../modules/files/mediaViewer'
 import { applyTheme, readTheme } from '../design/theme'
-import { WorkspaceShell } from '../shell/WorkspaceShell'
-import { MobileShell } from '../mobile/MobileShell'
-import { useIsMobile } from '../design/useIsMobile'
+import { ResponsiveShell } from '../shell/ResponsiveShell'
 
 /** A page loaded on first visit, so the first screen does not wait for every other page. */
 function page<M>(load: () => Promise<M>, name: keyof M) {
@@ -24,6 +26,8 @@ function page<M>(load: () => Promise<M>, name: keyof M) {
 }
 
 const InvitePage = page(() => import('../pages/InvitePage'), 'InvitePage')
+const ForgotPasswordPage = page(() => import('../pages/PasswordResetPage'), 'ForgotPasswordPage')
+const ResetPasswordPage = page(() => import('../pages/PasswordResetPage'), 'ResetPasswordPage')
 const AccountPage = page(() => import('../pages/AccountPage'), 'AccountPage')
 const SettingsPage = page(() => import('../pages/AccountPage'), 'SettingsPage')
 const AdminPage = page(() => import('../pages/AdminPage'), 'AdminPage')
@@ -54,19 +58,28 @@ function Loading() {
 function AuthBridge() {
   const navigate = useNavigate()
   const location = useLocation()
+  const queryClient = useQueryClient()
   const pathRef = useRef(location.pathname)
   const searchRef = useRef(location.search)
   pathRef.current = location.pathname
   searchRef.current = location.search
+  // Read only: whoever the session probe says is signed in. A different person than before drops the earlier person's saved state.
+  const me = useQuery({ ...queries.me(), enabled: false })
+  const userId = me.data?.id
+  useEffect(() => {
+    if (userId) adoptUser(userId)
+  }, [userId])
   useEffect(() => {
     setUnauthorizedHandler(() => {
       const path = pathRef.current
-      if (path === '/login' || path.startsWith('/invite/')) return
+      if (path === '/login' || path.startsWith('/invite/') || path === '/forgot-password' || path === '/reset-password') return
+      // The session is over: nothing it fetched may reach whoever signs in next. What the person saved stays for their own return.
       rememberReturn(path + searchRef.current)
+      endUserSession(queryClient, { forget: false })
       void navigate('/login', { replace: true })
     })
     return () => setUnauthorizedHandler(null)
-  }, [navigate])
+  }, [navigate, queryClient])
   return null
 }
 
@@ -85,14 +98,13 @@ function ThemeSync() {
 
 function Shell({ section, children }: { section: 'home' | 'inbox' | 'chat' | 'projects' | 'docs' | 'teams' | 'search' | 'settings'; children: ReactNode }) {
   const location = useLocation()
-  const Frame = useIsMobile() ? MobileShell : WorkspaceShell
   return (
     <RequireAuth>
-      <Frame section={section}>
+      <ResponsiveShell section={section}>
         <RenderBoundary resetKey={location.pathname}>
           <Suspense fallback={<Loading />}>{children}</Suspense>
         </RenderBoundary>
-      </Frame>
+      </ResponsiveShell>
     </RequireAuth>
   )
 }
@@ -106,6 +118,8 @@ function AppRoutes() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/invite/:token" element={<InvitePage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/consent" element={<RequireAuth><ConsentPage /></RequireAuth>} />
           <Route path="/" element={<RequireAuth><WorkspacesPage /></RequireAuth>} />
           <Route path="/account" element={<RequireAuth><AccountPage /></RequireAuth>} />
@@ -135,6 +149,7 @@ function AppRoutes() {
           <Route path="/w/:workspaceId/settings/appearance" element={<Shell section="settings"><SettingsPage /></Shell>} />
           <Route path="/w/:workspaceId/settings/apps" element={<Shell section="settings"><SettingsPage /></Shell>} />
           <Route path="/w/:workspaceId/settings/admin" element={<Shell section="settings"><AdminPage /></Shell>} />
+          <Route path="/w/:workspaceId/settings/admin/:section" element={<Shell section="settings"><AdminPage /></Shell>} />
           <Route path="/w/:workspaceId/directory/organizations/:organizationId" element={<Shell section="search"><OrganizationPage /></Shell>} />
           <Route path="*" element={<NotFoundState escape />} />
         </Routes>
@@ -148,10 +163,12 @@ function AppRoutes() {
 const router = createBrowserRouter([{ path: '*', element: <AppRoutes />, errorElement: <RenderFailure /> }])
 
 export function App() {
+  useEffect(() => registerServiceWorker(), [])
   return (
     <I18nProvider>
       <ThemeSync />
       <OfflineWrites />
+      <NoticeHost />
       <MediaViewerHost />
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />

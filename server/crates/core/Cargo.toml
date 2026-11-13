@@ -9,13 +9,19 @@ license = "GPL-3.0-only"
 name = "penfii_core"
 
 [dependencies]
+aes-gcm = { workspace = true }
 argon2 = { workspace = true }
+hmac = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
 bytes = { workspace = true }
 futures-util = { workspace = true }
+getrandom = "0.3"
 hex = { workspace = true }
+http = { workspace = true }
 jsonwebtoken = { workspace = true }
+p256 = { workspace = true }
+lettre = { workspace = true }
 object_store = { version = "0.13", default-features = false, features = ["aws"] }
 penfii-contracts = { workspace = true }
 rand = { workspace = true }
@@ -29,4 +35,5 @@ tracing = { workspace = true }
 unicode-segmentation = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+web-push-native = { workspace = true }
 yrs = { workspace = true }

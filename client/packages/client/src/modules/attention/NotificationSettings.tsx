@@ -8,11 +8,12 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { queryKeys } from '../../queryKeys'
 import { queries } from '../../queries'
 import { localTimeZone } from './reminderTimes'
+import { PushSettings } from '../push/PushSettings'
 
 const DEFAULT_SCHEDULE = { days: [0, 1, 2, 3, 4], start: '22:00', end: '07:00' }
 
 /**
- * What reaches the Inbox, Do Not Disturb and muted channels. Mentions, replies, assignments and
+ * What reaches the Inbox, Do Not Disturb and muted channels. DMs, mentions, replies, assignments and
  * reminders always arrive; Do Not Disturb never removes anything from the Inbox.
  */
 export function NotificationSettings() {
@@ -51,6 +52,7 @@ export function NotificationSettings() {
   }
 
   return (
+    <>
     <section className="card settings-card notification-settings" aria-labelledby="notify-title">
       <h2 id="notify-title">{t('notify.title')}</h2>
       <p>{t('notify.lead')}</p>
@@ -96,6 +98,8 @@ export function NotificationSettings() {
       {message ? <p role="status">{message}</p> : null}
       <MutedChannels ids={muted.data?.channelIds ?? []} />
     </section>
+    <PushSettings />
+    </>
   )
 }
 

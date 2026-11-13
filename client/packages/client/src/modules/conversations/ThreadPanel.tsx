@@ -121,7 +121,7 @@ export function ThreadPanel({
       .catch((caught: unknown) => {
         if (cancelled) return
         if (isNotFound(caught)) onNotFoundRef.current()
-        else setError(errorText(caught, t('error.generic')))
+        else setError(errorText(caught, t('error.generic'), t('error.dbUnavailable')))
         setLoading(false)
       })
     return () => {
@@ -257,7 +257,7 @@ export function ThreadPanel({
         {origin ? (
           <article className="comment-origin" data-message-id={origin.id}>
             <header className="message-meta">
-              <AuthorCard workspaceId={workspaceId} userId={origin.authorId} name={originName} />
+              <AuthorCard workspaceId={workspaceId} userId={origin.authorId} name={originName} authorKind={origin.authorKind} />
               <span aria-hidden="true">·</span>
               <time dateTime={origin.createdAt} title={formatStamp(origin.createdAt, locale)}>
                 {displayedMinute(origin.createdAt) ?? origin.createdAt}

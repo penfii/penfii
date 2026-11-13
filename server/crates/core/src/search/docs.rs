@@ -58,12 +58,15 @@ pub async fn build(
     ids: &[Uuid],
     limits: &BuildLimits,
 ) -> Result<Vec<Built>, CoreError> {
-    sqlx::query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
-        .execute(&mut *conn)
+    // A sqlx transaction, not a bare BEGIN: if this future is dropped half way the connection goes
+    // back to the pool rolled back. SET TRANSACTION is the first statement, so it still applies.
+    let mut tx = sqlx::Connection::begin(&mut *conn).await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *tx)
         .await?;
-    let built = build_in_snapshot(conn, kind, ids, limits).await;
+    let built = build_in_snapshot(&mut tx, kind, ids, limits).await;
     // Read only: there is nothing to commit, and a rollback also clears an aborted transaction.
-    sqlx::query("ROLLBACK").execute(&mut *conn).await?;
+    tx.rollback().await?;
     built
 }
 

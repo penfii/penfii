@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::admin;
 use crate::error::ApiError;
-use crate::extract::{self, Actor, RawJson, Session};
+use crate::extract::{Actor, Body, Session};
 
 use axum::Router;
 use axum::routing::{get, patch, post};
@@ -30,6 +30,10 @@ pub(super) fn routes() -> Router<AppState> {
         .route(
             "/v1/workspaces/{id}/invitations",
             get(admin::list_invitations).post(create_invitation),
+        )
+        .route(
+            "/v1/workspaces/{id}/invitations/{invitation_id}/reissue",
+            post(reissue_invitation),
         )
         .route("/v1/invitations/preview", post(preview_invitation))
         .route("/v1/invitations/accept", post(accept_invitation))
@@ -53,6 +57,11 @@ async fn server_info(State(state): State<AppState>) -> Json<ServerInfo> {
     ];
     if state.mcp.is_some() {
         features.push("mcp".into());
+    }
+    // The server sends e-mail: invitations are mailed as well as linked.
+    if state.mailer.is_some() {
+        features.push("email".into());
+        features.push("password-reset".into());
     }
     Json(ServerInfo {
         api_version: "penfii.chat.v1".to_string(),
@@ -83,9 +92,8 @@ async fn workspace_creation(
 async fn create_workspace(
     State(state): State<AppState>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<CreateWorkspaceRequest>,
 ) -> Result<Response, ApiError> {
-    let body: CreateWorkspaceRequest = extract::parse(raw)?;
     let workspace =
         organization::create_workspace(&state.pool, user_id, &body.name, &body.time_zone).await?;
     Ok((StatusCode::CREATED, Json(workspace)).into_response())
@@ -95,12 +103,12 @@ async fn create_invitation(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<CreateInvitationRequest>,
 ) -> Result<Response, ApiError> {
-    let body: CreateInvitationRequest = extract::parse(raw)?;
     let invitation = organization::create_invitation(
         &state.pool,
         &state.limits,
+        state.mailer.as_deref(),
         user_id,
         id,
         &body.email,
@@ -108,7 +116,32 @@ async fn create_invitation(
         body.team_id,
     )
     .await?;
-    Ok((StatusCode::CREATED, Json(invitation)).into_response())
+    // 201 for a new invitation, 200 when the e-mail's open invitation was re-issued.
+    let status = if invitation.reissued {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
+    Ok((status, Json(invitation)).into_response())
+}
+
+/// The "send again" of the invitation list: a new link and expiry for an open invitation (the old
+/// link stops working), mailed again when the server sends e-mail.
+async fn reissue_invitation(
+    State(state): State<AppState>,
+    Path((id, invitation_id)): Path<(Uuid, Uuid)>,
+    Actor(user_id): Actor,
+) -> Result<Response, ApiError> {
+    let invitation = organization::reissue_invitation(
+        &state.pool,
+        &state.limits,
+        state.mailer.as_deref(),
+        user_id,
+        id,
+        invitation_id,
+    )
+    .await?;
+    Ok(Json(invitation).into_response())
 }
 
 #[derive(serde::Deserialize)]
@@ -118,9 +151,8 @@ struct InvitationTokenRequest {
 
 async fn preview_invitation(
     State(state): State<AppState>,
-    RawJson(raw): RawJson,
+    Body(body): Body<InvitationTokenRequest>,
 ) -> Result<Response, ApiError> {
-    let body: InvitationTokenRequest = extract::parse(raw)?;
     let preview = organization::preview_invitation(&state.pool, &body.token).await?;
     Ok(Json(preview).into_response())
 }
@@ -128,10 +160,9 @@ async fn preview_invitation(
 async fn accept_invitation(
     State(state): State<AppState>,
     session: Option<Session>,
-    RawJson(raw): RawJson,
+    Body(body): Body<AcceptInvitationRequest>,
 ) -> Result<Response, ApiError> {
     let session = session.map(|Session(session)| session);
-    let body: AcceptInvitationRequest = extract::parse(raw)?;
     let accepted = organization::accept_invitation(
         &state.pool,
         &body.token,
@@ -154,9 +185,8 @@ async fn update_workspace(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<UpdateWorkspaceBody>,
 ) -> Result<Response, ApiError> {
-    let body: UpdateWorkspaceBody = extract::parse(raw)?;
     let workspace = organization::update_workspace(
         &state.pool,
         user_id,

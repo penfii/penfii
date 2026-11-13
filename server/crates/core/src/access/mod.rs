@@ -29,16 +29,43 @@ pub struct ConvAccess {
     pub team_archived: bool,
 }
 
+/// The channel row of the reader counts only while it is allowed to: in a Project's channel, the
+/// reader still has to be one of the Project's people (and the Team's, for a Team's channel). A
+/// `penfii.channel_members cm` row left behind by a participation that is gone (a removed grant, an
+/// unlinked Team, a Team the person left) grants nothing: not reading, not writing, not a role.
+/// SQL over `penfii.channels ch` and `cm` (joined on `cm.channel_id = ch.id AND cm.user_id = $2`).
+macro_rules! channel_member_sql {
+    () => {
+        "(cm.user_id IS NOT NULL
+    AND (ch.project_id IS NULL OR penfii.in_share_scope(ch.project_id, ch.team_id, $2)))"
+    };
+}
+
+/// [`channel_member_sql`] as a condition: this person is a member of the channel with effect.
+#[allow(dead_code)]
+pub(crate) const CHANNEL_MEMBER: &str = channel_member_sql!();
+
+/// The reader's channel role (`MEMBER` / `MANAGER`) with effect: NULL without an effective membership,
+/// so a Manager row of someone who lost the Project is no Manager. Every Manager check reads this
+/// instead of `cm.role`.
+pub(crate) const CHANNEL_ROLE: &str =
+    concat!("(CASE WHEN ", channel_member_sql!(), " THEN cm.role END)");
+
 /// Who may read a channel, as one SQL condition over `penfii.channels ch` and the reader's row
-/// `penfii.channel_members cm` (joined on `cm.channel_id = ch.id AND cm.user_id = $2`): a member of
-/// the channel, or anyone for a public channel of no Project or Team, or the Project's (and Team's)
-/// people for a public channel of one. Active Workspace membership is checked next to it by each
-/// caller. [`ConvAccess::can_read`], `visibility::channels`, the Space listing and `project_role::channel_allowed`
-/// (the gate of a Ticket's origin channel) all read this one string.
-pub(crate) const CHANNEL_READABLE: &str = "(cm.user_id IS NOT NULL
+/// `penfii.channel_members cm` (joined on `cm.channel_id = ch.id AND cm.user_id = $2`): an effective
+/// member of the channel ([`CHANNEL_MEMBER`]), or anyone for a public channel of no Project or Team,
+/// or the Project's (and Team's) people for a public channel of one. Active Workspace membership is
+/// checked next to it by each caller. [`ConvAccess::can_read`], `visibility::channels`, the Space
+/// listing and `project_role::channel_allowed` (the gate of a Ticket's origin channel) all read this
+/// one string.
+pub(crate) const CHANNEL_READABLE: &str = concat!(
+    "(",
+    channel_member_sql!(),
+    "
     OR (ch.visibility = 'PUBLIC'
         AND ((ch.project_id IS NULL AND ch.team_id IS NULL)
-             OR penfii.in_share_scope(ch.project_id, ch.team_id, $2))))";
+             OR penfii.in_share_scope(ch.project_id, ch.team_id, $2))))"
+);
 
 impl ConvAccess {
     pub fn can_read(&self) -> bool {
@@ -107,7 +134,7 @@ pub async fn load_conversation(
     let row = sqlx::query_as::<_, ConvRow>(&format!(
         "SELECT c.id, c.workspace_id, c.kind, c.last_message_seq, c.last_change_seq,
                 c.replay_floor_seq, c.created_at, ch.visibility, ch.project_id, ch.team_id,
-                cm.role AS channel_role,
+                {CHANNEL_ROLE} AS channel_role,
                 wm.role AS workspace_role, (dm.user_id IS NOT NULL) AS dm_member,
                 (ch.project_id IS NOT NULL AND penfii.in_share_scope(ch.project_id, ch.team_id, $2)
                 ) AS project_member,

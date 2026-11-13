@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO penfii.auth_throttle (scope, key_hash, window_start, failures)\n         VALUES ($1, $2, now(), 1)\n         ON CONFLICT (scope, key_hash) DO UPDATE SET\n             failures = CASE WHEN penfii.auth_throttle.window_start < now() - make_interval(secs => $4)\n                             THEN 1 ELSE penfii.auth_throttle.failures + 1 END,\n             window_start = CASE WHEN penfii.auth_throttle.window_start < now() - make_interval(secs => $4)\n                                 THEN now() ELSE penfii.auth_throttle.window_start END,\n             locked_until = CASE\n                 WHEN penfii.auth_throttle.window_start >= now() - make_interval(secs => $4)\n                      AND penfii.auth_throttle.failures + 1 >= $3\n                 THEN now() + make_interval(secs => $4) ELSE penfii.auth_throttle.locked_until END",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bytea",
+        "Int4",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a1dd6ab4be5d23beec691f7985ad00b56f8ba89fb8df8751331e4ba0093e127f"
+}

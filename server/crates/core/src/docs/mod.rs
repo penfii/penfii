@@ -1112,8 +1112,8 @@ pub async fn list_comments(
     let ids: Vec<Uuid> = rows
         .iter()
         .take(limit as usize)
-        .map(|row| row.get("id"))
-        .collect();
+        .map(|row| row.try_get("id"))
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
     let mut attachments = comment_attachments(&mut conn, &ids).await?;
     for row in rows.iter().take(limit as usize) {
         last = Some((row.try_get("created_at")?, row.try_get("id")?));
@@ -1415,8 +1415,8 @@ pub async fn delete_comment(
     .bind(comment_id)
     .fetch_all(&mut *tx)
     .await?;
-    let keys = crate::files::retire(&mut tx, &files).await?;
-    crate::files::delete_objects(store, &keys).await?;
+    let _keys = crate::files::retire(&mut tx, &files).await?;
+    let _ = store;
     events::emit(
         &mut tx,
         emit_doc(

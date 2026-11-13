@@ -47,23 +47,42 @@ pub struct OsConfig {
 }
 
 impl OsConfig {
-    pub fn from_env() -> Option<Self> {
-        let url = std::env::var("PENFII_OPENSEARCH_URL").ok()?;
-        let url = url.trim().trim_end_matches('/').to_owned();
-        if url.is_empty() {
-            return None;
-        }
-        Some(Self {
-            url,
-            user: std::env::var("PENFII_OPENSEARCH_USER").ok(),
-            password: std::env::var("PENFII_OPENSEARCH_PASSWORD").ok(),
-            prefix: std::env::var("PENFII_OPENSEARCH_INDEX_PREFIX")
-                .ok()
-                .filter(|p| !p.trim().is_empty())
+    /// Not set `PENFII_OPENSEARCH_URL`: no search (`Ok(None)`). `PENFII_OPENSEARCH_USER` and `_PASSWORD` are set
+    /// together or not at all, and only make sense with the URL.
+    pub fn from_env() -> Result<Option<Self>, String> {
+        Self::from_lookup(&crate::config::process_env)
+    }
+
+    pub fn from_lookup(lookup: crate::config::Lookup<'_>) -> Result<Option<Self>, String> {
+        let credentials = crate::config::group(
+            lookup,
+            "OpenSearch credentials",
+            &["PENFII_OPENSEARCH_USER", "PENFII_OPENSEARCH_PASSWORD"],
+        )?;
+        let Some(url) = crate::config::get(lookup, "PENFII_OPENSEARCH_URL") else {
+            if credentials.is_some() {
+                return Err("PENFII_OPENSEARCH_USER and PENFII_OPENSEARCH_PASSWORD are set but PENFII_OPENSEARCH_URL is not".into());
+            }
+            return Ok(None);
+        };
+        let (user, password) = match credentials {
+            Some(values) => {
+                let [user, password]: [String; 2] = values
+                    .try_into()
+                    .map_err(|_| "OpenSearch credentials: two settings are needed".to_owned())?;
+                (Some(user), Some(password))
+            }
+            None => (None, None),
+        };
+        Ok(Some(Self {
+            url: url.trim_end_matches('/').to_owned(),
+            user,
+            password,
+            prefix: crate::config::get(lookup, "PENFII_OPENSEARCH_INDEX_PREFIX")
                 .unwrap_or_else(|| DEFAULT_PREFIX.into()),
             search_timeout: Duration::from_secs(5),
             bulk_timeout: Duration::from_secs(30),
-        })
+        }))
     }
 
     pub fn with_prefix(url: &str, prefix: &str) -> Self {

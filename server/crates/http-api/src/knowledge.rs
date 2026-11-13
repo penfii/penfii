@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
-use crate::extract::{self, Actor, Q, RawJson, present_or_null};
+use crate::extract::{Actor, Body, Q, present_or_null};
 
 use axum::Router;
 use axum::routing::{delete, get, patch, post, put};
@@ -67,7 +67,7 @@ pub struct TreeQuery {
     project_id: Option<Uuid>,
 }
 
-pub async fn doc_tree(
+async fn doc_tree(
     State(state): State<AppState>,
     Path(workspace_id): Path<Uuid>,
     Q(query): Q<TreeQuery>,
@@ -98,13 +98,12 @@ struct CreateDocBody {
     content: Option<Value>,
 }
 
-pub async fn create_doc(
+async fn create_doc(
     State(state): State<AppState>,
     Path(workspace_id): Path<Uuid>,
     Actor(user): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<CreateDocBody>,
 ) -> Result<Response, ApiError> {
-    let body: CreateDocBody = extract::parse(raw)?;
     let page = docs::create(
         &state.pool,
         &state.knowledge,
@@ -130,7 +129,7 @@ pub async fn create_doc(
     Ok((StatusCode::CREATED, Json(page)).into_response())
 }
 
-pub async fn get_doc(
+async fn get_doc(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user): Actor,
@@ -147,13 +146,12 @@ struct PatchDocBody {
     project_id: Option<Option<Uuid>>,
 }
 
-pub async fn patch_doc(
+async fn patch_doc(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<PatchDocBody>,
 ) -> Result<Response, ApiError> {
-    let body: PatchDocBody = extract::parse(raw)?;
     let page = docs::patch(&state.pool, user, id, body.title, body.project_id).await?;
     if let Some(hub) = &state.collab {
         hub.page_meta_changed(id, page["title"].as_str().unwrap_or(""));
@@ -170,13 +168,12 @@ struct SaveDocBody {
 }
 
 /// Save: replaces the title and content with the person's draft if `expectedRevisionNo` is current.
-pub async fn save_doc(
+async fn save_doc(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<SaveDocBody>,
 ) -> Result<Response, ApiError> {
-    let body: SaveDocBody = extract::parse(raw)?;
     let page = docs::history::save(
         &state.pool,
         &state.knowledge,
@@ -199,13 +196,12 @@ struct CreateVersionBody {
     expected_revision_no: i64,
 }
 
-pub async fn create_doc_version(
+async fn create_doc_version(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<CreateVersionBody>,
 ) -> Result<Response, ApiError> {
-    let body: CreateVersionBody = extract::parse(raw)?;
     let version =
         docs::history::create_version(&state.pool, user, id, body.expected_revision_no).await?;
     Ok((StatusCode::CREATED, Json(version)).into_response())
@@ -218,7 +214,7 @@ pub struct VersionsQuery {
     limit: Option<i64>,
 }
 
-pub async fn list_doc_versions(
+async fn list_doc_versions(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Q(query): Q<VersionsQuery>,
@@ -230,7 +226,7 @@ pub async fn list_doc_versions(
     )
 }
 
-pub async fn get_doc_version(
+async fn get_doc_version(
     State(state): State<AppState>,
     Path((id, version_no)): Path<(Uuid, i32)>,
     Actor(user): Actor,
@@ -245,13 +241,12 @@ struct MoveDocBody {
     before_id: Option<Uuid>,
 }
 
-pub async fn move_doc(
+async fn move_doc(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<MoveDocBody>,
 ) -> Result<Response, ApiError> {
-    let body: MoveDocBody = extract::parse(raw)?;
     docs::move_page(&state.pool, user, id, body.parent_id, body.before_id).await?;
     Ok(Json(json!({"ok": true})).into_response())
 }
@@ -264,13 +259,12 @@ struct VisibilityBody {
     scope_team_id: Option<Uuid>,
 }
 
-pub async fn set_doc_visibility(
+async fn set_doc_visibility(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<VisibilityBody>,
 ) -> Result<Response, ApiError> {
-    let body: VisibilityBody = extract::parse(raw)?;
     let result = docs::set_visibility(
         &state.pool,
         user,
@@ -288,7 +282,7 @@ pub async fn set_doc_visibility(
     Ok(Json(result?).into_response())
 }
 
-pub async fn doc_participants(
+async fn doc_participants(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user): Actor,
@@ -302,13 +296,12 @@ struct ParticipantsBody {
     participants: Vec<ParticipantBody>,
 }
 
-pub async fn set_doc_participants(
+async fn set_doc_participants(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<ParticipantsBody>,
 ) -> Result<Response, ApiError> {
-    let body: ParticipantsBody = extract::parse(raw)?;
     let result = docs::set_participants(
         &state.pool,
         user,
@@ -325,7 +318,7 @@ pub async fn set_doc_participants(
     Ok(Json(result?).into_response())
 }
 
-pub async fn delete_doc(
+async fn delete_doc(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user): Actor,
@@ -346,7 +339,7 @@ pub struct CommentsQuery {
     limit: Option<i64>,
 }
 
-pub async fn list_doc_comments(
+async fn list_doc_comments(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Q(query): Q<CommentsQuery>,
@@ -372,13 +365,12 @@ struct CreateCommentBody {
     file_ids: Vec<Uuid>,
 }
 
-pub async fn create_doc_comment(
+async fn create_doc_comment(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<CreateCommentBody>,
 ) -> Result<Response, ApiError> {
-    let body: CreateCommentBody = extract::parse(raw)?;
     let comment = docs::create_comment(&state.pool, user, id, body.body, &body.file_ids).await?;
     if let Some(hub) = &state.collab {
         hub.comments_changed(id);
@@ -386,13 +378,12 @@ pub async fn create_doc_comment(
     Ok((StatusCode::CREATED, Json(comment)).into_response())
 }
 
-pub async fn edit_doc_comment(
+async fn edit_doc_comment(
     State(state): State<AppState>,
     Path((id, comment_id)): Path<(Uuid, Uuid)>,
     Actor(user): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<CommentBody>,
 ) -> Result<Response, ApiError> {
-    let body: CommentBody = extract::parse(raw)?;
     let comment = docs::edit_comment(&state.pool, user, id, comment_id, body.body).await?;
     if let Some(hub) = &state.collab {
         hub.comments_changed(id);
@@ -400,7 +391,7 @@ pub async fn edit_doc_comment(
     Ok(Json(comment).into_response())
 }
 
-pub async fn delete_doc_comment(
+async fn delete_doc_comment(
     State(state): State<AppState>,
     Path((id, comment_id)): Path<(Uuid, Uuid)>,
     Actor(user): Actor,
@@ -412,7 +403,7 @@ pub async fn delete_doc_comment(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-pub async fn list_doc_templates(
+async fn list_doc_templates(
     State(state): State<AppState>,
     Path(workspace_id): Path<Uuid>,
     Actor(user): Actor,
@@ -427,13 +418,12 @@ struct TemplateBody {
     from_doc_id: Uuid,
 }
 
-pub async fn create_doc_template(
+async fn create_doc_template(
     State(state): State<AppState>,
     Path(workspace_id): Path<Uuid>,
     Actor(user): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<TemplateBody>,
 ) -> Result<Response, ApiError> {
-    let body: TemplateBody = extract::parse(raw)?;
     let template = docs::create_template(
         &state.pool,
         &state.knowledge,
@@ -446,7 +436,7 @@ pub async fn create_doc_template(
     Ok((StatusCode::CREATED, Json(template)).into_response())
 }
 
-pub async fn delete_doc_template(
+async fn delete_doc_template(
     State(state): State<AppState>,
     Path((workspace_id, template_id)): Path<(Uuid, Uuid)>,
     Actor(user): Actor,
@@ -461,13 +451,12 @@ struct AttachBody {
     file_id: Uuid,
 }
 
-pub async fn attach_doc_file(
+async fn attach_doc_file(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<AttachBody>,
 ) -> Result<Response, ApiError> {
-    let body: AttachBody = extract::parse(raw)?;
     docs::attach_file(&state.pool, user, id, body.file_id).await?;
     Ok(Json(json!({"ok": true})).into_response())
 }
@@ -485,13 +474,12 @@ struct ResolveBody {
     items: Vec<ResolveItem>,
 }
 
-pub async fn resolve_references(
+async fn resolve_references(
     State(state): State<AppState>,
     Path(workspace_id): Path<Uuid>,
     Actor(user): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<ResolveBody>,
 ) -> Result<Response, ApiError> {
-    let body: ResolveBody = extract::parse(raw)?;
     let items = body.items.into_iter().map(|i| (i.kind, i.id)).collect();
     Ok(
         Json(docs::resolve_references(&state.pool, user, workspace_id, items).await?)
@@ -510,7 +498,7 @@ pub struct ChangesQuery {
     limit: Option<i64>,
 }
 
-pub async fn ticket_references(
+async fn ticket_references(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Q(query): Q<ChangesQuery>,
@@ -523,7 +511,7 @@ pub async fn ticket_references(
     .into_response())
 }
 
-pub async fn doc_references(
+async fn doc_references(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Q(query): Q<ChangesQuery>,

@@ -102,3 +102,16 @@ describe('I18nProvider', () => {
     expect(screen.getByTestId('locale').textContent).toBe('ko-KR')
   })
 })
+
+describe('I18nProvider when the texts cannot be fetched', () => {
+  it('says so with a reload button instead of staying blank', async () => {
+    vi.resetModules()
+    vi.doMock('./catalog', () => ({ loadedCatalog: () => undefined, loadCatalog: () => Promise.reject(new Error('offline')) }))
+    const { I18nProvider: Provider } = await import('./I18nProvider')
+    render(<Provider><p>app</p></Provider>)
+    expect((await screen.findByRole('alert')).textContent).toContain('Reload')
+    expect(screen.queryByText('app')).toBeNull()
+    vi.doUnmock('./catalog')
+    vi.resetModules()
+  })
+})

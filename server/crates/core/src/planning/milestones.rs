@@ -137,7 +137,12 @@ pub async fn update_milestone(
         if previous == "REACHED" {
             row.try_get("reached_at")?
         } else {
-            Some(Utc::now())
+            // Stored, so it is the database's clock.
+            Some(
+                sqlx::query_scalar::<_, DateTime<Utc>>("SELECT now()")
+                    .fetch_one(&mut *tx)
+                    .await?,
+            )
         }
     } else {
         None
@@ -203,8 +208,8 @@ pub async fn set_milestones(
     .await?;
     let current: HashMap<Uuid, String> = current_rows
         .iter()
-        .map(|r| (r.get("id"), r.get("name")))
-        .collect();
+        .map(|r| -> Result<_, sqlx::Error> { Ok((r.try_get("id")?, r.try_get("name")?)) })
+        .collect::<Result<HashMap<_, _>, sqlx::Error>>()?;
     let mut added = Vec::new();
     for id in wanted.iter().filter(|id| !current.contains_key(id)) {
         let row =
@@ -216,12 +221,12 @@ pub async fn set_milestones(
                 .ok_or_else(|| {
                     CoreError::validation("the Milestone is not part of this project")
                 })?;
-        if row.get::<String, _>("state") != "OPEN" {
+        if row.try_get::<String, _>("state")? != "OPEN" {
             return Err(CoreError::validation(
                 "a Ticket can only be linked to an open Milestone",
             ));
         }
-        added.push((*id, row.get::<String, _>("name")));
+        added.push((*id, row.try_get::<String, _>("name")?));
     }
     let removed: Vec<(Uuid, String)> = current
         .iter()

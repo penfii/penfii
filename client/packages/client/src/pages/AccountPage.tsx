@@ -11,7 +11,7 @@ import { LocaleToggle, useI18n } from '../i18n/I18nProvider'
 import { ConnectedApps, SignInMethods, useReauth, useSession } from '../modules/identity'
 import { queryKeys } from '../queryKeys'
 import { queries } from '../queries'
-import { WorkspaceShell } from '../shell/WorkspaceShell'
+import { ResponsiveShell } from '../shell/ResponsiveShell'
 import { LAST_WORKSPACE_KEY } from '../shell/account'
 import { ProfileSettings } from './ProfileSettings'
 
@@ -93,7 +93,7 @@ export function AccountPage() {
   const workspaceId = workspaces.data?.some((workspace) => workspace.id === stored) ? stored : workspaces.data?.[0]?.id
   const form = <AccountScreen />
   if (!workspaceId) return <div className="page">{form}</div>
-  return <WorkspaceShell section="settings" workspaceId={workspaceId}>{form}</WorkspaceShell>
+  return <ResponsiveShell section="settings" workspaceId={workspaceId} desktopOnly>{form}</ResponsiveShell>
 }
 
 function AccountForm() {
@@ -142,7 +142,7 @@ function AccountForm() {
         if (stillSignedIn) setError(t('account.wrongPassword'))
       }
       else if (isApiError(caught) && caught.code === 'account_exists') setError(t('account.exists'))
-      else if (isApiError(caught) && caught.code === 'validation') setError(errorText(caught, t('error.generic')))
+      else if (isApiError(caught) && caught.code === 'validation') setError(errorText(caught, t('error.generic'), t('error.dbUnavailable')))
       else setError(t('error.generic'))
     } finally {
       setBusy(false)

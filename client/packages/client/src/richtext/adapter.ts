@@ -122,6 +122,7 @@ function blockFromEditor(node: JSONContent): RichTextBlock | null {
       if (start > 1) return { type: 'orderedList', attrs: { start }, content }
       return { type: 'orderedList', content }
     }
+    case undefined:
     default: {
       const text = plainPieces(node).join('')
       if (text.length === 0) return null

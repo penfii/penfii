@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use super::states::{StateRow, state};
-use super::{TICKET_COLUMNS, TICKET_FROM, TicketRow, attach_labels, ticket};
+use super::{TICKET_COLUMNS, TICKET_FROM, TicketRow, attach_labels_batch, ticket};
 use crate::error::CoreError;
 use crate::planning;
 use crate::project_role::{can_collaborate, can_manage, channel_allowed, require_project_role};
@@ -48,9 +48,7 @@ pub async fn board(
         item.channel_id
             .is_none_or(|channel_id| channel_access.get(&channel_id).copied().unwrap_or(false))
     });
-    for item in &mut tickets {
-        attach_labels(&mut tx, item).await?;
-    }
+    attach_labels_batch(&mut tx, &mut tickets).await?;
     planning::attach_planning(&mut tx, &mut tickets, actor_id).await?;
     // Child counts come from the tickets this viewer can already see.
     let categories: HashMap<Uuid, &str> =
@@ -111,6 +109,43 @@ pub async fn board(
     })
 }
 
+/// Whether `actor` may be told about a change of one Ticket on the Project's Board: they take part in the
+/// Project (otherwise `NotFound`: the socket closes) and can read the Ticket's channel, if it has one. The
+/// Ticket's own state does not matter, so a Ticket that was just archived, trashed or purged is still
+/// announced to the people who could see it. Reads a few rows; it never loads the Board.
+/// `Ticket` of another Project, or unknown: not visible.
+pub async fn ticket_change_visible(
+    pool: &PgPool,
+    project_id: Uuid,
+    ticket_id: Uuid,
+    actor_id: Uuid,
+) -> Result<bool, CoreError> {
+    let mut conn = pool.acquire().await?;
+    require_project_role(&mut conn, project_id, actor_id, false).await?;
+    let channel: Option<Option<Uuid>> =
+        sqlx::query_scalar("SELECT channel_id FROM penfii.tickets WHERE id=$1 AND project_id=$2")
+            .bind(ticket_id)
+            .bind(project_id)
+            .fetch_optional(&mut *conn)
+            .await?;
+    match channel {
+        None => Ok(false),
+        Some(channel_id) => channel_allowed(&mut conn, channel_id, actor_id).await,
+    }
+}
+
+/// Whether `actor` still takes part in the Project (`NotFound` otherwise), for a notice about the Project as a
+/// whole. Reads one or two rows.
+pub async fn project_readable(
+    pool: &PgPool,
+    project_id: Uuid,
+    actor_id: Uuid,
+) -> Result<(), CoreError> {
+    let mut conn = pool.acquire().await?;
+    require_project_role(&mut conn, project_id, actor_id, false).await?;
+    Ok(())
+}
+
 pub async fn project_labels(
     pool: &PgPool,
     actor_id: Uuid,
@@ -124,12 +159,14 @@ pub async fn project_labels(
         .await?;
     let labels = rows
         .into_iter()
-        .map(|row| TicketLabel {
-            id: row.get("id"),
-            name: row.get("name"),
-            color: row.get("color"),
+        .map(|row| -> Result<_, sqlx::Error> {
+            Ok(TicketLabel {
+                id: row.try_get("id")?,
+                name: row.try_get("name")?,
+                color: row.try_get("color")?,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
     tx.commit().await?;
     Ok(labels)
 }
@@ -152,9 +189,9 @@ pub async fn create_project_label(
         .bind(id).bind(project_id).bind(name).bind(color)
         .fetch_one(&mut *tx).await?;
     let label = TicketLabel {
-        id: row.get("id"),
-        name: row.get("name"),
-        color: row.get("color"),
+        id: row.try_get("id")?,
+        name: row.try_get("name")?,
+        color: row.try_get("color")?,
     };
     tx.commit().await?;
     Ok(label)
@@ -176,11 +213,13 @@ pub async fn project_members(
     tx.commit().await?;
     Ok(rows
         .into_iter()
-        .map(|row| ProjectMember {
-            user_id: row.get("id"),
-            display_name: row.get("display_name"),
+        .map(|row| -> Result<_, sqlx::Error> {
+            Ok(ProjectMember {
+                user_id: row.try_get("id")?,
+                display_name: row.try_get("display_name")?,
+            })
         })
-        .collect())
+        .collect::<Result<Vec<_>, sqlx::Error>>()?)
 }
 
 pub async fn project_ticket_types(
@@ -197,10 +236,12 @@ pub async fn project_ticket_types(
     tx.commit().await?;
     Ok(rows
         .into_iter()
-        .map(|row| TicketType {
-            id: row.get("id"),
-            name: row.get("name"),
-            color: row.get("color"),
+        .map(|row| -> Result<_, sqlx::Error> {
+            Ok(TicketType {
+                id: row.try_get("id")?,
+                name: row.try_get("name")?,
+                color: row.try_get("color")?,
+            })
         })
-        .collect())
+        .collect::<Result<Vec<_>, sqlx::Error>>()?)
 }

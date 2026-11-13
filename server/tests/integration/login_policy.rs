@@ -399,3 +399,101 @@ async fn every_response_carries_nosniff_and_a_strict_policy(pool: PgPool) {
         );
     }
 }
+
+/// A pool of `size` connections on the test database, with a short wait for a connection, so a
+/// connection held too long shows up as a timeout instead of a slow test.
+async fn small_pool(pool: &PgPool, size: u32) -> PgPool {
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(size)
+        .acquire_timeout(std::time::Duration::from_millis(250))
+        .connect_with((*pool.connect_options()).clone())
+        .await
+        .expect("small pool")
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn sign_in_holds_no_connection_while_the_password_is_hashed(pool: PgPool) {
+    common::setup(&pool).await;
+    let small = small_pool(&pool, 1).await;
+    let limits = limits(ThrottleLimits::default());
+    let login = tokio::spawn({
+        let (small, limits) = (small.clone(), limits.clone());
+        async move {
+            identity::login_from(
+                &small,
+                &limits,
+                OWNER,
+                "not the password at all",
+                Some("203.0.113.9"),
+                None,
+            )
+            .await
+            .map(|_| ())
+        }
+    });
+    // The pool has one connection. While the password is being hashed (hundreds of milliseconds in a
+    // test build) it has to be free; a connection or transaction held across the hash would make
+    // every probe wait out its 250 ms and fail.
+    let mut probes = 0;
+    while !login.is_finished() {
+        let mut conn = small
+            .acquire()
+            .await
+            .expect("the only connection is free while the password is hashed");
+        sqlx::query("SELECT 1").execute(&mut *conn).await.unwrap();
+        drop(conn);
+        probes += 1;
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(probes > 0);
+    assert!(wrong(login.await.unwrap()));
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn concurrent_sign_ins_do_not_starve_a_small_pool(pool: PgPool) {
+    common::setup(&pool).await;
+    let small = small_pool(&pool, 2).await;
+    // No throttle gets in the way: every attempt is checked (and hashed), whoever it is.
+    let limits = limits(ThrottleLimits {
+        account: Bucket {
+            max_failures: 1000,
+            window_seconds: 60,
+        },
+        account_address: Bucket {
+            max_failures: 1000,
+            window_seconds: 60,
+        },
+        address: Bucket {
+            max_failures: 1000,
+            window_seconds: 60,
+        },
+    });
+    let mut attempts = Vec::new();
+    for n in 0..12 {
+        let (small, limits) = (small.clone(), limits.clone());
+        attempts.push(tokio::spawn(async move {
+            // Wrong password, existing and missing accounts, and the right password.
+            let (email, password) = match n % 3 {
+                0 => (OWNER.to_string(), "wrong password".to_string()),
+                1 => (
+                    format!("nobody{n}@penfii.test"),
+                    "wrong password".to_string(),
+                ),
+                _ => (OWNER.to_string(), OWNER_PASSWORD.to_string()),
+            };
+            let address = format!("203.0.113.{n}");
+            let result =
+                identity::login_from(&small, &limits, &email, &password, Some(&address), None)
+                    .await
+                    .map(|_| ());
+            (n % 3, result)
+        }));
+    }
+    for attempt in attempts {
+        let (kind, result) = attempt.await.unwrap();
+        match kind {
+            2 => assert!(result.is_ok(), "{result:?}"),
+            _ => assert!(wrong(result)),
+        }
+    }
+}

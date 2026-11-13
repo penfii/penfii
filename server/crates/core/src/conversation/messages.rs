@@ -189,67 +189,24 @@ pub async fn send_message(
         cmd.reply_to_id,
     )
     .await?;
-    ensure_mention_users(&mut tx, &mentions).await?;
-    let (stream_seq, change_seq) = bump_message_and_change(&mut tx, cmd.conversation_id).await?;
-    let message_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO penfii.messages
-            (id, conversation_id, stream_seq, author_id, thread_root_id, reply_to_id,
-             version, body_schema_version, body)
-         VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $8)",
-    )
-    .bind(message_id)
-    .bind(cmd.conversation_id)
-    .bind(stream_seq)
-    .bind(cmd.actor_id)
-    .bind(cmd.thread_root_id)
-    .bind(cmd.reply_to_id)
-    .bind(cmd.body_schema_version)
-    .bind(&cmd.body)
-    .execute(&mut *tx)
-    .await?;
-    insert_mentions(&mut tx, message_id, &mentions).await?;
-    files::attach_to_message(
+    let (message, change_seq) = persist_created_message(
         &mut tx,
         limits,
-        cmd.actor_id,
-        locked.workspace_id,
-        message_id,
-        &cmd.file_ids,
-    )
-    .await?;
-    insert_change(
-        &mut tx,
-        cmd.conversation_id,
-        change_seq,
-        message_id,
-        1,
-        "message.created",
-    )
-    .await?;
-    let mentioned: Vec<Uuid> = mentions.iter().map(|m| m.user_id).collect();
-    crate::events::emit(
-        &mut tx,
-        crate::events::NewEvent {
+        CreatedMessage {
             workspace_id: locked.workspace_id,
-            target_kind: "MESSAGE",
-            target_id: message_id,
-            target_version: Some(1),
-            kind: "message.created",
-            actor_user_id: Some(cmd.actor_id),
-            command_id: Uuid::new_v4(),
-            facts: json!({
-                "conversationId": cmd.conversation_id,
-                "threadRootId": cmd.thread_root_id,
-                "replyToId": cmd.reply_to_id,
-                "mentionedUserIds": mentioned,
-                "hasFile": !cmd.file_ids.is_empty(),
-            }),
+            conversation_id: cmd.conversation_id,
+            author_id: cmd.actor_id,
+            body_schema_version: cmd.body_schema_version,
+            body: cmd.body,
+            thread_root_id: cmd.thread_root_id,
+            reply_to_id: cmd.reply_to_id,
+            mentions,
+            file_ids: cmd.file_ids,
+            actor_kind: "USER",
             security_context: json!({"conversationId": cmd.conversation_id.to_string()}),
         },
     )
     .await?;
-    let message = fetch_message(&mut tx, message_id).await?;
     let body =
         serde_json::to_value(&message).map_err(|error| CoreError::Internal(error.to_string()))?;
     platform::complete(
@@ -261,6 +218,7 @@ pub async fn send_message(
         &body,
     )
     .await?;
+    let message_id = message.id;
     tx.commit().await?;
     Ok(Outcome {
         http_status: 201,
@@ -685,7 +643,98 @@ async fn set_reaction(
     })
 }
 
-fn prepare_body(limits: &Limits, schema_version: i16, body: &Value) -> Result<(), CoreError> {
+pub(crate) struct CreatedMessage {
+    pub workspace_id: Uuid,
+    pub conversation_id: Uuid,
+    pub author_id: Uuid,
+    pub body_schema_version: i16,
+    pub body: Value,
+    pub thread_root_id: Option<Uuid>,
+    pub reply_to_id: Option<Uuid>,
+    pub mentions: Vec<ParsedMention>,
+    pub file_ids: Vec<Uuid>,
+    /// `USER` for a person, `INTEGRATION` for a webhook actor. Stored on `message.created`.
+    pub actor_kind: &'static str,
+    pub security_context: Value,
+}
+
+/// Inserts one message and emits `message.created`. The caller has already decided the author may
+/// post and owns the transaction.
+pub(crate) async fn persist_created_message(
+    conn: &mut PgConnection,
+    limits: &Limits,
+    msg: CreatedMessage,
+) -> Result<(Message, i64), CoreError> {
+    ensure_mention_users(conn, &msg.mentions).await?;
+    let (stream_seq, change_seq) = bump_message_and_change(conn, msg.conversation_id).await?;
+    let message_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO penfii.messages
+            (id, conversation_id, stream_seq, author_id, thread_root_id, reply_to_id,
+             version, body_schema_version, body)
+         VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $8)",
+    )
+    .bind(message_id)
+    .bind(msg.conversation_id)
+    .bind(stream_seq)
+    .bind(msg.author_id)
+    .bind(msg.thread_root_id)
+    .bind(msg.reply_to_id)
+    .bind(msg.body_schema_version)
+    .bind(&msg.body)
+    .execute(&mut *conn)
+    .await?;
+    insert_mentions(conn, message_id, &msg.mentions).await?;
+    files::attach_to_message(
+        conn,
+        limits,
+        msg.author_id,
+        msg.workspace_id,
+        message_id,
+        &msg.file_ids,
+    )
+    .await?;
+    insert_change(
+        conn,
+        msg.conversation_id,
+        change_seq,
+        message_id,
+        1,
+        "message.created",
+    )
+    .await?;
+    let mentioned: Vec<Uuid> = msg.mentions.iter().map(|m| m.user_id).collect();
+    crate::events::emit_with_kind(
+        conn,
+        crate::events::NewEvent {
+            workspace_id: msg.workspace_id,
+            target_kind: "MESSAGE",
+            target_id: message_id,
+            target_version: Some(1),
+            kind: "message.created",
+            actor_user_id: Some(msg.author_id),
+            command_id: Uuid::new_v4(),
+            facts: json!({
+                "conversationId": msg.conversation_id,
+                "threadRootId": msg.thread_root_id,
+                "replyToId": msg.reply_to_id,
+                "mentionedUserIds": mentioned,
+                "hasFile": !msg.file_ids.is_empty(),
+            }),
+            security_context: msg.security_context,
+        },
+        msg.actor_kind,
+    )
+    .await?;
+    let message = fetch_message(conn, message_id).await?;
+    Ok((message, change_seq))
+}
+
+pub(crate) fn prepare_body(
+    limits: &Limits,
+    schema_version: i16,
+    body: &Value,
+) -> Result<(), CoreError> {
     let max = limits.message_body_max_bytes.ok_or_else(|| {
         CoreError::conflict(
             "message_limit_unconfigured",
@@ -991,7 +1040,7 @@ async fn map_messages(
     let ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
     let author_ids: Vec<Uuid> = rows.iter().map(|row| row.author_id).collect();
     let reactions = reaction_map(conn, &ids).await?;
-    let names = author_names(conn, &author_ids).await?;
+    let authors = author_info(conn, &author_ids).await?;
     let replies = reply_counts(conn, &ids).await?;
     let mut attachments: HashMap<Uuid, Vec<MessageAttachment>> = HashMap::new();
     for (message_id, attachment) in files::attachments_for(conn, &ids).await? {
@@ -1001,28 +1050,34 @@ async fn map_messages(
         .into_iter()
         .map(|row| {
             let grouped = reactions.get(&row.id).cloned().unwrap_or_default();
-            let name = names.get(&row.author_id).cloned().unwrap_or_default();
+            let (name, kind) = authors
+                .get(&row.author_id)
+                .cloned()
+                .unwrap_or_else(|| (String::new(), "HUMAN".to_string()));
             let reply_count = replies.get(&row.id).copied().unwrap_or(0);
             let files = attachments.remove(&row.id).unwrap_or_default();
-            to_message(row, grouped, name, reply_count, files)
+            to_message(row, grouped, name, kind, reply_count, files)
         })
         .collect())
 }
 
-async fn author_names(
+async fn author_info(
     conn: &mut PgConnection,
     ids: &[Uuid],
-) -> Result<HashMap<Uuid, String>, CoreError> {
+) -> Result<HashMap<Uuid, (String, String)>, CoreError> {
     if ids.is_empty() {
         return Ok(HashMap::new());
     }
-    let rows = sqlx::query_as::<_, (Uuid, String)>(
-        "SELECT id, display_name FROM penfii.users WHERE id = ANY($1)",
+    let rows = sqlx::query_as::<_, (Uuid, String, String)>(
+        "SELECT id, display_name, kind FROM penfii.users WHERE id = ANY($1)",
     )
     .bind(ids)
     .fetch_all(&mut *conn)
     .await?;
-    Ok(rows.into_iter().collect())
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, kind)| (id, (name, kind)))
+        .collect())
 }
 
 async fn reply_counts(
@@ -1098,6 +1153,7 @@ fn to_message(
     row: MessageRow,
     reactions: Vec<Reaction>,
     author_display_name: String,
+    author_kind: String,
     reply_count: i64,
     attachments: Vec<MessageAttachment>,
 ) -> Message {
@@ -1108,6 +1164,7 @@ fn to_message(
         stream_seq: row.stream_seq,
         author_id: row.author_id,
         author_display_name,
+        author_kind,
         thread_root_id: row.thread_root_id,
         reply_to_id: row.reply_to_id,
         version: row.version,

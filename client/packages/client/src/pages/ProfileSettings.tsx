@@ -70,7 +70,7 @@ export function ProfileSettings({ workspaceId }: { workspaceId: string }) {
       setSaved(true)
       await queryClient.invalidateQueries({ queryKey: queryKeys.me })
     } catch (caught) {
-      setError(errorText(caught, t('error.generic')))
+      setError(errorText(caught, t('error.generic'), t('error.dbUnavailable')))
     } finally {
       setBusy(false)
     }
@@ -146,7 +146,7 @@ export function ProfileSettings({ workspaceId }: { workspaceId: string }) {
                       void api.deleteAvatar().then(async () => {
                         setPhotoKey(Date.now())
                         await queryClient.invalidateQueries({ queryKey: queryKeys.me })
-                      }).catch((caught: unknown) => setError(errorText(caught, t('error.generic')))).finally(() => setBusy(false))
+                      }).catch((caught: unknown) => setError(errorText(caught, t('error.generic'), t('error.dbUnavailable')))).finally(() => setBusy(false))
                     }}
                   >
                     {t('profile.remove')}

@@ -7,9 +7,20 @@ import { useSession } from '../identity'
 import { queries } from '../../queries'
 import { useStartDm } from '../../search/DirectoryResults'
 
-/** The name on a message. Opening it shows the person's profile card and can start a direct message. */
-export function AuthorCard({ workspaceId, userId, name }: { workspaceId: string; userId: string; name: string }) {
-  if (!workspaceId) return <strong>{name}</strong>
+/** The name on a message. Opening it shows the person's profile card and can start a direct message.
+ * An integration actor is only a name: there is no profile and no direct message. */
+export function AuthorCard({
+  workspaceId,
+  userId,
+  name,
+  authorKind = 'HUMAN',
+}: {
+  workspaceId: string
+  userId: string
+  name: string
+  authorKind?: 'HUMAN' | 'INTEGRATION'
+}) {
+  if (!workspaceId || authorKind === 'INTEGRATION') return <strong>{name}</strong>
   return (
     <Popover label={name} className="author-link">
       {(close) => <AuthorBody workspaceId={workspaceId} userId={userId} name={name} onClose={close} />}

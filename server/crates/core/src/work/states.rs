@@ -174,13 +174,13 @@ pub async fn update_state(
     }
     let row=sqlx::query("SELECT id,project_id,name,category,position,is_initial,wip_limit FROM penfii.workflow_statuses WHERE project_id=$1 AND id=$2 AND retired_at IS NULL FOR UPDATE").bind(project_id).bind(state_id).fetch_optional(&mut *tx).await?.ok_or(CoreError::NotFound)?;
     let old = WorkflowState {
-        id: row.get("id"),
-        project_id: row.get("project_id"),
-        name: row.get("name"),
-        category: row.get("category"),
-        position: row.get("position"),
-        is_initial: row.get("is_initial"),
-        wip_limit: row.get("wip_limit"),
+        id: row.try_get("id")?,
+        project_id: row.try_get("project_id")?,
+        name: row.try_get("name")?,
+        category: row.try_get("category")?,
+        position: row.try_get("position")?,
+        is_initial: row.try_get("is_initial")?,
+        wip_limit: row.try_get("wip_limit")?,
     };
     let name = update
         .name

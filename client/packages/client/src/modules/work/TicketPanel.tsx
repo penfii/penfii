@@ -15,6 +15,7 @@ import { ConflictBanner } from './ConflictBanner'
 import { DependenciesSection } from './DependenciesSection'
 import { HierarchySection } from './HierarchySection'
 import { TrashTicketButton } from '../admin/TrashTicketButton'
+import { ArchiveTicketButton } from './ArchiveTicketButton'
 import { ReferencedBy } from '../docs/ReferencedBy'
 import { HistoryTab } from './HistoryTab'
 import { ScheduleSection } from './PlanFields'
@@ -29,7 +30,24 @@ import { descriptionText, formatDue, isPriority, textToDescription } from './tic
 import { FileDropZone } from '../files/FileDropZone'
 import { TicketAttachments, type TicketAttachmentHandle } from './TicketAttachments'
 import { useTicketEditor } from './useTicketEditor'
-import { CloseIcon } from '../../design/icons'
+import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from '../../design/icons'
+import { TicketActionsMenu } from './TicketActionsMenu'
+
+/** Below this panel width Favorite, Later and Pin fold into one More menu; Watch and Previous / Next stay. */
+const NARROW_PANEL = 600
+
+/** True while the element is narrower than `limit`; a DOM without ResizeObserver counts as wide. */
+function useNarrowWidth(ref: React.RefObject<HTMLElement | null>, limit: number): boolean {
+  const [narrow, setNarrow] = useState(false)
+  useEffect(() => {
+    const element = ref.current
+    if (!element || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(([entry]) => setNarrow(entry.contentRect.width < limit))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [ref, limit])
+  return narrow
+}
 
 type TabId = 'comments' | 'activity' | 'history'
 
@@ -101,10 +119,12 @@ function SiblingNav({ ticket, ctx, onOpen }: { ticket: Ticket; ctx: ProjectConte
   if (index < 0 || siblings.length < 2) return null
   const previous = index > 0 ? siblings[index - 1] : null
   const next = index < siblings.length - 1 ? siblings[index + 1] : null
+  const prevLabel = t('work.panel.prev', { key: previous ? previous.key : '—' })
+  const nextLabel = t('work.panel.next', { key: next ? next.key : '—' })
   return (
-    <span className="ticket-siblings">
-      <button type="button" className="btn btn-ghost" disabled={!previous} onClick={() => previous && onOpen(previous.id)}>{previous ? t('work.panel.prev', { key: previous.key }) : t('work.panel.prev', { key: '—' })}</button>
-      <button type="button" className="btn btn-ghost" disabled={!next} onClick={() => next && onOpen(next.id)}>{next ? t('work.panel.next', { key: next.key }) : t('work.panel.next', { key: '—' })}</button>
+    <span className="ticket-siblings" role="group" aria-label={t('work.panel.siblings')}>
+      <button type="button" className="icon-button" aria-label={prevLabel} title={prevLabel} disabled={!previous} onClick={() => previous && onOpen(previous.id)}><ChevronLeftIcon /></button>
+      <button type="button" className="icon-button" aria-label={nextLabel} title={nextLabel} disabled={!next} onClick={() => next && onOpen(next.id)}><ChevronRightIcon /></button>
     </span>
   )
 }
@@ -140,9 +160,12 @@ function TicketHead({ ticket, ctx, workspaceId, busy, stateName, titleHidden, to
   onOpenTicket: (id: string) => void
 }) {
   const { t } = useI18n()
-  const canEdit = ctx.board.canEdit
+  // An archived Ticket is read-only for everyone.
+  const canEdit = ctx.board.canEdit && !ticket.archivedAt
   const mobile = useIsMobile()
   const [copied, setCopied] = useState(false)
+  const headRef = useRef<HTMLElement>(null)
+  const narrow = useNarrowWidth(headRef, NARROW_PANEL)
 
   async function copyKey() {
     try {
@@ -156,7 +179,7 @@ function TicketHead({ ticket, ctx, workspaceId, busy, stateName, titleHidden, to
 
   return (
     <>
-      <header className="ticket-panel-head">
+      <header ref={headRef} className="ticket-panel-head">
         <div className="head-cluster">
           <button type="button" className="btn btn-ghost panel-back" onClick={onClose}>← {t('work.panel.back')}</button>
           <div className="ticket-id">
@@ -178,13 +201,22 @@ function TicketHead({ ticket, ctx, workspaceId, busy, stateName, titleHidden, to
               {stateName ? <span className="state-chip">{stateName}</span> : null}
             </button>
           ) : null}
-          <SiblingNav ticket={ticket} ctx={ctx} onOpen={onOpenTicket} />
-          <span className="ticket-saved">
-            <WatchButton kind="TICKET" targetId={ticket.id} />
-            <SavedButtons workspaceId={workspaceId} ticketId={ticket.id} projectId={ticket.projectId} />
-          </span>
         </div>
-        <button type="button" className="icon-button panel-close" aria-label={t('work.panel.close')} onClick={onClose}><CloseIcon /></button>
+        <div className="ticket-head-tools">
+          {mobile ? null : <SiblingNav ticket={ticket} ctx={ctx} onOpen={onOpenTicket} />}
+          {narrow && !mobile ? (
+            <>
+              <span className="ticket-saved"><WatchButton kind="TICKET" targetId={ticket.id} /></span>
+              <TicketActionsMenu workspaceId={workspaceId} ticketId={ticket.id} projectId={ticket.projectId} />
+            </>
+          ) : (
+            <span className="ticket-saved">
+              <WatchButton kind="TICKET" targetId={ticket.id} />
+              <SavedButtons workspaceId={workspaceId} ticketId={ticket.id} projectId={ticket.projectId} />
+            </span>
+          )}
+          <button type="button" className="icon-button panel-close" aria-label={t('work.panel.close')} onClick={onClose}><CloseIcon /></button>
+        </div>
       </header>
     </>
   )
@@ -200,6 +232,7 @@ function failureMessageKey(failure: NonNullable<ReturnType<typeof useTicketEdito
     case 'blockedCanceled': return 'work.move.blockedCanceled'
     case 'move': return 'work.move.error'
     case 'invalidValue': return 'work.panel.invalidValue'
+    case 'save':
     default: return 'work.panel.saveError'
   }
 }
@@ -207,7 +240,8 @@ function failureMessageKey(failure: NonNullable<ReturnType<typeof useTicketEdito
 function TicketBody({ ticket, ctx, onClose, onOpenTicket }: { ticket: Ticket; ctx: ProjectContext; onClose: () => void; onOpenTicket: (id: string) => void }) {
   const { t, locale } = useI18n()
   const { workspaceId = '' } = useParams()
-  const canEdit = ctx.board.canEdit
+  // An archived Ticket is read-only for everyone.
+  const canEdit = ctx.board.canEdit && !ticket.archivedAt
   const editor = useTicketEditor(ticket)
   const [tab, setTab] = useState<TabId>('comments')
   const [titleDraft, setTitleDraft] = useState(ticket.title)
@@ -280,7 +314,7 @@ function TicketBody({ ticket, ctx, onClose, onOpenTicket }: { ticket: Ticket; ct
       <div className="ticket-scroll">
       <div className="ticket-body" ref={rootRef} tabIndex={-1}>
       <div className="ticket-title-block">
-      {!canEdit ? <p className="board-note" role="note">{t('work.panel.readOnly')}</p> : null}
+      {ticket.archivedAt ? <p className="board-note" role="note">{t('archive.banner')}</p> : !canEdit ? <p className="board-note" role="note">{t('work.panel.readOnly')}</p> : null}
       {editor.conflict ? (
         <ConflictBanner conflict={editor.conflict} ticket={ticket} ctx={ctx} busy={editor.busy} onReapply={() => void editor.reapply()} onDiscard={() => {
           setTitleDraft(ticket.title)
@@ -373,6 +407,7 @@ function TicketBody({ ticket, ctx, onClose, onOpenTicket }: { ticket: Ticket; ct
             {project ? <Link to={`/w/${workspaceId}/projects/${project.id}/work`}>{project.name}</Link> : null}
             <span>{channel ? `#${channel.name}` : t('work.channel.project')}</span>
             <span>{t('work.field.created')} {formatStamp(ticket.createdAt, locale)}</span>
+            {ctx.board.canManageWorkflow ? <ArchiveTicketButton ticketId={ticket.id} ticketKey={ticket.key} projectId={ticket.projectId} archived={Boolean(ticket.archivedAt)} /> : null}
             {ctx.board.canManageWorkflow ? <TrashTicketButton ticketId={ticket.id} ticketKey={ticket.key} projectId={ticket.projectId} onDone={onClose} /> : null}
           </footer>
         </div>
@@ -385,7 +420,7 @@ function TicketBody({ ticket, ctx, onClose, onOpenTicket }: { ticket: Ticket; ct
           {scroll.scrolled ? <button type="button" className="to-top" onClick={scroll.toTop}>↑ {t('work.panel.toTop')}</button> : null}
         </div>
       ) : null}
-      {tab === 'comments' ? <CommentComposer ticketId={ticket.id} workspaceId={ticket.workspaceId} /> : null}
+      {tab === 'comments' && !ticket.archivedAt ? <CommentComposer ticketId={ticket.id} workspaceId={ticket.workspaceId} /> : null}
     </>
   )
 }

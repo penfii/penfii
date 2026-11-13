@@ -1,3 +1,17 @@
+import type { components } from './generated'
+
+/**
+ * Types written out of `api/openapi.json` (see `generated.ts`, made by `npm run contract:types`). A model whose
+ * schema says everything the client relies on is an alias of its generated type, so a change of the server's
+ * schema shows up as a type error here and in the code that uses it. The models still written by hand below
+ * are those whose schema is looser than what the server sends (a required list left out, a closed set of
+ * values written as a plain string): they stay hand-written until their schema is tightened.
+ */
+type Schema<Name extends keyof components['schemas']> = components['schemas'][Name]
+
+/** A generated type with some values narrowed to the closed set they really take. Each narrowed key must exist and be a subtype. */
+type Narrow<Generated, Narrowed extends { [Key in keyof Narrowed]: Key extends keyof Generated ? (Narrowed[Key] extends Generated[Key] ? Narrowed[Key] : never) : never }> = Omit<Generated, keyof Narrowed> & Narrowed
+
 export type RichTextMark =
   | { type: 'bold' }
   | { type: 'italic' }
@@ -83,18 +97,8 @@ export type ServerInfo = {
   }
 }
 
-export type Me = {
-  id: string
-  email: string
-  displayName: string
-  locale?: string | null
-  timeZone?: string | null
-  jobTitle?: string | null
-  statusEmoji?: string | null
-  statusText?: string | null
-  statusClearAt?: string | null
-  hasAvatar?: boolean
-}
+/** The signed-in person: what `GET /v1/me` returns, the schema `User`. */
+export type Me = User
 
 /** A workspace member as every other member may see them. */
 export type WorkspacePerson = {
@@ -120,28 +124,26 @@ export type Workspace = {
   role?: string
 }
 
+/** The last e-mail delivery of an invitation link. It is separate from the invitation: FAILED never means the link does not work. */
+export type InvitationEmailStatus = 'NOT_CONFIGURED' | 'SENT' | 'FAILED'
+
+/** What creating or re-issuing an invitation answers. The link token is only ever in this answer. */
 export type InvitationCreated = {
-  inviteToken?: string
+  id: string
+  email: string
+  inviteToken: string
+  /** The e-mail already had an open invitation: it got a new link and the previous link stopped working. */
+  reissued: boolean
+  emailStatus: InvitationEmailStatus
+  /** A fixed short phrase, with FAILED. */
+  emailError?: string
 }
 
 /** What became of an invitation's Team step. ARCHIVED and GONE mean the person joined the Workspace only. */
-export type InvitationTeamOutcome = {
-  teamId: string | null
-  teamName: string
-  status: 'JOINED' | 'ARCHIVED' | 'GONE'
-}
+export type InvitationTeamOutcome = Schema<'InvitationTeamOutcome'>
 
 /** One Project linked to a Team, as the viewer sees it: the Team's role and the viewer's own access only. */
-export type TeamProject = {
-  projectId: string
-  name: string
-  ticketPrefix: string
-  archivedAt: string | null
-  teamRole: ProjectRole | null
-  canOpen: boolean
-  myRole: ProjectRole | null
-  mySources: Array<'DIRECT' | 'GROUP' | 'TEAM'>
-}
+export type TeamProject = Schema<'TeamProject'>
 
 export type Team = {
   id: string
@@ -198,17 +200,17 @@ export type HierarchyKind = 'EPIC' | 'TASK' | 'SUBTASK'
 export type TicketType = { id: string; name: string; color: string | null }
 
 /** A related Ticket the viewer can see, for example a parent. */
-export type TicketRef = { id: string; key: string; title: string; hierarchyKind: HierarchyKind }
+export type TicketRef = Narrow<Schema<'TicketRef'>, { hierarchyKind: HierarchyKind }>
 
 /** Direct children the viewer can see. Hidden children are never counted. */
-export type ChildSummary = { total: number; done: number; canceled: number }
+export type ChildSummary = Schema<'ChildSummary'>
 
 export type ProjectMember = { userId: string; displayName: string }
 
 export type EstimateUnit = 'NONE' | 'POINTS' | 'HOURS'
 
 /** A Task estimate: a decimal string with at most two decimals, in the Project unit it was written in. */
-export type TicketEstimate = { value: string; unit: 'POINTS' | 'HOURS' }
+export type TicketEstimate = Schema<'TicketEstimate'>
 
 /**
  * A planned schedule in working minutes. `plannedEndAt` is never stored: the server derives it from
@@ -224,14 +226,10 @@ export type TicketSchedule = {
 }
 
 /** An estimate as sent. `unit`, when given, must be the Project's unit. */
-export type EstimateInput = { value: string; unit?: 'POINTS' | 'HOURS' }
+export type EstimateInput = Schema<'EstimateInput'>
 
 /** A schedule as sent. `plannedEndAt` is derived by the server and ignored if sent. */
-export type ScheduleInput = {
-  plannedStartAt?: string | null
-  durationMinutes?: number | null
-  isScheduleMilestone?: boolean
-}
+export type ScheduleInput = Schema<'ScheduleInput'>
 
 export type Ticket = {
   id: string
@@ -264,16 +262,18 @@ export type Ticket = {
   revisionNo: number
   createdAt: string
   updatedAt: string
+  /** Set while the Ticket is archived: readable, read-only, out of the default lists. */
+  archivedAt?: string | null
 }
 
 /** Dependency counts the viewer can see. A Ticket they cannot see is never counted. */
-export type DependencySummary = { openBlockers: number; blockedBy: number; blocks: number }
+export type DependencySummary = Schema<'DependencySummary'>
 
 export type SprintState = 'PLANNED' | 'ACTIVE' | 'COMPLETED' | 'CANCELED'
-export type SprintRef = { id: string; name: string; state: SprintState; inherited: boolean }
+export type SprintRef = Narrow<Schema<'SprintRef'>, { state: SprintState }>
 
 export type MilestoneState = 'OPEN' | 'REACHED' | 'CANCELED'
-export type MilestoneRef = { id: string; name: string; state: MilestoneState }
+export type MilestoneRef = Narrow<Schema<'MilestoneRef'>, { state: MilestoneState }>
 
 export type BoardColumn = {
   id: string
@@ -316,12 +316,7 @@ export type TicketComment = {
 }
 
 /** A file on a Ticket's body (`commentId` null) or on one of its comments. Download it through `/v1/attachments/{id}/content`. */
-export type TicketAttachment = MessageAttachment & {
-  ticketId: string
-  commentId: string | null
-  attachedBy: string
-  attachedAt: string
-}
+export type TicketAttachment = Schema<'TicketAttachment'>
 
 export type TicketField =
   | 'title'
@@ -416,11 +411,7 @@ export type ChannelMember = {
   joinedAt: string
 }
 
-export type ConversationPeer = {
-  id: string
-  displayName: string
-  username: string | null
-}
+export type ConversationPeer = Schema<'ConversationPeer'>
 
 export type Dm = {
   id: string
@@ -465,6 +456,7 @@ export type Message = {
   streamSeq: number
   authorId: string
   authorDisplayName: string
+  authorKind: 'HUMAN' | 'INTEGRATION'
   version: number
   deleted: boolean
   body: RichTextDoc | null
@@ -477,14 +469,30 @@ export type Message = {
   attachments: MessageAttachment[]
 }
 
-export type MessageAttachment = {
+export type CreateWebhookRequest = Schema<'CreateWebhookRequest'>
+
+export type Webhook = {
   id: string
-  fileId: string
-  filename: string
-  byteSize: number
-  mime: string | null
-  state: string
+  channelId: string
+  name: string
+  authMode: string
+  actorId: string
+  actorDisplayName: string
+  revoked: boolean
+  createdAt: string
+  rotatedAt: string | null
 }
+
+export type WebhookCreated = {
+  webhook: Webhook
+  secret: string
+}
+
+export type WebhookList = {
+  items: Webhook[]
+}
+
+export type MessageAttachment = Schema<'MessageAttachment'>
 
 export type FileObject = {
   id: string
@@ -495,7 +503,7 @@ export type FileObject = {
   state: string
 }
 
-export type User = Me
+export type User = Schema<'User'>
 export type RichText = RichTextDoc
 
 export type ReadState = {
@@ -536,9 +544,7 @@ export type EditMessageRequest = {
   body: RichTextDoc
 }
 
-export type ReactionRequest = {
-  emoji: string
-}
+export type ReactionRequest = Schema<'ReactionRequest'>
 
 export type ReadRequest = {
   generation: number
@@ -599,8 +605,9 @@ export type DraftRecord = {
 export type PutDraftRequest = {
   contextKind: string
   contextId: string
-  generation: string | null
-  expectedVersion: number
+  /** The input session: a time-ordered UUID the client makes when the box goes from empty to typed. */
+  generation: string
+  expectedVersion?: number
   payload: DraftPayload
 }
 
@@ -857,6 +864,7 @@ export type BulkChange =
   | { type: 'ADD_LABELS' | 'REMOVE_LABELS'; labelIds: string[] }
   | { type: 'SPRINT'; sprintId: string | null }
   | { type: 'ADD_MILESTONES' | 'REMOVE_MILESTONES'; milestoneIds: string[] }
+  | { type: 'ARCHIVE' | 'TRASH' }
 
 export type BulkItemResult = { ticketId: string; key: string | null; ok: boolean; code: string | null; message: string | null }
 export type BulkResult = { total: number; succeeded: number; failed: number; items: BulkItemResult[] }
@@ -962,11 +970,17 @@ export type SearchResponse = {
 
 // ---- Inbox, Watch, notification preferences -----------------------------------------------------------
 
-export type InboxFilter = 'all' | 'mentions' | 'replies' | 'watching' | 'reminders' | 'invitations' | 'assignments'
+/** The notification types a person can filter by. A notification has one kind; a type is a set of kinds. */
+export type InboxType = 'mentions' | 'replies' | 'assignments' | 'reminders' | 'invitations'
+/** What the server accepts as `filter`: one type, `all`, or the old `watching` (kept for old links; not a type shown to people). */
+export type InboxFilter = 'all' | InboxType | 'watching'
+/** `inbox` lists what is not archived; `archived` lists the archive. */
+export type InboxView = 'inbox' | 'archived'
 export type InboxKind =
   | 'mention.user'
   | 'reply.direct'
   | 'thread.reply'
+  | 'dm.message'
   | 'ticket.assigned'
   | 'ticket.commented'
   | 'ticket.status_changed'
@@ -986,6 +1000,8 @@ export type InboxItem = {
   kind: InboxKind
   state: 'UNREAD' | 'READ' | 'ARCHIVED'
   snoozedUntil: string | null
+  /** When it was archived (only archived items; creation time for items archived before it was recorded). */
+  archivedAt: string | null
   createdAt: string
   version: number
   actor: { id: string; name: string } | null
@@ -994,6 +1010,18 @@ export type InboxItem = {
   link: InboxLink
 }
 export type InboxPage = { items: InboxItem[]; nextCursor: string | null; unreadCount: number; unreadCapped: boolean }
+
+/** One browser/device that receives Web Push for the signed-in person. The keys are never returned. */
+export type PushSubscriptionInfo = {
+  id: string
+  endpoint: string
+  label: string | null
+  userAgent: string | null
+  createdAt: string
+  lastSuccessAt: string | null
+  lastFailureAt: string | null
+}
+export type PushPublicKey = { configured: boolean; publicKey: string | null }
 
 export type WatchTargetKind = 'TICKET' | 'PROJECT' | 'THREAD'
 export type Subscription = { targetKind: WatchTargetKind; targetId: string; mode: 'AUTO' | 'EXPLICIT' | 'OPT_OUT' | 'NONE'; watching: boolean; version: number }
@@ -1008,7 +1036,7 @@ export type NotificationPreferences = { level: 'ALL' | 'DIRECT_ONLY'; dnd: DndSe
 // ---- Project permissions -------------------------------------------------------------------------------
 
 /** What a person may do in a Project, from the least to the most. */
-export type ProjectRole = 'ADMIN' | 'EDITOR' | 'VIEWER'
+export type ProjectRole = Schema<'ProjectRole'>
 
 export type PermissionMember = {
   userId: string
@@ -1136,10 +1164,10 @@ export type TicketReference = {
 }
 
 /** One working interval of a day, `HH:MM` in the calendar's zone (`24:00` ends at midnight). */
-export type CalendarInterval = { from: string; to: string }
-export type CalendarHoliday = { date: string; name: string }
+export type CalendarInterval = Schema<'CalendarInterval'>
+export type CalendarHoliday = Schema<'CalendarHoliday'>
 export type CalendarWeekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
-export type CalendarWeek = Partial<Record<CalendarWeekday, CalendarInterval[]>>
+export type CalendarWeek = Schema<'CalendarWeek'>
 export type CalendarDefinition = { version: 1; week: CalendarWeek; holidays: CalendarHoliday[] }
 
 export type ProjectCalendar = {
@@ -1165,7 +1193,7 @@ export type ProjectCalendarView = {
  * an estimate adds nothing and is counted in `unestimated`, never as 0; one written in another unit
  * is counted in `otherUnit`.
  */
-export type ReportAmount = { value: string; tasks: number; unestimated: number; otherUnit: number }
+export type ReportAmount = Schema<'ReportAmount'>
 
 /** Why a Sprint has no figures: it never started, or it started before baselines carried estimates. */
 export type ReportUnavailable = 'NO_BASELINE' | 'LEGACY_BASELINE'
@@ -1247,19 +1275,9 @@ export type VelocityReport = {
   sprints: VelocityEntry[]
 }
 
-export type StatusDistribution = { notStarted: number; inProgress: number; done: number; canceled: number; total: number }
+export type StatusDistribution = Schema<'StatusDistribution'>
 
-export type ProjectStatusSummary = {
-  generatedAt: string
-  scope: 'VISIBLE_TICKETS'
-  today: string
-  dueWithinDays: number
-  distribution: StatusDistribution
-  /** Open Tasks with a blocking predecessor that is not done and not waived. */
-  blocked: number
-  /** Open Tickets due within `dueWithinDays` days from `today`, overdue ones included. */
-  dueSoon: number
-}
+export type ProjectStatusSummary = Schema<'ProjectStatusSummary'>
 
 /** A Ticket of the Gantt list. `revisionNo` is what a schedule edit must quote. */
 export type GanttItem = {
@@ -1323,10 +1341,14 @@ export type InvitationSummary = {
   teamName: string | null
   /** The invited Team's state now; null when the invitation names no Team. */
   teamStatus: 'ACTIVE' | 'ARCHIVED' | 'GONE' | null
+  /** The last e-mail delivery of the link; null when none was recorded. It never changes `status`. */
+  emailStatus: InvitationEmailStatus | null
+  emailAttemptedAt: string | null
+  emailError: string | null
 }
 
 export type TeamRole = 'MANAGER' | 'MEMBER'
-export type TeamMember = { userId: string; displayName: string; email: string; role: TeamRole }
+export type TeamMember = Schema<'TeamMember'>
 
 export type AuditRecord = {
   id: string
@@ -1352,4 +1374,44 @@ export type TrashedTicket = {
   trashedAt: string
   trashedBy: string | null
   trashedByName: string | null
+  /** Also archived: a restore brings it back archived. */
+  archived: boolean
+  /** When the automatic purge takes it; null when the automatic purge is off. */
+  purgeAt?: string | null
+  /** While children or dependencies keep it from being purged, automatically or by hand. */
+  purgeBlocked?: 'children' | 'dependencies' | null
 }
+
+export type ArchivedTicket = {
+  id: string
+  key: string
+  title: string
+  hierarchyKind: string
+  archivedAt: string
+  archivedBy: string | null
+  archivedByName: string | null
+  /** Also in the trash: restore it from there before unarchiving. */
+  trashed: boolean
+}
+
+/** When the finished work of a completed Sprint is archived, if that was scheduled for later. */
+export type SprintArchiveSchedule = Schema<'SprintArchiveSchedule'>
+
+/** What to archive when a Sprint is completed. `AT` carries a future instant. */
+export type SprintArchiveChoice = { mode: 'NONE' } | { mode: 'IMMEDIATE' } | { mode: 'AT'; at: string }
+
+/** A Project that would be left without its last active direct admin, or without any admin, if the person left. */
+export type ProjectImpact = Schema<'ProjectImpact'>
+/** A private channel that would be left without an active manager if the person left. */
+export type ChannelImpact = Schema<'ChannelImpact'>
+export type OffboardingImpact = Schema<'OffboardingImpact'>
+export type FormerAdmin = Schema<'FormerAdmin'>
+/** A Project nobody who can act administers; a Workspace owner or admin may name an admin for it. */
+export type ProjectWithoutAdmin = Schema<'ProjectWithoutAdmin'>
+export type AdminRecovery = Schema<'AdminRecovery'>
+export type FormerManager = Schema<'FormerManager'>
+/** A private channel nobody who can act manages; a Workspace owner or admin may name a manager for it. */
+export type ChannelWithoutManager = Schema<'ChannelWithoutManager'>
+export type ManagerRecovery = Schema<'ManagerRecovery'>
+/** A private channel of a Project as its admin sees it, readable or not: names and counts, never messages. */
+export type ManagedChannel = Schema<'ManagedChannel'>

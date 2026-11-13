@@ -60,7 +60,8 @@ test: ## cargo test against DATABASE_URL and PENFII_TEST_OPENSEARCH_URL (a test 
 	: "$${DATABASE_URL:?set DATABASE_URL to a throwaway test database}"
 	: "$${PENFII_TEST_OPENSEARCH_URL:?set PENFII_TEST_OPENSEARCH_URL (OpenSearch with analysis-nori)}"
 	case "$$DATABASE_URL" in *:5432/*) echo "refusing: port 5432 is the development database" >&2; exit 1;; esac
-	cargo test --locked
+	# The database named in DATABASE_URL has no schema. Checked queries read server/.sqlx.
+	SQLX_OFFLINE=true cargo test --locked
 
 integration: ## cargo test in throwaway PostgreSQL + OpenSearch containers (same as CI)
 	PG="penfii-check-pg-$$$$"
@@ -74,7 +75,15 @@ integration: ## cargo test in throwaway PostgreSQL + OpenSearch containers (same
 	for _ in $$(seq 1 60); do docker exec "$$PG" pg_isready -U penfii >/dev/null 2>&1 && break; sleep 1; done
 	for _ in $$(seq 1 90); do curl -fs "http://127.0.0.1:$$OS_PORT/_cluster/health" >/dev/null 2>&1 && break; sleep 2; done
 	sleep 2
-	DATABASE_URL="postgres://penfii:penfii@127.0.0.1:$$PG_PORT/penfii" PENFII_TEST_OPENSEARCH_URL="http://127.0.0.1:$$OS_PORT" cargo test --locked
+	command -v sqlx >/dev/null || { echo "sqlx is not installed: make tools" >&2; exit 1; }
+	export DATABASE_URL="postgres://penfii:penfii@127.0.0.1:$$PG_PORT/penfii"
+	export PENFII_TEST_OPENSEARCH_URL="http://127.0.0.1:$$OS_PORT"
+	export PENFII_MIGRATION_DATABASE_URL="$$DATABASE_URL"
+	# Checked queries compile from server/.sqlx. The database in DATABASE_URL is empty until migrated,
+	# and prepare --check then compares .sqlx with that migrated database.
+	SQLX_OFFLINE=true cargo run -q -p admin-cli -- migrate
+	env -u SQLX_OFFLINE cargo sqlx prepare --check --workspace -- --locked
+	SQLX_OFFLINE=true cargo test --locked
 
 opensearch: ## Start (or create once) the persistent local OpenSearch + nori on 127.0.0.1:9200
 	docker image inspect $(OS_IMAGE) >/dev/null 2>&1 || docker build -q -t $(OS_IMAGE) ../docker/opensearch >/dev/null
@@ -100,7 +109,10 @@ run: ## core-api on 127.0.0.1:8080 against the local PostgreSQL, MinIO and OpenS
 	export PENFII_S3_ENDPOINT="$${PENFII_S3_ENDPOINT:-http://127.0.0.1:9000}" PENFII_S3_BUCKET="$${PENFII_S3_BUCKET:-penfii}"
 	export PENFII_OPENSEARCH_URL="$${PENFII_OPENSEARCH_URL:-http://127.0.0.1:9200}"
 	export DATABASE_URL="$${DATABASE_URL:-postgres://penfii:penfii@127.0.0.1:5432/penfii}"
-	export PENFII_BIND="$${PENFII_BIND:-127.0.0.1:8080}" PENFII_COOKIE_SECURE=0 PENFII_DEV_RETURN_INVITE_TOKEN=1
+	# core-api does not migrate: the schema is applied first, with the migration credential (the one
+	# development role unless PENFII_MIGRATION_DATABASE_URL says otherwise).
+	PENFII_MIGRATION_DATABASE_URL="$${PENFII_MIGRATION_DATABASE_URL:-$$DATABASE_URL}" cargo run -q -p admin-cli -- migrate
+	export PENFII_BIND="$${PENFII_BIND:-127.0.0.1:8080}" PENFII_COOKIE_SECURE=0
 	export PENFII_DEV_SEED="$${PENFII_DEV_SEED:-1}"
 	export PENFII_SESSION_TTL_SECONDS=43200 PENFII_MESSAGE_BODY_MAX_BYTES=65536 PENFII_INVITE_TTL_SECONDS=604800
 	export PENFII_FILE_MAX_BYTES=104857600 PENFII_MESSAGE_FILE_MAX_COUNT=10 PENFII_MESSAGE_FILE_MAX_BYTES=209715200

@@ -6,6 +6,7 @@ import type { DocContent, DocPage, ReferenceKind } from '@penfii/contracts'
 import { formatMessageTime } from '../../format'
 import { api } from '../../api'
 import { Button, Dialog, EmptyState } from '../../design/ui'
+import { notify } from '../../design/notices'
 import { MoreIcon } from '../../design/icons'
 import { useI18n } from '../../i18n/I18nProvider'
 import { queryKeys } from '../../queryKeys'
@@ -156,12 +157,12 @@ export function DocPageView({
     }
   }
 
-  async function save() {
-    if (!editing || saving) return
+  async function save(): Promise<boolean> {
+    if (!editing || saving) return false
     const title = titleDraft.trim()
-    if (!title) return
+    if (!title) return false
     const content = controller.current?.getContent()
-    if (!content) return
+    if (!content) return false
     setSaving(true)
     setProblem(null)
     try {
@@ -170,23 +171,31 @@ export function DocPageView({
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.all.docTree(workspaceId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.docVersions(docId) }),
-        queryClient.invalidateQueries({ queryKey: ['doc-references'] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.all.docReferences }),
       ])
       setEditing(null)
       setEditorDirty(false)
-      setNotice(t('docs.saved'))
+      notify({ message: t('docs.saved') })
+      return true
     } catch (error) {
       if (isApiError(error) && error.status === 409) setProblem('conflict')
       else if (isApiError(error) && (error.status === 422 || error.status === 400)) setProblem('invalid')
       else setProblem('error')
+      return false
     } finally {
       setSaving(false)
     }
   }
 
-  function cancel() {
+  /** Finishing a draft with nothing changed just leaves; with changes it asks: save and finish, keep editing, or discard. */
+  function finish() {
     if (dirty) setDiscardOpen(true)
     else leaveEditing()
+  }
+  async function saveAndFinish() {
+    // Whatever the outcome, the question is answered; a failure is shown on the page with Retry.
+    setDiscardOpen(false)
+    await save()
   }
   function leaveEditing() {
     setDiscardOpen(false)
@@ -221,6 +230,21 @@ export function DocPageView({
     }
   }
 
+  // Ctrl+S (⌘S) saves the draft, as the editor's shortcut list says; the browser's own "save page" never opens while editing.
+  const canSave = editing !== null && !saving && titleDraft.trim().length > 0 && (dirty || problem !== null)
+  const latestSave = useRef(save)
+  useEffect(() => { latestSave.current = save })
+  useEffect(() => {
+    if (!editing) return
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== 's') return
+      event.preventDefault()
+      if (canSave) void latestSave.current()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [editing, canSave])
+
   if (page.isPending) return <p className="hint doc-page" role="status">{t('loading')}</p>
   if (page.isError) {
     return (
@@ -240,7 +264,7 @@ export function DocPageView({
 
   return (
     <article className="doc-page">
-      <div className="doc-topbar">
+      <div className={editing ? 'doc-topbar is-editing' : 'doc-topbar'}>
         <nav className="doc-crumb" aria-label={t('nav.docs')}>
           <span>{t('nav.docs')}</span>
           <span aria-hidden="true">›</span>
@@ -248,12 +272,12 @@ export function DocPageView({
         </nav>
         {editing ? (
           <>
-            <span id="doc-edit-status" role="status" className={['doc-status', titleDraft.trim() ? '' : 'is-warning'].filter(Boolean).join(' ')}>
-              {!titleDraft.trim() ? t('docs.save.needsTitle') : dirty ? t('docs.edit.unsaved') : t('docs.edit.clean')}
+            <span id="doc-edit-status" role={problem !== null ? 'alert' : 'status'} className={['doc-status', titleDraft.trim() && problem === null ? '' : 'is-warning'].filter(Boolean).join(' ')}>
+              {!titleDraft.trim() ? t('docs.save.needsTitle') : saving ? t('docs.edit.savingStatus') : problem !== null ? t('docs.edit.failedStatus') : dirty ? t('docs.edit.unsaved') : t('docs.edit.savedAt', { time: formatMessageTime(data.updatedAt, locale) })}
             </span>
             <span className="doc-actions">
-              <Button variant="ghost" onClick={cancel} disabled={saving}>{t('docs.cancel')}</Button>
-              <Button onClick={() => void save()} disabled={saving || !titleDraft.trim()} title={titleDraft.trim() ? undefined : t('docs.save.needsTitle')}>{saving ? t('docs.saving') : t('docs.save')}</Button>
+              <Button variant="ghost" onClick={finish} disabled={saving}>{t('docs.edit.finish')}</Button>
+              <Button onClick={() => void save()} disabled={saving || !titleDraft.trim() || (!dirty && problem === null)} title={titleDraft.trim() ? undefined : t('docs.save.needsTitle')}>{saving ? t('docs.saving') : problem === 'error' ? t('docs.save.retry') : t('docs.save')}</Button>
             </span>
           </>
         ) : (
@@ -310,7 +334,6 @@ export function DocPageView({
         </div>
       ) : null}
       {problem === 'invalid' ? <p className="doc-banner is-danger" role="alert">{t('docs.save.invalid')}</p> : null}
-      {problem === 'error' ? <p className="doc-banner is-danger" role="alert">{t('docs.save.error')}</p> : null}
       {notice ? <p className="doc-banner" role="status">{notice}</p> : null}
       {!data.title.trim() && !editing ? <p className="doc-banner is-warning" role="status">{t('docs.untitled.notice')}</p> : null}
       {!canEdit ? <p className="doc-banner">{t('docs.readOnly')}</p> : null}
@@ -348,12 +371,13 @@ export function DocPageView({
         onRestore={canEdit ? (versionNo) => void restore(versionNo) : undefined}
         openReference={open}
       />
-      <UnsavedBlocker active={dirty} />
-      <Dialog open={discardOpen} title={t('docs.edit.discard.title')} onClose={() => setDiscardOpen(false)}>
-        <p>{t('docs.edit.discard.body')}</p>
+      <UnsavedBlocker active={dirty} onSave={save} />
+      <Dialog open={discardOpen} title={t('docs.edit.finish.title')} onClose={() => setDiscardOpen(false)}>
+        <p>{t('docs.edit.finish.body')}</p>
         <div className="dialog-actions">
           <Button variant="ghost" onClick={() => setDiscardOpen(false)}>{t('docs.edit.keep')}</Button>
-          <Button onClick={leaveEditing}>{t('docs.edit.discard.confirm')}</Button>
+          <Button variant="secondary" onClick={leaveEditing}>{t('docs.edit.discardAndLeave')}</Button>
+          <Button onClick={() => void saveAndFinish()} disabled={!titleDraft.trim()}>{t('docs.edit.saveAndFinish')}</Button>
         </div>
       </Dialog>
       <Dialog open={templateOpen} title={t('docs.template.save')} onClose={() => setTemplateOpen(false)} presentation="full">

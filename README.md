@@ -7,7 +7,7 @@ Penfii is a self-hosted workspace that keeps **chat, projects and tickets, and d
 ## What it does
 
 - **Chat**: public and private channels, direct messages, threads, reactions, read state, drafts, file attachments (S3-compatible storage), rich text.
-- **Projects and tickets**: workflow states, Epic / Task / Subtask hierarchy, Board / List / Table views and saved views, labels, dependencies, Sprints, Milestones, estimates and schedules, a timeline, revision history with restore, a trash with administrative purge.
+- **Projects and tickets**: workflow states, Epic / Task / Subtask hierarchy, Board / List / Table views and saved views, labels, dependencies, Sprints, Milestones, estimates and schedules, a timeline, revision history with restore, archive (also when a Sprint is completed), a trash with administrative purge.
 - **Docs**: a page tree, saved versions with restore, templates, comments, and references between pages and tickets.
 - **Search** over messages, tickets, docs and files on OpenSearch with the Korean analyzer (`nori`). Results are re-checked against PostgreSQL permissions before they are shown.
 - **Attention**: Inbox, Watch, Later, Reminders and notification preferences.
@@ -23,7 +23,7 @@ The server decides what each person may see and do, from PostgreSQL, on every re
 |---|---|
 | [`server/`](server) | The Rust server: HTTP API, WebSockets, background workers, and the `admin-cli` operator tool. `server/api/openapi.json` is the API description. |
 | [`client/`](client) | The web app (React, TypeScript, Vite), organized as an npm workspace of `apps/` and `packages/`. |
-| [`database/`](database) | The PostgreSQL schema as SQL migrations (`database/migrations`). They are compiled into the server and applied on start-up. |
+| [`database/`](database) | The PostgreSQL schema as SQL migrations (`database/migrations`). They are compiled into the server and applied by `admin-cli migrate` (in the Compose stack, the one-shot `db-setup` service); core-api only checks them. |
 | [`docker/`](docker) | The Docker Compose self-hosting stack and the Dockerfiles for the server, the web app and OpenSearch. |
 | [`docs/`](docs) | Documentation. |
 | [`.github/`](.github) | CI, Dependabot, issue forms and the pull request template. |
@@ -38,9 +38,10 @@ cd penfii/docker
 cp .env.example .env     # replace every CHANGE_ME, set PENFII_PUBLIC_URL
 docker compose up -d --build
 docker compose run --rm admin-cli bootstrap \
-  --email owner@example.com --password 'choose-a-long-password' \
-  --display-name Owner --workspace-name Penfii --time-zone Asia/Seoul
+  --email owner@example.com --display-name Owner --workspace-name Penfii --time-zone Asia/Seoul
 ```
+
+The command asks for the owner's password (15 to 128 characters; it is not shown on screen). For a script, pipe it in with `--password-stdin` instead; do not put it on the command line.
 
 Then open <http://localhost:8080> and sign in. The full guide, including data, backups, TLS and upgrades, is in [docs/self-hosting.md](docs/self-hosting.md).
 

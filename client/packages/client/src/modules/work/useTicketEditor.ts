@@ -4,7 +4,7 @@ import { newIdempotencyKey } from '@penfii/api-client'
 import type { EstimateInput, ScheduleInput, Ticket } from '@penfii/contracts'
 import { api } from '../../api'
 import { queryKeys } from '../../queryKeys'
-import { refreshTicket } from './refresh'
+import { noteOwnChange, refreshTicket } from './refresh'
 import { errorCode, errorDetails } from './ticketModel'
 
 export type TicketPatch = {
@@ -37,9 +37,12 @@ export function useTicketEditor(ticket: Ticket | undefined) {
   const [conflict, setConflict] = useState<TicketConflict | null>(null)
 
   const store = useCallback(
-    async (updated: Ticket) => {
+    (updated: Ticket) => {
       queryClient.setQueryData(queryKeys.ticket(updated.id), updated)
-      await refreshTicket(queryClient, updated.id, updated.projectId)
+      // The answer is what this tab changed; the feed's echo of it need not be read again. The lists are read in the
+      // background: the controls are free as soon as the server has answered.
+      noteOwnChange(updated.id, updated.revisionNo)
+      void refreshTicket(queryClient, updated.id, updated.projectId)
     },
     [queryClient],
   )
@@ -61,7 +64,7 @@ export function useTicketEditor(ticket: Ticket | undefined) {
       try {
         const updated = await api.updateTicket(current.id, { ...patch, expectedRevision: current.revisionNo }, newIdempotencyKey())
         setConflict(null)
-        await store(updated)
+        store(updated)
         return true
       } catch (cause) {
         const code = errorCode(cause)
@@ -102,12 +105,12 @@ export function useTicketEditor(ticket: Ticket | undefined) {
       setFailure(null)
       try {
         const updated = await api.changeTicketStatus(ticket.id, { expectedRevision: ticket.revisionNo, statusId }, newIdempotencyKey())
-        await store(updated)
+        store(updated)
         return true
       } catch (cause) {
         const code = errorCode(cause)
         setFailure(code === 'unfinished_subtasks' ? 'unfinished' : code === 'dependency_blocked' ? (Number(errorDetails(cause).canceledBlockers ?? 0) > 0 ? 'blockedCanceled' : 'blocked') : code === 'version_conflict' ? 'moveConflict' : code === 'forbidden' ? 'notAllowed' : 'move')
-        await refreshTicket(queryClient, ticket.id, ticket.projectId)
+        void refreshTicket(queryClient, ticket.id, ticket.projectId)
         return false
       } finally {
         setBusy(false)
@@ -123,11 +126,11 @@ export function useTicketEditor(ticket: Ticket | undefined) {
       setBusy(true)
       setFailure(null)
       try {
-        await store(await action())
+        store(await action())
         return true
       } catch {
         setFailure('save')
-        await refreshTicket(queryClient, ticket.id, ticket.projectId)
+        void refreshTicket(queryClient, ticket.id, ticket.projectId)
         return false
       } finally {
         setBusy(false)

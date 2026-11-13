@@ -2,7 +2,7 @@
 //! session management. `require_recent_authentication` is the single check that replaces
 //! "type the current password".
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use penfii_contracts::User;
 use serde::Serialize;
 use sqlx::{PgPool, Row};
@@ -21,6 +21,9 @@ pub struct AuthSession {
     pub auth_method: Option<String>,
     pub authenticated_at: Option<DateTime<Utc>>,
     pub last_reauth_at: Option<DateTime<Utc>>,
+    /// How long ago `last_reauth_at` was, by the database's clock when the session was read. The
+    /// reauthentication window is judged with this, not with the clock of this process.
+    pub reauth_age_seconds: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -49,6 +52,8 @@ pub fn reauth_window_seconds() -> i64 {
 pub async fn authenticate_session(pool: &PgPool, token: &str) -> Result<AuthSession, CoreError> {
     let row = sqlx::query(
         "SELECT s.id AS session_id, s.auth_method, s.authenticated_at, s.last_reauth_at,
+                EXTRACT(EPOCH FROM (now() - s.last_reauth_at))::float8 AS reauth_age_seconds,
+                EXTRACT(EPOCH FROM (now() - s.last_seen_at))::float8 AS seen_age_seconds,
                 s.last_seen_at,
                 u.id, u.email, u.display_name, u.locale, u.time_zone, u.email_verified_at,
                 u.job_title, u.status_emoji, u.status_text, u.status_clear_at,
@@ -65,12 +70,14 @@ pub async fn authenticate_session(pool: &PgPool, token: &str) -> Result<AuthSess
     .await?
     .ok_or(CoreError::Unauthenticated)?;
     let id: Uuid = row.try_get("session_id")?;
-    let last_seen: Option<DateTime<Utc>> = row.try_get("last_seen_at")?;
-    if last_seen.is_none_or(|seen| Utc::now() - seen > Duration::seconds(60)) {
-        sqlx::query("UPDATE penfii.sessions SET last_seen_at = now() WHERE id = $1")
-            .bind(id)
-            .execute(pool)
-            .await?;
+    let seen_age: Option<f64> = row.try_get("seen_age_seconds")?;
+    if seen_age.is_none_or(|age| age > 60.0) {
+        sqlx::query!(
+            "UPDATE penfii.sessions SET last_seen_at = now() WHERE id = $1",
+            id
+        )
+        .execute(pool)
+        .await?;
     }
     let user = user_from_row(UserRow {
         id: row.try_get("id")?,
@@ -91,6 +98,7 @@ pub async fn authenticate_session(pool: &PgPool, token: &str) -> Result<AuthSess
         auth_method: row.try_get("auth_method")?,
         authenticated_at: row.try_get("authenticated_at")?,
         last_reauth_at: row.try_get("last_reauth_at")?,
+        reauth_age_seconds: row.try_get("reauth_age_seconds")?,
     })
 }
 
@@ -119,21 +127,32 @@ pub async fn reauth_methods(pool: &PgPool, user_id: Uuid) -> Result<Vec<String>,
     Ok(methods)
 }
 
+/// Whether the session was signed in or reauthenticated within the window. No query: a caller that
+/// holds a transaction asks this, and only when it is `false` lets go of its connection before it
+/// calls [`reauth_required`].
+pub(crate) fn recently_authenticated(session: &AuthSession) -> bool {
+    let window = reauth_window_seconds() as f64;
+    session.reauth_age_seconds.is_some_and(|age| age <= window)
+}
+
+/// The refusal for a session that is not recently authenticated, with the ways it can authenticate
+/// again. It reads on the pool, so it is not called while a transaction is open.
+pub(crate) async fn reauth_required(pool: &PgPool, session: &AuthSession) -> CoreError {
+    match reauth_methods(pool, session.user.id).await {
+        Ok(methods) => CoreError::ReauthRequired { methods },
+        Err(error) => error,
+    }
+}
+
 /// Ok when the session was signed in or reauthenticated within the window.
 pub async fn require_recent_authentication(
     pool: &PgPool,
     session: &AuthSession,
 ) -> Result<(), CoreError> {
-    let window = Duration::seconds(reauth_window_seconds());
-    if session
-        .last_reauth_at
-        .is_some_and(|at| Utc::now() - at <= window)
-    {
+    if recently_authenticated(session) {
         return Ok(());
     }
-    Err(CoreError::ReauthRequired {
-        methods: reauth_methods(pool, session.user.id).await?,
-    })
+    Err(reauth_required(pool, session).await)
 }
 
 /// Checks the account password (throttled per account) without touching the session.

@@ -96,6 +96,8 @@ pub async fn seed_dev(pool: &PgPool) -> Result<bool, CoreError> {
     if !cfg!(debug_assertions) {
         return Ok(false);
     }
+    // One hash for every development account, computed before the transaction opens.
+    let dev_hash = identity::hash_password("1234").await?;
     let mut tx = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(4815162342)")
         .execute(&mut *tx)
@@ -110,7 +112,7 @@ pub async fn seed_dev(pool: &PgPool) -> Result<bool, CoreError> {
     let mut our_ids = Vec::with_capacity(ours.len());
     let mut owner_id = None;
     for (email, username, display_name, owner) in ours {
-        let user_id = ensure_user(&mut tx, email, username, display_name).await?;
+        let user_id = ensure_user(&mut tx, email, username, display_name, &dev_hash).await?;
         if owner {
             owner_id = Some(user_id);
         }
@@ -149,7 +151,8 @@ pub async fn seed_dev(pool: &PgPool) -> Result<bool, CoreError> {
         .await?;
     }
 
-    let outsider_id = ensure_user(&mut tx, "erin@outside.dev", "erin", "Erin Cho").await?;
+    let outsider_id =
+        ensure_user(&mut tx, "erin@outside.dev", "erin", "Erin Cho", &dev_hash).await?;
     let outside_id =
         ensure_workspace(&mut tx, outsider_id, "erin@outside.dev", "Outside Org").await?;
     sqlx::query(
@@ -171,11 +174,11 @@ async fn ensure_user(
     email: &str,
     username: &str,
     display_name: &str,
+    password_hash: &str,
 ) -> Result<Uuid, CoreError> {
     let (email, email_key) = identity::normalize_email(email)?;
     let display_name = identity::require_label(display_name, "displayName")?;
     let username_key = username.trim().to_lowercase();
-    let password_hash = identity::hash_password("1234").await?;
     let user_id: Uuid = sqlx::query_scalar(
         "INSERT INTO penfii.users
             (id, email, email_key, email_verified_at, display_name, locale, time_zone, username, username_key)

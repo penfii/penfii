@@ -5,7 +5,7 @@ use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use http_body_util::BodyExt;
+use futures_util::StreamExt;
 use penfii_contracts::{CreateFileRequest, FileObject};
 use penfii_core::CoreError;
 use penfii_core::files::{self, StoredFile};
@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
-use crate::extract::{self, Actor, RawJson};
+use crate::extract::{Actor, Body as JsonBody};
 
 use axum::Router;
 use axum::routing::{delete, get, post, put};
@@ -30,9 +30,8 @@ async fn create_file(
     State(state): State<AppState>,
     Path(workspace_id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    JsonBody(body): JsonBody<CreateFileRequest>,
 ) -> Result<Response, ApiError> {
-    let body: CreateFileRequest = extract::parse(raw)?;
     let file = files::begin_upload(
         &state.pool,
         &state.limits,
@@ -68,16 +67,24 @@ async fn upload_file(
     if max == 0 || declared == 0 || declared > max {
         return Err(CoreError::validation("file size is outside the configured limit").into());
     }
-    let collected = request
-        .into_body()
-        .collect()
-        .await
-        .map_err(|_| CoreError::validation("file body could not be read"))?;
-    let bytes = collected.to_bytes();
-    if bytes.len() != declared {
+    // The body is kept in the chunks it arrives in: joining them into one buffer would copy the whole file, and
+    // the store writes the chunks as they are. More than was declared is refused as soon as it shows.
+    let mut chunks = Vec::new();
+    let mut received = 0usize;
+    let mut stream = request.into_body().into_data_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| CoreError::validation("file body could not be read"))?;
+        received += chunk.len();
+        if received > declared {
+            return Err(CoreError::validation("file size does not match").into());
+        }
+        chunks.push(chunk);
+    }
+    if received != declared {
         return Err(CoreError::validation("file size does not match").into());
     }
-    let file = files::finish_upload(&state.pool, store, &state.limits, user_id, id, &bytes).await?;
+    let body = files::UploadBody::from_chunks(chunks);
+    let file = files::finish_upload(&state.pool, store, &state.limits, user_id, id, &body).await?;
     Ok(Json(file_object(file)).into_response())
 }
 

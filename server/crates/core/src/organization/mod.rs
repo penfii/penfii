@@ -5,7 +5,7 @@ pub use departments::{
     create_department, delete_department, list_departments, place_team, update_department,
 };
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use penfii_contracts::{
     AcceptInvitationResponse, Channel, DirectMessage, Invitation, PrefixCheck, PrefixStatus,
     Project, Space, Team, TeamMemberInput, User, Workspace,
@@ -20,6 +20,7 @@ use crate::conversation;
 use crate::error::CoreError;
 use crate::identity::{self, require_label};
 use crate::limits::Limits;
+use crate::mail::Mailer;
 use crate::ticket_key;
 
 #[derive(sqlx::FromRow)]
@@ -372,23 +373,30 @@ pub async fn create_workspace(
     })
 }
 
+/// Invites an e-mail address to a Workspace, or re-issues the open invitation it already has.
+///
+/// There is at most one open invitation (not accepted, not revoked) per Workspace and e-mail, which
+/// the database guarantees, and only an unexpired one counts: an expired one is closed when the
+/// address is invited again. Inviting an address that has a valid open invitation replaces the token
+/// of that row, so the old link stops working at once, and starts the expiry again; the role and
+/// Team of the request are applied.
+///
+/// The answer always carries the link token (the only time it exists in the clear: only its hash is
+/// stored). When e-mail is set up the link is also sent, after the invitation is committed; a
+/// failure to send is reported in `email_status` and never fails the invitation.
+#[allow(clippy::too_many_arguments)]
 pub async fn create_invitation(
     pool: &PgPool,
     limits: &Limits,
+    mailer: Option<&Mailer>,
     actor_id: Uuid,
     workspace_id: Uuid,
     email: &str,
     role: &str,
     team_id: Option<Uuid>,
 ) -> Result<Invitation, CoreError> {
-    let ttl = limits.invite_ttl_seconds.ok_or_else(|| {
-        CoreError::conflict("invite_ttl_unconfigured", "invite ttl is not configured")
-    })?;
-    if !matches!(role, "OWNER" | "ADMIN" | "MEMBER") {
-        return Err(CoreError::validation(
-            "role must be OWNER, ADMIN, or MEMBER",
-        ));
-    }
+    let ttl = invite_ttl(limits)?;
+    crate::membership::validate_role(role)?;
     let (_, email_key) = identity::normalize_email(email)?;
     let mut tx = pool.begin().await?;
     let actor_role = access::require_member(&mut tx, workspace_id, actor_id).await?;
@@ -420,15 +428,54 @@ pub async fn create_invitation(
             )
         }
     };
-    let (token, token_hash) = identity::new_secret();
-    let id = Uuid::new_v4();
-    let expires_at = Utc::now() + Duration::seconds(ttl);
+    // An expired invitation is not an open one: nobody can accept it and it must not stand in the way
+    // of a new invitation. It is closed here (the list shows it as EXPIRED because it is closed after
+    // its expiry), which leaves room for the new one in the unique index of open invitations.
     sqlx::query(
-        "INSERT INTO penfii.workspace_invitations
-            (id, workspace_id, email_key, role, token_hash, expires_at, created_by, team_id, team_name)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        "UPDATE penfii.workspace_invitations SET revoked_at = now()
+         WHERE workspace_id = $1 AND email_key = $2
+           AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at <= now()",
     )
-    .bind(id)
+    .bind(workspace_id)
+    .bind(&email_key)
+    .execute(&mut *tx)
+    .await?;
+    // An admin does not take over a valid open invitation for an owner or admin.
+    let existing_role: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM penfii.workspace_invitations
+         WHERE workspace_id = $1 AND email_key = $2
+           AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()
+         FOR UPDATE",
+    )
+    .bind(workspace_id)
+    .bind(&email_key)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if actor_role != "OWNER" && existing_role.as_deref().is_some_and(|r| r != "MEMBER") {
+        return Err(CoreError::forbidden(
+            "only a workspace owner re-issues an invitation for an owner or admin",
+        ));
+    }
+    let (token, token_hash) = identity::new_secret();
+    // The expiry is stored and later compared with the database's `now()`, so it is made there.
+    let expires_at: DateTime<Utc> = sqlx::query_scalar("SELECT now() + make_interval(secs => $1)")
+        .bind(ttl as f64)
+        .fetch_one(&mut *tx)
+        .await?;
+    // One statement, so two requests at the same moment end as one row: the second becomes a
+    // re-issue of what the first wrote.
+    let (id, inserted): (Uuid, bool) = sqlx::query_as(
+        "INSERT INTO penfii.workspace_invitations
+            (id, workspace_id, email_key, role, token_hash, expires_at, created_by, team_id, team_name, email_status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (workspace_id, email_key) WHERE accepted_at IS NULL AND revoked_at IS NULL
+         DO UPDATE SET token_hash = EXCLUDED.token_hash, expires_at = EXCLUDED.expires_at,
+                       role = EXCLUDED.role, team_id = EXCLUDED.team_id,
+                       team_name = EXCLUDED.team_name, email_status = EXCLUDED.email_status,
+                       email_attempted_at = NULL, email_error = NULL
+         RETURNING id, (xmax = 0) AS inserted",
+    )
+    .bind(Uuid::new_v4())
     .bind(workspace_id)
     .bind(&email_key)
     .bind(role)
@@ -437,28 +484,256 @@ pub async fn create_invitation(
     .bind(actor_id)
     .bind(team_id)
     .bind(&team_name)
-    .execute(&mut *tx)
+    .bind(initial_email_status(mailer))
+    .fetch_one(&mut *tx)
     .await?;
     admin::audit(
         &mut tx,
         workspace_id,
         Some(actor_id),
-        "invitation.created",
+        if inserted {
+            "invitation.created"
+        } else {
+            "invitation.reissued"
+        },
         "INVITATION",
         id,
         json!({"email": email_key, "role": role, "teamId": team_id}),
     )
     .await?;
     tx.commit().await?;
-    Ok(Invitation {
-        id,
-        workspace_id,
-        email: email_key,
-        role: role.to_string(),
-        expires_at,
-        invite_token: limits.dev_return_invite_token.then_some(token),
+    deliver(
+        pool,
+        mailer,
+        Issued {
+            id,
+            workspace_id,
+            email: email_key,
+            role: role.to_string(),
+            expires_at,
+            token,
+            token_hash,
+            team_id,
+            reissued: !inserted,
+            actor_id,
+            ttl_seconds: ttl,
+        },
+    )
+    .await
+}
+
+/// Gives an open invitation (also one that has expired) a new link and a new expiry, and sends it
+/// again when e-mail is set up. The link it had stops working. This is the "send again" of the
+/// invitation list: the token is not stored, so the same link cannot be shown or sent twice.
+/// An owner re-issues any; an admin only invitations for plain members.
+pub async fn reissue_invitation(
+    pool: &PgPool,
+    limits: &Limits,
+    mailer: Option<&Mailer>,
+    actor_id: Uuid,
+    workspace_id: Uuid,
+    invitation_id: Uuid,
+) -> Result<Invitation, CoreError> {
+    let ttl = invite_ttl(limits)?;
+    let mut tx = pool.begin().await?;
+    let actor_role = admin::require_manager(&mut tx, workspace_id, actor_id).await?;
+    let invitation = sqlx::query_as::<_, ReissueRow>(
+        "SELECT email_key, role, team_id, accepted_at, revoked_at
+         FROM penfii.workspace_invitations
+         WHERE id = $1 AND workspace_id = $2 FOR UPDATE",
+    )
+    .bind(invitation_id)
+    .bind(workspace_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(CoreError::NotFound)?;
+    let ReissueRow {
+        email_key,
+        role,
         team_id,
+        accepted_at,
+        revoked_at,
+    } = invitation;
+    if actor_role != "OWNER" && role != "MEMBER" {
+        return Err(CoreError::forbidden(
+            "only a workspace owner re-issues an invitation for an owner or admin",
+        ));
+    }
+    if accepted_at.is_some() || revoked_at.is_some() {
+        return Err(CoreError::conflict(
+            "invitation_not_open",
+            "only an invitation that is neither accepted nor revoked can be sent again",
+        ));
+    }
+    if admin::is_active_member_email(&mut tx, workspace_id, &email_key).await? {
+        return Err(CoreError::conflict(
+            "already_member",
+            "this e-mail already belongs to a member of the workspace",
+        ));
+    }
+    let (token, token_hash) = identity::new_secret();
+    let expires_at: DateTime<Utc> = sqlx::query_scalar("SELECT now() + make_interval(secs => $1)")
+        .bind(ttl as f64)
+        .fetch_one(&mut *tx)
+        .await?;
+    sqlx::query(
+        "UPDATE penfii.workspace_invitations
+         SET token_hash = $2, expires_at = $3, email_status = $4,
+             email_attempted_at = NULL, email_error = NULL
+         WHERE id = $1",
+    )
+    .bind(invitation_id)
+    .bind(&token_hash)
+    .bind(expires_at)
+    .bind(initial_email_status(mailer))
+    .execute(&mut *tx)
+    .await?;
+    admin::audit(
+        &mut tx,
+        workspace_id,
+        Some(actor_id),
+        "invitation.reissued",
+        "INVITATION",
+        invitation_id,
+        json!({"email": email_key, "role": role, "teamId": team_id}),
+    )
+    .await?;
+    tx.commit().await?;
+    deliver(
+        pool,
+        mailer,
+        Issued {
+            id: invitation_id,
+            workspace_id,
+            email: email_key,
+            role,
+            expires_at,
+            token,
+            token_hash,
+            team_id,
+            reissued: true,
+            actor_id,
+            ttl_seconds: ttl,
+        },
+    )
+    .await
+}
+
+/// The delivery state a link starts with: already known without e-mail, decided by the send with it.
+fn initial_email_status(mailer: Option<&Mailer>) -> Option<&'static str> {
+    mailer.is_none().then_some("NOT_CONFIGURED")
+}
+
+#[derive(sqlx::FromRow)]
+struct ReissueRow {
+    email_key: String,
+    role: String,
+    team_id: Option<Uuid>,
+    accepted_at: Option<DateTime<Utc>>,
+    revoked_at: Option<DateTime<Utc>>,
+}
+
+fn invite_ttl(limits: &Limits) -> Result<i64, CoreError> {
+    limits.invite_ttl_seconds.ok_or_else(|| {
+        CoreError::conflict("invite_ttl_unconfigured", "invite ttl is not configured")
     })
+}
+
+/// An invitation that has just been written, with the secret that only exists now.
+struct Issued {
+    id: Uuid,
+    workspace_id: Uuid,
+    email: String,
+    role: String,
+    expires_at: DateTime<Utc>,
+    token: String,
+    token_hash: Vec<u8>,
+    team_id: Option<Uuid>,
+    reissued: bool,
+    /// Who sent it (named in the mail) and the lifetime of the link (told in the mail).
+    actor_id: Uuid,
+    ttl_seconds: i64,
+}
+
+/// The delivery half of an invitation, after its transaction is committed: without e-mail the state
+/// is already `NOT_CONFIGURED`; with it the message is sent (one try, bounded by the mailer's
+/// timeout) and the outcome is recorded. Nothing here can undo or fail the invitation, and the
+/// outcome is written only while the invitation still has the token that was sent, so a link
+/// issued in the meantime keeps its own state.
+async fn deliver(
+    pool: &PgPool,
+    mailer: Option<&Mailer>,
+    issued: Issued,
+) -> Result<Invitation, CoreError> {
+    let (email_status, email_error) = match mailer {
+        None => ("NOT_CONFIGURED", None),
+        Some(mailer) => {
+            let outcome = send_invitation(pool, mailer, &issued).await;
+            let (status, error) = match outcome {
+                Ok(()) => ("SENT", None),
+                Err(reason) => ("FAILED", Some(reason)),
+            };
+            let recorded = sqlx::query(
+                "UPDATE penfii.workspace_invitations
+                 SET email_status = $3, email_attempted_at = now(), email_error = $4
+                 WHERE id = $1 AND token_hash = $2",
+            )
+            .bind(issued.id)
+            .bind(&issued.token_hash)
+            .bind(status)
+            .bind(error)
+            .execute(pool)
+            .await;
+            if let Err(error) = recorded {
+                tracing::warn!(%error, invitation = %issued.id, "the delivery state of an invitation was not recorded");
+            }
+            (status, error)
+        }
+    };
+    Ok(Invitation {
+        id: issued.id,
+        workspace_id: issued.workspace_id,
+        email: issued.email,
+        role: issued.role,
+        expires_at: issued.expires_at,
+        invite_token: issued.token,
+        team_id: issued.team_id,
+        reissued: issued.reissued,
+        email_status: email_status.to_string(),
+        email_error: email_error.map(str::to_string),
+    })
+}
+
+async fn send_invitation(
+    pool: &PgPool,
+    mailer: &Mailer,
+    issued: &Issued,
+) -> Result<(), &'static str> {
+    // What the message names, and its language: the invited person's own when they have an account,
+    // else the server's default.
+    let (workspace, inviter, locale): (String, String, Option<String>) = sqlx::query_as(
+        "SELECT w.name, u.display_name,
+                COALESCE(NULLIF((SELECT locale FROM penfii.users WHERE email_key = $3), ''),
+                         (SELECT default_locale FROM penfii.instance_settings))
+         FROM penfii.workspaces w, penfii.users u
+         WHERE w.id = $1 AND u.id = $2",
+    )
+    .bind(issued.workspace_id)
+    .bind(issued.actor_id)
+    .bind(&issued.email)
+    .fetch_one(pool)
+    .await
+    .map_err(|_| "the message could not be prepared")?;
+    let link = mailer.link(&format!("/invite/{}", issued.token));
+    let days = ((issued.ttl_seconds + 86_399) / 86_400).max(1);
+    let (subject, body) = crate::mail::invitation_message(
+        locale.as_deref().unwrap_or("ko-KR"),
+        &workspace,
+        &inviter,
+        &link,
+        days,
+    );
+    mailer.send(&issued.email, &subject, body).await
 }
 
 /// What the holder of an invitation link may know before signing in: the invited e-mail, the Workspace
@@ -498,6 +773,85 @@ pub async fn preview_invitation(
     })
 }
 
+/// What was worked out about an invitation before its transaction opens: the password checks are
+/// Argon2 and must not hold a connection or a row lock. The transaction takes the locks, finds the
+/// same rows again and only then uses this; when they changed in between it answers [`Accept::Stale`]
+/// and the invitation is prepared again.
+struct Prepared {
+    /// An open invitation was found for the token.
+    invite_seen: bool,
+    /// The account of the invited e-mail, as it was read: its id and password hash.
+    account: Option<(Uuid, Option<String>)>,
+    /// The existing account accepts as itself (its recent session or the right password).
+    accepted_as_account: bool,
+    /// The hash of the new account's password, when there was no account yet.
+    new_hash: Option<String>,
+}
+
+enum Accept {
+    Done(Box<AcceptInvitationResponse>),
+    Stale,
+}
+
+async fn prepare_acceptance(
+    pool: &PgPool,
+    token_hash: &[u8],
+    password: &str,
+    session: Option<&identity::AuthSession>,
+) -> Result<Prepared, CoreError> {
+    let mut prepared = Prepared {
+        invite_seen: false,
+        account: None,
+        accepted_as_account: false,
+        new_hash: None,
+    };
+    let email_key: Option<String> = sqlx::query_scalar(
+        "SELECT email_key FROM penfii.workspace_invitations
+         WHERE token_hash = $1 AND revoked_at IS NULL AND accepted_at IS NULL AND expires_at > now()",
+    )
+    .bind(token_hash)
+    .fetch_optional(pool)
+    .await?;
+    let Some(email_key) = email_key else {
+        return Ok(prepared);
+    };
+    prepared.invite_seen = true;
+    let account: Option<(Uuid, Option<chrono::DateTime<Utc>>, Option<String>)> = sqlx::query_as(
+        "SELECT u.id, u.disabled_at, p.password_hash
+         FROM penfii.users u
+         LEFT JOIN penfii.password_credentials p ON p.user_id = u.id
+         WHERE u.email_key = $1",
+    )
+    .bind(&email_key)
+    .fetch_optional(pool)
+    .await?;
+    match account {
+        Some((id, disabled_at, hash)) => {
+            if disabled_at.is_none() {
+                prepared.accepted_as_account = match session {
+                    // An existing account accepts as itself: its own session (recently authenticated,
+                    // because this adds a Workspace), or the password inline. The token alone is never
+                    // enough.
+                    Some(session) if session.user.id == id => {
+                        identity::require_recent_authentication(pool, session).await?;
+                        true
+                    }
+                    _ => match hash.as_deref() {
+                        Some(hash) => identity::verify_password(password, hash).await,
+                        None => false,
+                    },
+                };
+            }
+            prepared.account = Some((id, hash));
+        }
+        None => {
+            identity::validate_new_password(password, &email_key)?;
+            prepared.new_hash = Some(identity::hash_password(password).await?);
+        }
+    }
+    Ok(prepared)
+}
+
 pub async fn accept_invitation(
     pool: &PgPool,
     token: &str,
@@ -510,6 +864,27 @@ pub async fn accept_invitation(
         use sha2::{Digest, Sha256};
         Sha256::digest(token.as_bytes()).to_vec()
     };
+    // The rows can only change between the preparation and the transaction when the invitation or
+    // the account is being changed at the same moment; a few rounds are plenty.
+    for _ in 0..3 {
+        let prepared = prepare_acceptance(pool, &token_hash, password, session).await?;
+        match accept_prepared(pool, &token_hash, &display_name, &prepared).await? {
+            Accept::Done(accepted) => return Ok(*accepted),
+            Accept::Stale => continue,
+        }
+    }
+    Err(CoreError::Internal(
+        "invitation kept changing while it was accepted".into(),
+    ))
+}
+
+async fn accept_prepared(
+    pool: &PgPool,
+    token_hash: &[u8],
+    display_name: &str,
+    prepared: &Prepared,
+) -> Result<Accept, CoreError> {
+    let display_name = display_name.to_string();
     let mut tx = pool.begin().await?;
     let invite = sqlx::query_as::<_, InviteRow>(
         "SELECT id, workspace_id, email_key, role, team_id, team_name
@@ -520,12 +895,21 @@ pub async fn accept_invitation(
            AND expires_at > now()
          FOR UPDATE",
     )
-    .bind(&token_hash)
+    .bind(token_hash)
     .fetch_optional(&mut *tx)
     .await?;
     let Some(invite) = invite else {
-        return Err(CoreError::NotFound);
+        // Nothing open when this was prepared either: the answer is "not found". Otherwise it was
+        // accepted or revoked in between and the preparation is stale.
+        return if prepared.invite_seen {
+            Ok(Accept::Stale)
+        } else {
+            Err(CoreError::NotFound)
+        };
     };
+    if !prepared.invite_seen {
+        return Ok(Accept::Stale);
+    }
 
     let existing = sqlx::query_as::<_, ExistingUser>(
         "SELECT u.id, u.email, u.display_name, u.locale, u.time_zone, u.email_verified_at,
@@ -550,19 +934,10 @@ pub async fn accept_invitation(
                 "account already exists",
             ));
         }
-        let by_session = match session {
-            Some(session) if session.user.id == existing.id => {
-                identity::require_recent_authentication(pool, session).await?;
-                true
-            }
-            _ => false,
-        };
-        let matches = by_session
-            || match existing.password_hash.as_deref() {
-                Some(hash) => identity::verify_password(password, hash).await,
-                None => false,
-            };
-        if !matches {
+        if prepared.account.as_ref() != Some(&(existing.id, existing.password_hash.clone())) {
+            return Ok(Accept::Stale);
+        }
+        if !prepared.accepted_as_account {
             return Err(CoreError::conflict(
                 "account_exists",
                 "account already exists",
@@ -589,13 +964,19 @@ pub async fn accept_invitation(
             }
         }
     } else {
-        identity::validate_new_password(password, &invite.email_key)?;
+        let Some(new_hash) = prepared
+            .new_hash
+            .as_deref()
+            .filter(|_| prepared.account.is_none())
+        else {
+            return Ok(Accept::Stale);
+        };
         let user_id = identity::insert_user(
             &mut tx,
             &invite.email_key,
             &invite.email_key,
             &display_name,
-            password,
+            new_hash,
             true,
         )
         .await?;
@@ -609,33 +990,16 @@ pub async fn accept_invitation(
         )
     };
 
-    // A person who was removed earlier comes back with the invited role; an active member keeps theirs.
-    let joined = sqlx::query(
-        "INSERT INTO penfii.workspace_members (workspace_id, user_id, role, state)
-         VALUES ($1, $2, $3, 'ACTIVE')
-         ON CONFLICT (workspace_id, user_id) DO UPDATE
-            SET state = 'ACTIVE', role = EXCLUDED.role, deactivated_at = NULL, joined_at = now()
-            WHERE penfii.workspace_members.state = 'INACTIVE'",
+    // The shared join rule: a person who was removed earlier comes back with the invited role, an
+    // active member keeps theirs (the invitation is still accepted).
+    crate::membership::join_workspace(
+        &mut tx,
+        invite.workspace_id,
+        user.id,
+        &invite.role,
+        crate::membership::JoinPath::Invitation(invite.id),
     )
-    .bind(invite.workspace_id)
-    .bind(user.id)
-    .bind(&invite.role)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected()
-        > 0;
-    if joined {
-        admin::audit(
-            &mut tx,
-            invite.workspace_id,
-            Some(user.id),
-            "member.joined",
-            "USER",
-            user.id,
-            json!({"userId": user.id, "role": invite.role, "invitationId": invite.id}),
-        )
-        .await?;
-    }
+    .await?;
     sqlx::query(
         "UPDATE penfii.workspace_invitations
          SET accepted_at = now(), accepted_user_id = $2
@@ -656,11 +1020,11 @@ pub async fn accept_invitation(
     )
     .await?;
     tx.commit().await?;
-    Ok(AcceptInvitationResponse {
+    Ok(Accept::Done(Box::new(AcceptInvitationResponse {
         user,
         workspace_id,
         team,
-    })
+    })))
 }
 
 /// The Team step of an accepted invitation, in the transaction of the Workspace membership: the person
@@ -869,9 +1233,9 @@ pub async fn create_project(
         .execute(&mut *tx)
         .await;
     if let Err(error) = inserted {
-        let taken = error
-            .as_database_error()
-            .is_some_and(|db| db.code().as_deref() == Some("23505"));
+        let taken = error.as_database_error().is_some_and(|db| {
+            db.is_unique_violation() && db.constraint() == Some("projects_ticket_prefix_ci_idx")
+        });
         return Err(if taken {
             CoreError::conflict(
                 "ticket_prefix_taken",
@@ -1135,13 +1499,15 @@ pub async fn space(pool: &PgPool, user_id: Uuid, workspace_id: Uuid) -> Result<S
     .await?;
     let channels = sqlx::query_as::<_, ChannelRow>(&format!(
         "SELECT ch.id, c.workspace_id, ch.name, ch.description, ch.topic, ch.visibility,
-                ch.team_id, ch.project_id, ch.allow_member_invites, ch.archived_at, cm.role
+                ch.team_id, ch.project_id, ch.allow_member_invites, ch.archived_at,
+                {} AS role
          FROM penfii.channels ch
          JOIN penfii.conversations c ON c.id = ch.id
          LEFT JOIN penfii.channel_members cm
             ON cm.channel_id = ch.id AND cm.user_id = $2
          WHERE c.workspace_id = $1 AND {}
          ORDER BY ch.name, ch.id",
+        crate::access::CHANNEL_ROLE,
         crate::access::CHANNEL_READABLE
     ))
     .bind(workspace_id)

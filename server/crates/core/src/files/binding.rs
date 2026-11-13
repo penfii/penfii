@@ -6,11 +6,13 @@
 
 use std::collections::HashSet;
 
+use serde_json::json;
 use sqlx::PgConnection;
 use uuid::Uuid;
 
-use super::{ObjectStore, StoredFile, load_file_for_update};
+use super::{StoredFile, load_file_for_update};
 use crate::error::CoreError;
+use crate::events;
 
 /// Files that sit on a message, in a Doc page or on a Ticket.
 pub(crate) async fn bound_anywhere(
@@ -75,8 +77,11 @@ pub(crate) async fn claim_unbound(
     Ok(file)
 }
 
-/// Marks files deleted for good (a later upload of the same key can never revive them), cancels
-/// their intake work and returns the object keys the caller must remove from storage.
+/// Marks files deleted for good (a later upload of the same key can never revive them) and cancels
+/// their intake work. The object is not removed here: the same transaction records
+/// `storage.file_delete`, and the storage consumer deletes the object after commit. The key is
+/// per file (`workspaces/{workspace}/files/{id}/g{generation}`), unique, and never reused.
+/// Returned keys are the objects that were retired; callers do not delete them themselves.
 pub(crate) async fn retire(
     conn: &mut PgConnection,
     ids: &[Uuid],
@@ -84,11 +89,11 @@ pub(crate) async fn retire(
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    let keys: Vec<String> = sqlx::query_scalar(
+    let rows: Vec<(Uuid, Uuid, String)> = sqlx::query_as(
         "UPDATE penfii.files
          SET deleted_at = now(), generation = generation + 1
          WHERE id = ANY($1) AND deleted_at IS NULL
-         RETURNING storage_key",
+         RETURNING id, workspace_id, storage_key",
     )
     .bind(ids)
     .fetch_all(&mut *conn)
@@ -101,20 +106,18 @@ pub(crate) async fn retire(
     .bind(ids)
     .execute(&mut *conn)
     .await?;
-    Ok(keys)
-}
-
-/// Removes the objects of retired files. Callers that can still roll back (purge, removing an
-/// attachment) run it before they commit: a failure aborts the change so it can be repeated, and
-/// deleting an object that is already gone succeeds, so no object outlives its row.
-pub(crate) async fn delete_objects(
-    store: Option<&ObjectStore>,
-    keys: &[String],
-) -> Result<(), CoreError> {
-    if let Some(store) = store {
-        for key in keys {
-            store.delete(key).await.map_err(CoreError::Internal)?;
-        }
+    for (id, workspace_id, _) in &rows {
+        // The consumer reads the row. Facts stay empty: a key in the event could name the wrong object.
+        events::emit_simple(
+            conn,
+            *workspace_id,
+            "FILE",
+            *id,
+            "storage.file_delete",
+            None,
+            json!({}),
+        )
+        .await?;
     }
-    Ok(())
+    Ok(rows.into_iter().map(|(_, _, key)| key).collect())
 }

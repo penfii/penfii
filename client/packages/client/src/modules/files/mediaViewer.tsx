@@ -70,6 +70,24 @@ export function MediaViewerHost() {
         event.preventDefault()
         event.stopPropagation()
         closeMediaViewer()
+      } else if (event.key === 'Tab') {
+        // Focus stays inside the viewer: Tab at the last control goes to the first, Shift+Tab at the first to the last.
+        const viewer = document.querySelector<HTMLElement>('.media-viewer')
+        const controls = viewer ? [...viewer.querySelectorAll<HTMLElement>('button, a[href], video[controls]')].filter((control) => !control.hasAttribute('disabled')) : []
+        const first = controls[0]
+        const last = controls[controls.length - 1]
+        if (!first || !last) return
+        const active = document.activeElement
+        if (!viewer?.contains(active)) {
+          event.preventDefault()
+          first.focus()
+        } else if (event.shiftKey && active === first) {
+          event.preventDefault()
+          last.focus()
+        } else if (!event.shiftKey && active === last) {
+          event.preventDefault()
+          first.focus()
+        }
       } else if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && !(event.target instanceof HTMLMediaElement)) {
         event.preventDefault()
         step(event.key === 'ArrowLeft' ? -1 : 1)

@@ -48,7 +48,7 @@ export function DependenciesSection({ ticket, ctx, onOpen }: { ticket: Ticket; c
   if (query.isPending) return null
   if (query.isError) return <p className="hint" role="alert">{t('work.dep.loadError')}</p>
   const deps = query.data
-  const canEdit = deps.canEdit && ctx.board.canEdit
+  const canEdit = deps.canEdit && ctx.board.canEdit && !ticket.archivedAt
   const taken = new Set([ticket.id, ...deps.blockedBy.map((edge) => edge.ticket.id)])
   const tickets = allTickets(ctx.board)
   const byId = new Map(tickets.map((item) => [item.id, item]))

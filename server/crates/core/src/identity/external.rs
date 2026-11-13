@@ -3,7 +3,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use rand::RngCore;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -232,7 +232,7 @@ pub async fn start(
         "INSERT INTO penfii.auth_attempts
             (id, state_hash, provider_id, intent, pkce_verifier, nonce, user_id, session_id,
              invitation_id, return_to, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now() + make_interval(secs => $11))",
     )
     .bind(Uuid::new_v4())
     .bind(token_hash(&state))
@@ -244,7 +244,7 @@ pub async fn start(
     .bind(session_id)
     .bind(invitation_id)
     .bind(safe_return_to(input.return_to))
-    .bind(Utc::now() + Duration::seconds(ATTEMPT_TTL_SECONDS))
+    .bind(ATTEMPT_TTL_SECONDS as f64)
     .execute(pool)
     .await?;
 
@@ -854,7 +854,7 @@ pub struct AdminIdentities {
     pub identities: Vec<IdentityInfo>,
 }
 
-/// `admin-cli user identities`: what a locked-out account can still sign in with.
+/// `admin-cli user-identities`: what a locked-out account can still sign in with.
 pub async fn admin_identities(pool: &PgPool, email: &str) -> Result<AdminIdentities, CoreError> {
     let (_, email_key) = normalize_email(email)?;
     let row = sqlx::query(
@@ -875,7 +875,7 @@ pub async fn admin_identities(pool: &PgPool, email: &str) -> Result<AdminIdentit
     })
 }
 
-/// `admin-cli user set-password`: sets or replaces the password, ends every session of the
+/// `admin-cli user-set-password`: sets or replaces the password, ends every session of the
 /// account and writes an audit entry.
 pub async fn admin_set_password(
     pool: &PgPool,
@@ -884,19 +884,22 @@ pub async fn admin_set_password(
 ) -> Result<Uuid, CoreError> {
     let (email, email_key) = normalize_email(email)?;
     super::validate_new_password(password, &email)?;
+    // Hashed before the transaction (and its row lock) opens.
+    let password_hash = super::hash_password(password).await?;
     let mut tx = pool.begin().await?;
-    let user_id: Uuid =
-        sqlx::query_scalar("SELECT id FROM penfii.users WHERE email_key = $1 FOR UPDATE")
-            .bind(&email_key)
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or(CoreError::NotFound)?;
+    let user_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM penfii.users WHERE email_key = $1 AND kind = 'HUMAN' FOR UPDATE",
+    )
+    .bind(&email_key)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(CoreError::NotFound)?;
     sqlx::query(
         "INSERT INTO penfii.password_credentials (user_id, password_hash) VALUES ($1, $2)
          ON CONFLICT (user_id) DO UPDATE SET password_hash = $2, changed_at = now()",
     )
     .bind(user_id)
-    .bind(super::hash_password(password).await?)
+    .bind(&password_hash)
     .execute(&mut *tx)
     .await?;
     sqlx::query(

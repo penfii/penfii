@@ -1,4 +1,3 @@
-use axum::Json;
 use axum::extract::{FromRequest, FromRequestParts, OptionalFromRequestParts, Query, Request};
 use axum::http::request::Parts;
 use http::HeaderMap;
@@ -11,6 +10,10 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::error::ApiError;
 
+/// The body as `serde_json::Value`, for the handlers whose idempotency key is a hash of the body as it came (the
+/// conversation commands): the hash needs the document itself, unknown fields and number spellings included, so
+/// it cannot be rebuilt from a typed value. Refused like [`Body`] when it is not JSON, is not
+/// `Content-Type: application/json`, is too large, or names a key twice in one object.
 pub struct RawJson(pub Value);
 
 impl<S> FromRequest<S> for RawJson
@@ -20,10 +23,125 @@ where
     type Rejection = ApiError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        match Json::<Value>::from_request(req, state).await {
-            Ok(Json(value)) => Ok(Self(value)),
-            Err(error) => Err(ApiError::validation(format!("invalid json: {error}"))),
+        let bytes = json_bytes(req, state).await?;
+        serde_json::from_slice::<Value>(&bytes)
+            .map(Self)
+            .map_err(|error| ApiError::validation(format!("invalid json: {error}")))
+    }
+}
+
+/// The JSON body of a request, read into `T` directly: the bytes are read once into the type, not first into a
+/// `serde_json::Value` and then converted. Used by every handler that has no use for the body as JSON text.
+///
+/// A body is refused with `400 validation` when it is not JSON, is not `Content-Type: application/json`, is
+/// too large (the default limit of the `Json` extractor), does not fit `T`, **or names the same key twice in
+/// one object, anywhere in it** (inside a free-form value too). A repeated key has no one meaning, and the
+/// last one used to win silently.
+pub struct Body<T>(pub T);
+
+impl<S, T> FromRequest<S> for Body<T>
+where
+    S: Send + Sync,
+    T: DeserializeOwned,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        let bytes = json_bytes(req, state).await?;
+        serde_json::from_slice::<T>(&bytes)
+            .map(Body)
+            .map_err(|error| ApiError::validation(error.to_string()))
+    }
+}
+
+/// The bytes of a JSON request body, checked to be JSON of the right content type that repeats no key.
+async fn json_bytes<S: Send + Sync>(
+    req: Request,
+    state: &S,
+) -> Result<axum::body::Bytes, ApiError> {
+    let json = req
+        .headers()
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            value
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase()
+        })
+        .is_some_and(|mime| {
+            mime == "application/json"
+                || (mime.starts_with("application/") && mime.ends_with("+json"))
+        });
+    if !json {
+        return Err(ApiError::validation(
+            "invalid json: expected `Content-Type: application/json`",
+        ));
+    }
+    let bytes = axum::body::Bytes::from_request(req, state)
+        .await
+        .map_err(|error| ApiError::validation(format!("invalid json: {error}")))?;
+    serde_json::from_slice::<NoDuplicateKeys>(&bytes)
+        .map_err(|error| ApiError::validation(format!("invalid json: {error}")))?;
+    Ok(bytes)
+}
+
+/// Walks a JSON document and fails on an object that repeats a key. It keeps nothing but the keys of the object
+/// it is in.
+struct NoDuplicateKeys;
+
+impl<'de> serde::Deserialize<'de> for NoDuplicateKeys {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(WalkJson)?;
+        Ok(Self)
+    }
+}
+
+struct WalkJson;
+
+impl<'de> serde::de::Visitor<'de> for WalkJson {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("any JSON value")
+    }
+
+    fn visit_bool<E>(self, _: bool) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_i64<E>(self, _: i64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_u64<E>(self, _: u64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_f64<E>(self, _: f64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_str<E>(self, _: &str) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_unit<E>(self) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        while seq.next_element::<NoDuplicateKeys>()?.is_some() {}
+        Ok(())
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        let mut seen = std::collections::HashSet::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if seen.contains(&key) {
+                return Err(serde::de::Error::custom(format!("duplicate key `{key}`")));
+            }
+            seen.insert(key);
+            map.next_value::<NoDuplicateKeys>()?;
         }
+        Ok(())
     }
 }
 

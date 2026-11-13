@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use argon2::Argon2;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use penfii_contracts::User;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
@@ -18,6 +18,7 @@ use crate::limits::Limits;
 mod external;
 mod password;
 pub mod provider;
+mod reset;
 mod session;
 mod throttle;
 
@@ -30,12 +31,17 @@ pub use external::{
 pub use password::{
     MAX_CHARS as PASSWORD_MAX_CHARS, MIN_CHARS as PASSWORD_MIN_CHARS, validate_new_password,
 };
+pub use reset::{
+    admit_request as admit_reset_request, confirm as confirm_password_reset,
+    process_request as process_reset_request,
+};
 
 pub use session::{
     AuthSession, SessionInfo, authenticate_session, check_address, list_sessions, reauth_methods,
     reauth_window_seconds, reauth_with_password, record_address_failure,
     require_recent_authentication, revoke_other_sessions, revoke_session,
 };
+pub(crate) use session::{reauth_required, recently_authenticated};
 
 #[derive(Debug)]
 pub struct LoginResult {
@@ -134,16 +140,17 @@ pub async fn login_from(
     throttle::check(pool, "login", &email_key).await?;
     throttle::check(pool, "login_account_ip", &pair_key).await?;
 
-    let mut tx = pool.begin().await?;
+    // The row is read on the pool and no connection is held while the password is hashed: the
+    // transaction opens only for the session insert (see the transaction rules in docs/development.md).
     let row = sqlx::query_as::<_, LoginRow>(
         "SELECT u.id, u.email, u.display_name, u.locale, u.time_zone, u.email_verified_at,
                 u.disabled_at, p.password_hash
          FROM penfii.users u
          LEFT JOIN penfii.password_credentials p ON p.user_id = u.id
-         WHERE u.email_key = $1",
+         WHERE u.email_key = $1 AND u.kind = 'HUMAN'",
     )
     .bind(&email_key)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(pool)
     .await?;
 
     let valid = match &row {
@@ -157,7 +164,6 @@ pub async fn login_from(
         }
     };
     if !valid {
-        drop(tx);
         let throttle_limits = &limits.login_throttle;
         throttle::record_failure_limit(pool, "login", &email_key, throttle_limits.account).await?;
         throttle::record_failure_limit(
@@ -171,6 +177,7 @@ pub async fn login_from(
         return Err(CoreError::Unauthenticated);
     }
     let user = row.expect("valid login has a user");
+    let mut tx = pool.begin().await?;
     let token = insert_session(&mut tx, user.id, ttl, "password", device).await?;
     let summary = user_from_login(&user);
     tx.commit().await?;
@@ -226,6 +233,8 @@ pub async fn bootstrap(pool: &PgPool, input: BootstrapInput) -> Result<Bootstrap
     let display_name = require_label(&input.display_name, "displayName")?;
     let workspace_name = require_label(&input.workspace_name, "workspaceName")?;
     let time_zone = require_label(&input.time_zone, "timeZone")?;
+    // Hashed before the transaction opens: no connection is held while Argon2 runs.
+    let password_hash = hash_password(&input.password).await?;
 
     let mut tx = pool.begin().await?;
     sqlx::query("LOCK TABLE penfii.users IN EXCLUSIVE MODE")
@@ -245,7 +254,7 @@ pub async fn bootstrap(pool: &PgPool, input: BootstrapInput) -> Result<Bootstrap
         &email,
         &email_key,
         &display_name,
-        &input.password,
+        &password_hash,
         true,
     )
     .await?;
@@ -267,6 +276,7 @@ pub async fn create_account(
     let display_name = require_label(&input.display_name, "displayName")?;
     let workspace_name = require_label(&input.workspace_name, "workspaceName")?;
     let time_zone = require_label(&input.time_zone, "timeZone")?;
+    let password_hash = hash_password(&input.password).await?;
 
     let mut tx = pool.begin().await?;
     let user_id = insert_user(
@@ -274,7 +284,7 @@ pub async fn create_account(
         &email,
         &email_key,
         &display_name,
-        &input.password,
+        &password_hash,
         true,
     )
     .await?;
@@ -317,6 +327,10 @@ pub async fn update_profile(
         }
         _ => require_recent_authentication(pool, session).await?,
     }
+    let next_hash = match next_password {
+        Some(password) => Some(hash_password(password).await?),
+        None => None,
+    };
 
     let mut tx = pool.begin().await?;
     let updated = sqlx::query(
@@ -337,7 +351,7 @@ pub async fn update_profile(
         }
         return Err(error.into());
     }
-    if let Some(password) = next_password {
+    if let Some(password_hash) = next_hash {
         // Setting a password where none exists is part of the same reauthenticated action.
         sqlx::query(
             "INSERT INTO penfii.password_credentials (user_id, password_hash)
@@ -345,7 +359,7 @@ pub async fn update_profile(
              ON CONFLICT (user_id) DO UPDATE SET password_hash = $2, changed_at = now()",
         )
         .bind(user_id)
-        .bind(hash_password(password).await?)
+        .bind(password_hash)
         .execute(&mut *tx)
         .await?;
     }
@@ -364,20 +378,19 @@ pub(crate) async fn insert_user(
     email: &str,
     email_key: &str,
     display_name: &str,
-    password: &str,
+    password_hash: &str,
     verified: bool,
 ) -> Result<Uuid, CoreError> {
     let user_id = Uuid::new_v4();
-    let verified_at = if verified { Some(Utc::now()) } else { None };
     let inserted = sqlx::query(
         "INSERT INTO penfii.users
             (id, email, email_key, email_verified_at, display_name)
-         VALUES ($1, $2, $3, $4, $5)",
+         VALUES ($1, $2, $3, CASE WHEN $4 THEN now() END, $5)",
     )
     .bind(user_id)
     .bind(email)
     .bind(email_key)
-    .bind(verified_at)
+    .bind(verified)
     .bind(display_name)
     .execute(&mut *conn)
     .await;
@@ -390,7 +403,6 @@ pub(crate) async fn insert_user(
         }
         return Err(error.into());
     }
-    let password_hash = hash_password(password).await?;
     sqlx::query(
         "INSERT INTO penfii.password_credentials (user_id, password_hash)
          VALUES ($1, $2)",
@@ -494,18 +506,17 @@ pub(crate) async fn insert_session(
     device: Option<&str>,
 ) -> Result<String, CoreError> {
     let (token, hash) = new_secret();
-    let expires_at = Utc::now() + Duration::seconds(ttl_seconds);
     sqlx::query(
         "INSERT INTO penfii.sessions
             (id, user_id, token_hash, expires_at,
              authenticated_at, last_reauth_at, last_reauth_method, auth_method, last_seen_at,
              device_label)
-         VALUES ($1, $2, $3, $4, now(), now(), $5, $5, now(), $6)",
+         VALUES ($1, $2, $3, now() + make_interval(secs => $4), now(), now(), $5, $5, now(), $6)",
     )
     .bind(Uuid::new_v4())
     .bind(user_id)
     .bind(hash)
-    .bind(expires_at)
+    .bind(ttl_seconds as f64)
     .bind(method)
     .bind(device)
     .execute(&mut *conn)
@@ -670,7 +681,7 @@ pub async fn set_avatar(
     pool: &PgPool,
     store: &ObjectStore,
     user_id: Uuid,
-    bytes: &[u8],
+    bytes: bytes::Bytes,
     declared_mime: &str,
 ) -> Result<(), CoreError> {
     if bytes.is_empty() || bytes.len() > AVATAR_MAX_BYTES {
@@ -682,7 +693,7 @@ pub async fn set_avatar(
             ),
         ));
     }
-    let mime = sniff_image(bytes)?;
+    let mime = sniff_image(&bytes)?;
     let declared = declared_mime
         .split(';')
         .next()
@@ -714,7 +725,10 @@ pub async fn set_avatar(
             .checked_add(1)
             .ok_or_else(|| CoreError::Internal("avatar revision".into()))?;
         let key = avatar_object_key(user_id, next);
-        store.put(&key, bytes).await.map_err(CoreError::Internal)?;
+        store
+            .put(&key, bytes.clone())
+            .await
+            .map_err(CoreError::Internal)?;
         let updated = sqlx::query(
             "UPDATE penfii.users
              SET avatar_object_key = $2, avatar_mime = $3, avatar_revision = $4

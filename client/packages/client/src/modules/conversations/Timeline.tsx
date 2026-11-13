@@ -165,7 +165,7 @@ export function Timeline({
     const conversation = live.snapshot
     if (live.snapshotError) {
       if (isNotFound(live.snapshotError)) onNotFoundRef.current()
-      else setError(errorText(live.snapshotError, t('error.generic')))
+      else setError(errorText(live.snapshotError, t('error.generic'), t('error.dbUnavailable')))
       setLoading(false)
       return
     }
@@ -196,7 +196,7 @@ export function Timeline({
       .catch((caught: unknown) => {
         if (cancelled || gen !== loadGeneration.current) return
         if (isNotFound(caught)) onNotFoundRef.current()
-        else setError(errorText(caught, t('error.generic')))
+        else setError(errorText(caught, t('error.generic'), t('error.dbUnavailable')))
         setLoading(false)
       })
     return () => {
@@ -286,7 +286,7 @@ export function Timeline({
       olderRequested.current = null
       follow.releaseHold()
       if (isNotFound(caught)) onNotFound()
-      else setError(errorText(caught, t('error.generic')))
+      else setError(errorText(caught, t('error.generic'), t('error.dbUnavailable')))
     }
   }
   const loadOlderRef = useRef(loadOlder)

@@ -63,11 +63,21 @@ pub struct Invitation {
     pub email: String,
     pub role: String,
     pub expires_at: DateTime<Utc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub invite_token: Option<String>,
+    /// The secret of the invitation link (`/invite/<token>`). It is in the answer that creates or
+    /// re-issues the invitation and nowhere else: only its hash is stored.
+    pub invite_token: String,
     /// The Team the new member is meant to join, if any (resolved when the invitation is accepted).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub team_id: Option<Uuid>,
+    /// True when the e-mail already had an open invitation: it was given a new link and expiry
+    /// instead of a second invitation being made.
+    pub reissued: bool,
+    /// The e-mail delivery of the link, separate from the invitation itself: `NOT_CONFIGURED` (the
+    /// server sends no e-mail; copy the link), `SENT` or `FAILED`.
+    pub email_status: String,
+    /// Why a `FAILED` delivery failed, in a fixed short phrase.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,6 +212,9 @@ pub struct Ticket {
     pub revision_no: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Set while the Ticket is archived: kept for the record, read-only, out of the default lists.
+    #[serde(default)]
+    pub archived_at: Option<DateTime<Utc>>,
 }
 
 /// A Task estimate. `value` is a decimal string with at most two decimals (`"5"`, `"0.5"`) so a sum
@@ -542,6 +555,10 @@ pub struct Reaction {
     pub user_ids: Vec<Uuid>,
 }
 
+fn default_author_kind() -> String {
+    "HUMAN".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Message {
@@ -551,6 +568,9 @@ pub struct Message {
     pub author_id: Uuid,
     #[serde(default)]
     pub author_display_name: String,
+    /// `HUMAN` for a person, `INTEGRATION` for an incoming-webhook actor.
+    #[serde(default = "default_author_kind")]
+    pub author_kind: String,
     pub thread_root_id: Option<Uuid>,
     pub reply_to_id: Option<Uuid>,
     pub version: i64,
@@ -565,6 +585,44 @@ pub struct Message {
     pub reactions: Vec<Reaction>,
     #[serde(default)]
     pub attachments: Vec<MessageAttachment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateWebhookRequest {
+    pub name: String,
+    pub auth_mode: String,
+    #[serde(default)]
+    pub actor_id: Option<Uuid>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Webhook {
+    pub id: Uuid,
+    pub channel_id: Uuid,
+    pub name: String,
+    pub auth_mode: String,
+    pub actor_id: Uuid,
+    pub actor_display_name: String,
+    pub revoked: bool,
+    pub created_at: DateTime<Utc>,
+    pub rotated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebhookCreated {
+    pub webhook: Webhook,
+    pub secret: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebhookList {
+    pub items: Vec<Webhook>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -746,6 +804,7 @@ pub struct CreateChannelRequest {
 pub struct UpdateChannelRequest {
     pub visibility: Option<String>,
     pub description: Option<String>,
+    pub allow_member_invites: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1563,6 +1622,11 @@ pub struct InvitationSummary {
     pub team_id: Option<Uuid>,
     pub team_name: Option<String>,
     pub team_status: Option<String>,
+    /// The last e-mail delivery of the link: `NOT_CONFIGURED`, `SENT` or `FAILED`; null when none was
+    /// recorded (an invitation from before e-mail delivery existed). It never changes `status`.
+    pub email_status: Option<String>,
+    pub email_attempted_at: Option<DateTime<Utc>>,
+    pub email_error: Option<String>,
 }
 
 /// One Project linked to a Team, as the person asking sees it: the Team's participation role and the
@@ -1617,7 +1681,7 @@ pub struct AuditPage {
     pub next_cursor: Option<String>,
 }
 
-/// A Ticket in a Project's trash, kept until a Workspace owner or admin purges it.
+/// A Ticket in a Project's trash, kept until the Project's admin purges it (or the automatic purge, when on).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrashedTicket {
@@ -1628,4 +1692,44 @@ pub struct TrashedTicket {
     pub trashed_at: DateTime<Utc>,
     pub trashed_by: Option<Uuid>,
     pub trashed_by_name: Option<String>,
+    /// Also archived: a restore brings it back archived.
+    #[serde(default)]
+    pub archived: bool,
+    /// When the automatic purge takes it; none when the automatic purge is off.
+    #[serde(default)]
+    pub purge_at: Option<DateTime<Utc>>,
+    /// `children` or `dependencies` while either keeps it from being purged, automatically or by hand.
+    #[serde(default)]
+    pub purge_blocked: Option<String>,
+}
+
+/// A Ticket in a Project's archive: kept for the record, readable, not editable.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchivedTicket {
+    pub id: Uuid,
+    pub key: String,
+    pub title: String,
+    pub hierarchy_kind: String,
+    pub archived_at: DateTime<Utc>,
+    pub archived_by: Option<Uuid>,
+    pub archived_by_name: Option<String>,
+    /// The Ticket was also moved to the trash; it must be restored from there first.
+    pub trashed: bool,
+}
+
+/// When the finished work of a completed Sprint is archived, if that was scheduled for later.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SprintArchiveSchedule {
+    pub sprint_id: Uuid,
+    pub due_at: DateTime<Utc>,
+    /// The Sprint's time zone, for showing `due_at`.
+    pub time_zone: String,
+    /// `SCHEDULED` until it runs; then `DONE`, or `CANCELED`.
+    pub state: String,
+    pub version: i64,
+    pub archived_count: Option<i32>,
+    pub skipped_count: Option<i32>,
+    pub finished_at: Option<DateTime<Utc>>,
 }

@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::access;
 use crate::error::CoreError;
-use crate::identity::{AuthSession, require_recent_authentication};
+use crate::identity::AuthSession;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -50,22 +50,27 @@ impl PolicyDefaults {
         }
     }
 
-    pub fn from_env() -> Self {
-        match std::env::var("PENFII_MCP_DEFAULT_POLICY")
-            .unwrap_or_default()
-            .trim()
-        {
-            "read_only" => Self {
-                allow_write: false,
-                ..Self::standard()
+    /// `PENFII_MCP_DEFAULT_POLICY`: `standard`, `read_only` or `closed`; not set means `standard`. Any other
+    /// word is an error: a typo must not turn into the policy that allows the most.
+    pub fn from_lookup(lookup: crate::config::Lookup<'_>) -> Result<Self, String> {
+        Ok(
+            match crate::config::choice(
+                lookup,
+                "PENFII_MCP_DEFAULT_POLICY",
+                &["standard", "read_only", "closed"],
+            )? {
+                Some("read_only") => Self {
+                    allow_write: false,
+                    ..Self::standard()
+                },
+                Some("closed") => Self {
+                    mcp_enabled: false,
+                    allow_write: false,
+                    ..Self::standard()
+                },
+                _ => Self::standard(),
             },
-            "closed" => Self {
-                mcp_enabled: false,
-                allow_write: false,
-                ..Self::standard()
-            },
-            _ => Self::standard(),
-        }
+        )
     }
 }
 
@@ -167,7 +172,11 @@ pub async fn set(
             "only a Workspace owner or admin can change the MCP policy",
         ));
     }
-    require_recent_authentication(pool, session).await?;
+    if !crate::identity::recently_authenticated(session) {
+        // The ways to authenticate again are read on the pool: let go of this connection first.
+        drop(tx);
+        return Err(crate::identity::reauth_required(pool, session).await);
+    }
     sqlx::query(
         "INSERT INTO penfii.workspace_mcp_policy
             (workspace_id, mcp_enabled, allow_write, allow_destructive, allow_administrative,

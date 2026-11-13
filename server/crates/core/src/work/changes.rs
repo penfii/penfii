@@ -234,3 +234,76 @@ pub(crate) async fn record_status_category(
         .await?;
     Ok(())
 }
+
+/// One entry of a Project's change feed: a Ticket changed (the reader reads the Ticket to learn how).
+#[derive(Debug, Clone)]
+pub struct ProjectChange {
+    pub change_seq: i64,
+    pub ticket_id: Uuid,
+    pub ticket_revision_no: i64,
+    pub change_kind: String,
+}
+
+/// What a Project's change feed holds for a reader that has seen everything up to `after`.
+#[derive(Debug)]
+pub struct ProjectChanges {
+    /// The newest change of the Project (0 when it has none).
+    pub head: i64,
+    /// The feed keeps every change after this one. Nothing is deleted today, so it is 0; a reader whose
+    /// position is older than the floor cannot be caught up from the feed.
+    pub floor: i64,
+    /// The changes after `after`, oldest first, at most `limit`.
+    pub changes: Vec<ProjectChange>,
+    /// More than `limit` changes came after `after`: the reader is too far behind to replay.
+    pub truncated: bool,
+}
+
+/// The change feed after position `after`. It holds only what is recorded per Ticket (`ticket_id` is not
+/// null): a Sprint or Milestone that changes without a Ticket is not in it, so a reader cannot replay such a
+/// change and is told to read the Project again instead (see the Project socket).
+/// The caller decides who may see which Ticket; this reads the feed.
+pub async fn project_changes_since(
+    pool: &sqlx::PgPool,
+    project_id: Uuid,
+    after: i64,
+    limit: i64,
+) -> Result<ProjectChanges, CoreError> {
+    let bounds = sqlx::query(
+        "SELECT coalesce(max(change_seq),0) AS head, coalesce(min(change_seq)-1,0) AS floor
+         FROM penfii.project_ticket_changes WHERE project_id=$1",
+    )
+    .bind(project_id)
+    .fetch_one(pool)
+    .await?;
+    let head: i64 = bounds.try_get("head")?;
+    let floor: i64 = bounds.try_get("floor")?;
+    let rows = if after >= head {
+        Vec::new()
+    } else {
+        sqlx::query(
+            "SELECT change_seq,ticket_id,ticket_revision_no,change_kind FROM penfii.project_ticket_changes
+             WHERE project_id=$1 AND change_seq>$2 ORDER BY change_seq LIMIT $3",
+        )
+        .bind(project_id)
+        .bind(after)
+        .bind(limit + 1)
+        .fetch_all(pool)
+        .await?
+    };
+    let truncated = rows.len() as i64 > limit;
+    let mut changes = Vec::with_capacity(rows.len().min(limit as usize));
+    for row in rows.iter().take(limit as usize) {
+        changes.push(ProjectChange {
+            change_seq: row.try_get("change_seq")?,
+            ticket_id: row.try_get("ticket_id")?,
+            ticket_revision_no: row.try_get("ticket_revision_no")?,
+            change_kind: row.try_get("change_kind")?,
+        });
+    }
+    Ok(ProjectChanges {
+        head,
+        floor,
+        changes,
+        truncated,
+    })
+}

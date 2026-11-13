@@ -189,6 +189,42 @@ async fn search_finds_ticket_files_and_follows_the_ticket_through_trash_and_rest
 }
 
 #[sqlx::test(migrator = "crate::common::GUARD")]
+async fn an_archived_ticket_and_its_files_leave_search_and_return_when_unarchived(pool: PgPool) {
+    let world = &World::new(pool).await;
+    let Some(sw) = search_world(world).await else {
+        return;
+    };
+    let workspace_id = workspace(world, &format!("ar-s1-{}", Uuid::new_v4())).await;
+    let (project_id, _) = new_project(world, workspace_id, "Archived").await;
+    let (_, ticket) = make_ticket(
+        world,
+        &project_id,
+        "ar-1",
+        json!({"title": "zebra roadmap"}),
+    )
+    .await;
+    let ticket_id: Uuid = ticket["id"].as_str().unwrap().parse().unwrap();
+    let c = world.owner_cookie.clone();
+    index_now(&sw, workspace_id).await;
+    let (_, b) = find(&sw, &c, workspace_id, "zebra", "ticket").await;
+    assert_eq!(titles(&b), vec!["zebra roadmap"], "{b}");
+
+    let archive = format!("/v1/tickets/{ticket_id}/commands/archive");
+    let (s, _, _) = call(&world.app, "POST", &archive, Some(&c), None, None).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    index_now(&sw, workspace_id).await;
+    let (_, b) = find(&sw, &c, workspace_id, "zebra", "ticket").await;
+    assert!(titles(&b).is_empty(), "archived work is out of search: {b}");
+
+    let unarchive = format!("/v1/tickets/{ticket_id}/commands/unarchive");
+    let (s, _, _) = call(&world.app, "POST", &unarchive, Some(&c), None, None).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    index_now(&sw, workspace_id).await;
+    let (_, b) = find(&sw, &c, workspace_id, "zebra", "ticket").await;
+    assert_eq!(titles(&b), vec!["zebra roadmap"], "{b}");
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
 async fn search_finds_korean_text_keys_code_and_file_names_and_applies_filters(pool: PgPool) {
     let world = &World::new(pool).await;
     let Some(sw) = search_world(world).await else {

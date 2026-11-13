@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { QueryError } from '../../ui/QueryError'
 import { useQuery } from '@tanstack/react-query'
 import { Select } from '../../design/ui'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -15,6 +16,7 @@ export function TeamMembersSection({ workspaceId }: { workspaceId: string }) {
   return (
     <div className="card settings-card" aria-labelledby="admin-teams-title">
       <h3 id="admin-teams-title">{t('admin.teams.title')}</h3>
+      {space.isError ? <QueryError query={space} compact /> : null}
       {space.isSuccess && teams.length === 0 ? <p className="hint">{t('admin.teams.none')}</p> : null}
       {teams.length > 0 ? (
         <>

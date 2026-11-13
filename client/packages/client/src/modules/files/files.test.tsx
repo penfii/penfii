@@ -197,6 +197,36 @@ describe('image viewer', () => {
   })
 })
 
+describe('the media viewer keeps the keyboard inside', () => {
+  it('moves Tab from the last control to the first and Shift+Tab from the first to the last, and gives the focus back on close', () => {
+    render(
+      <I18nProvider>
+        <button type="button">opener</button>
+        <MediaViewerHost />
+      </I18nProvider>,
+    )
+    screen.getByText('opener').focus()
+    act(() => { openMediaViewer([{ kind: 'image', src: '/v1/attachments/a1/content', name: 'shot.png' }, { kind: 'image', src: '/v1/attachments/a2/content', name: 'two.png' }]) })
+    const viewer = screen.getByRole('dialog')
+    const controls = [...viewer.querySelectorAll<HTMLElement>('button, a[href]')]
+    expect(controls.length).toBeGreaterThan(2)
+    const first = controls[0] as HTMLElement
+    const last = controls[controls.length - 1] as HTMLElement
+    last.focus()
+    fireEvent.keyDown(last, { key: 'Tab' })
+    expect(document.activeElement).toBe(first)
+    fireEvent.keyDown(first, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(last)
+    // Focus that got outside comes back in.
+    screen.getByText('opener').focus()
+    fireEvent.keyDown(document.body, { key: 'Tab' })
+    expect(document.activeElement).toBe(first)
+    fireEvent.keyDown(first, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(document.activeElement).toBe(screen.getByText('opener'))
+  })
+})
+
 describe('file sharing presentation', () => {
   it('shows each type the way it should and never inlines active content', async () => {
     const { previewKind } = await import('./kind')

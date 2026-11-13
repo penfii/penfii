@@ -68,6 +68,7 @@ function message(id: string, streamSeq: number, text: string, patch: Partial<Mes
     streamSeq,
     authorId: 'u1',
     authorDisplayName: 'Ada',
+    authorKind: 'HUMAN',
     version: 1,
     deleted: false,
     body: doc(text),

@@ -3,7 +3,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use rand::RngCore;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -15,7 +15,7 @@ use uuid::Uuid;
 use super::client::{self, Client};
 use super::{OAuthConfig, policy, scopes};
 use crate::error::CoreError;
-use crate::identity::{AuthSession, require_recent_authentication};
+use crate::identity::{AuthSession, reauth_required, recently_authenticated};
 
 const REQUEST_TTL_SECONDS: i64 = 600;
 const CODE_TTL_SECONDS: i64 = 60;
@@ -406,8 +406,11 @@ pub async fn decide(
         return Err(CoreError::validation("select at least one permission"));
     }
     // Destructive and administrative capability needs recent authentication at consent.
-    if granted.iter().any(|scope| scopes::is_high_risk(scope)) {
-        require_recent_authentication(pool, session).await?;
+    if granted.iter().any(|scope| scopes::is_high_risk(scope)) && !recently_authenticated(session) {
+        // The list of ways to authenticate again is read on the pool, so this transaction (which
+        // changed nothing that is kept) lets go of its connection first.
+        drop(tx);
+        return Err(reauth_required(pool, session).await);
     }
     // One live grant per (user, client): a new consent replaces it and kills its tokens.
     sqlx::query(
@@ -575,7 +578,11 @@ async fn authorization_code_grant(
     let stored_redirect: String = row.try_get("redirect_uri")?;
     let challenge: String = row.try_get("code_challenge")?;
     let resource: String = row.try_get("resource")?;
-    if expires_at <= Utc::now()
+    // Stored times are judged with the database's clock.
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
+        .fetch_one(&mut *tx)
+        .await?;
+    if expires_at <= now
         || stored_client != client_id
         || stored_redirect != redirect_uri
         || !pkce_matches(verifier, &challenge)
@@ -599,7 +606,10 @@ async fn authorization_code_grant(
     .bind(family)
     .execute(&mut *tx)
     .await?;
-    let absolute = Utc::now() + config.refresh_absolute_ttl;
+    let db_now: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
+        .fetch_one(&mut *tx)
+        .await?;
+    let absolute = db_now + config.refresh_absolute_ttl;
     let response = issue_pair(
         &mut tx, config, grant_id, family, &scope, &resource, absolute, None,
     )
@@ -643,7 +653,9 @@ async fn issue_pair(
 ) -> Result<TokenResponse, OAuthError> {
     let access = random_token("pfa_");
     let refresh = random_token("pfr_");
-    let now = Utc::now();
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
+        .fetch_one(&mut *conn)
+        .await?;
     let refresh_expires = (now + config.refresh_idle_ttl).min(absolute);
     let refresh_id = Uuid::new_v4();
     sqlx::query(
@@ -731,8 +743,11 @@ async fn refresh_grant(
         .unwrap_or(expires_at);
     let stored_client: String = row.try_get("client_id")?;
     let grant_id: Uuid = row.try_get("grant_id")?;
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
+        .fetch_one(&mut *tx)
+        .await?;
     if revoked_at.is_some()
-        || expires_at <= Utc::now()
+        || expires_at <= now
         || stored_client != client_id
         || !grant_usable(&mut tx, grant_id).await?
     {
@@ -843,7 +858,8 @@ pub async fn authenticate_bearer(
     }
     let row = sqlx::query(
         "SELECT t.id, t.scope, g.id AS grant_id, g.user_id, g.client_pk, g.workspace_ids,
-                c.client_id, c.client_name, t.last_used_at
+                c.client_id, c.client_name,
+                EXTRACT(EPOCH FROM (now() - t.last_used_at))::float8 AS used_age_seconds
          FROM penfii.oauth_tokens t
          JOIN penfii.oauth_grants g ON g.id = t.grant_id
          JOIN penfii.oauth_clients c ON c.id = g.client_pk
@@ -861,8 +877,8 @@ pub async fn authenticate_bearer(
     };
     let token_id: Uuid = row.try_get("id")?;
     let grant_id: Uuid = row.try_get("grant_id")?;
-    let last_used: Option<DateTime<Utc>> = row.try_get("last_used_at")?;
-    if last_used.is_none_or(|at| Utc::now() - at > Duration::seconds(60)) {
+    let used_age: Option<f64> = row.try_get("used_age_seconds")?;
+    if used_age.is_none_or(|age| age > 60.0) {
         let _ = sqlx::query("UPDATE penfii.oauth_tokens SET last_used_at = now() WHERE id = $1")
             .bind(token_id)
             .execute(pool)

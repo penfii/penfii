@@ -26,6 +26,12 @@ pub enum CoreError {
     RateLimited {
         retry_after_seconds: i64,
     },
+    /// The database could not be used for this request right now, for a reason that is about its
+    /// availability or about contention, not about the request or the code: a lock that was not
+    /// granted in time, a deadlock, a serialization failure, no connection to be had, a connection
+    /// that went away. HTTP 503 `db_unavailable`. The text is a fixed, driver-free name of the
+    /// cause (for the log); nothing the database said reaches a client.
+    DbUnavailable(&'static str),
     Internal(String),
 }
 
@@ -62,8 +68,51 @@ impl CoreError {
     }
 }
 
+/// What a database error means for the request, by its SQLSTATE (PostgreSQL errcodes appendix), not by
+/// its text.
+///
+/// - `Unavailable`: availability or contention: `55P03` lock_not_available (`lock_timeout`), `40P01`
+///   deadlock_detected, `40001` serialization_failure, `25P03`/`25P04` (the session was ended by
+///   `idle_in_transaction_session_timeout`/`transaction_timeout`), `53300` too_many_connections,
+///   `57P01` admin_shutdown, `57P03` cannot_connect_now, class `08` connection exceptions, and from
+///   the pool: no connection within the acquire timeout, a closed pool, a lost connection.
+/// - `Other`: everything else, among it `57014` query_canceled (the statement was cancelled: a
+///   `statement_timeout` or a person; whether the query was merely slow or contended cannot be told
+///   from the code, so it stays an internal error and is not an "unavailable" database), unique,
+///   foreign key and check violations (the calling code decides what those mean), and syntax or
+///   schema errors (our bug).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum DbErrorClass {
+    Unavailable(&'static str),
+    Other,
+}
+
+pub(crate) fn classify(error: &sqlx::Error) -> DbErrorClass {
+    use DbErrorClass::{Other, Unavailable};
+    match error {
+        sqlx::Error::PoolTimedOut => Unavailable("pool_timeout"),
+        sqlx::Error::PoolClosed => Unavailable("pool_closed"),
+        sqlx::Error::WorkerCrashed | sqlx::Error::Io(_) => Unavailable("connection_lost"),
+        sqlx::Error::Database(db) => match db.code().as_deref() {
+            Some("55P03") => Unavailable("lock_not_available"),
+            Some("40P01") => Unavailable("deadlock_detected"),
+            Some("40001") => Unavailable("serialization_failure"),
+            Some("25P03" | "25P04") => Unavailable("session_timeout"),
+            Some("53300") => Unavailable("too_many_connections"),
+            Some("57P01") => Unavailable("admin_shutdown"),
+            Some("57P03") => Unavailable("cannot_connect_now"),
+            Some(code) if code.starts_with("08") => Unavailable("connection_exception"),
+            _ => Other,
+        },
+        _ => Other,
+    }
+}
+
 impl From<sqlx::Error> for CoreError {
     fn from(error: sqlx::Error) -> Self {
-        Self::Internal(error.to_string())
+        match classify(&error) {
+            DbErrorClass::Unavailable(cause) => Self::DbUnavailable(cause),
+            DbErrorClass::Other => Self::Internal(error.to_string()),
+        }
     }
 }

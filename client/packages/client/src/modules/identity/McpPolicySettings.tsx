@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { QueryError } from '../../ui/QueryError'
 import type { McpPolicyInput } from '@penfii/api-client'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../api'
@@ -20,7 +21,7 @@ const FLAGS: { key: keyof McpPolicyInput; label: MessageKey }[] = [
  * Workspace MCP Policy: a switch per class of MCP capability. It can only restrict; it does not
  * grant anything. Everyone in the Workspace can read it, owners and admins can change it.
  */
-export function McpPolicySettings({ workspaceId }: { workspaceId: string }) {
+export function McpPolicySettings({ workspaceId, whenOff }: { workspaceId: string; /** Shown once the server has said MCP is not offered, so a page made for this policy is not left blank. */ whenOff?: ReactNode }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
   const info = useQuery({ ...queries.serverInfo(), retry: false })
@@ -41,6 +42,9 @@ export function McpPolicySettings({ workspaceId }: { workspaceId: string }) {
     }
   }, [policy.data])
 
+  if (info.isError) return <QueryError query={info} compact />
+  if (!enabled && !info.isPending) return whenOff ?? null
+  if (policy.isError) return <QueryError query={policy} compact />
   if (!enabled || !draft) return null
   const current = draft
 

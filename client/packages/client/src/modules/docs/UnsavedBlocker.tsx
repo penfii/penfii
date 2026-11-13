@@ -10,11 +10,11 @@ import { useI18n } from '../../i18n/I18nProvider'
  * the tab is the browser's own prompt, set by the page.) Mount it only while there is something to lose.
  * It needs a data router and renders nothing without one (a plain test router).
  */
-export function UnsavedBlocker({ active }: { active: boolean }) {
-  return useContext(UNSAFE_DataRouterContext) ? <Blocker active={active} /> : null
+export function UnsavedBlocker({ active, onSave }: { active: boolean; /** When given, the question offers to save first; it answers whether the save worked, and only then is the navigation let through. */ onSave?: () => Promise<boolean> }) {
+  return useContext(UNSAFE_DataRouterContext) ? <Blocker active={active} onSave={onSave} /> : null
 }
 
-function Blocker({ active }: { active: boolean }) {
+function Blocker({ active, onSave }: { active: boolean; onSave?: () => Promise<boolean> }) {
   const { t } = useI18n()
   const blocker = useBlocker(
     ({ currentLocation, nextLocation }) =>
@@ -25,7 +25,17 @@ function Blocker({ active }: { active: boolean }) {
       <p>{t('docs.edit.leave')}</p>
       <div className="dialog-actions">
         <Button variant="ghost" onClick={() => blocker.reset?.()}>{t('docs.edit.keep')}</Button>
-        <Button onClick={() => blocker.proceed?.()}>{t('docs.edit.leave.confirm')}</Button>
+        <Button variant={onSave ? 'secondary' : 'primary'} onClick={() => blocker.proceed?.()}>{t('docs.edit.leave.confirm')}</Button>
+        {onSave ? (
+          <Button
+            onClick={() => {
+              // A failed save keeps the person here: the page shows the failure and Retry.
+              void onSave().then((saved) => { if (saved) blocker.proceed?.(); else blocker.reset?.() })
+            }}
+          >
+            {t('docs.edit.saveAndLeave')}
+          </Button>
+        ) : null}
       </div>
     </Dialog>
   )

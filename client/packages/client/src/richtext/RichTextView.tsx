@@ -8,6 +8,9 @@ import type {
 } from '@penfii/contracts'
 import { CodeBlockView } from './CodeBlockView'
 import { isSafeHttpUrl } from './url'
+import { useMentionName } from './env'
+import { LinkView } from './InternalLink'
+import { useI18n } from '../i18n/I18nProvider'
 
 export type DisplayNames = Readonly<Record<string, string>>
 
@@ -24,22 +27,23 @@ function renderMarked(text: string, marks: readonly RichTextMark[] | undefined):
         return <code>{child}</code>
       case 'link':
         if (!isSafeHttpUrl(mark.attrs.href)) return child
-        return (
-          <a href={mark.attrs.href} target="_blank" rel="noreferrer">
-            {child}
-          </a>
-        )
+        return <LinkView href={mark.attrs.href} text={text}>{child}</LinkView>
       default:
         return child
     }
   }, text)
 }
 
+/** A person mentioned in the text. The id is never shown: a name, a pause while it is asked for, or "Unknown user". */
+function MentionView({ userId, names }: { userId: string; names?: DisplayNames }) {
+  const { t } = useI18n()
+  const { name, pending } = useMentionName(userId, names)
+  const label = name ?? (pending ? '…' : t('mention.unknown'))
+  return <span className="mention" data-mention-user={userId}>@{label}</span>
+}
+
 function InlineView({ node, names }: { node: RichTextInline; names?: DisplayNames }) {
-  if (node.type === 'mention') {
-    const label = names?.[node.attrs.userId] ?? node.attrs.userId
-    return <span className="mention">@{label}</span>
-  }
+  if (node.type === 'mention') return <MentionView userId={node.attrs.userId} names={names} />
   return <>{renderMarked(node.text, node.marks)}</>
 }
 

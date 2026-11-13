@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
-use crate::extract::{self, Actor, CurrentUser, RawJson, Session};
+use crate::extract::{self, Actor, Body, CurrentUser, Session};
 
 use axum::Router;
 use axum::routing::{delete, get, patch, post, put};
@@ -21,6 +21,14 @@ pub(super) fn routes() -> Router<AppState> {
     Router::new()
         .route("/v1/session/login", post(login))
         .route("/v1/session/logout", post(logout))
+        .route(
+            "/v1/auth/password-reset/request",
+            post(password_reset_request),
+        )
+        .route(
+            "/v1/auth/password-reset/confirm",
+            post(password_reset_confirm),
+        )
         .route("/v1/me", get(me).patch(update_me))
         .route("/v1/me/profile", patch(update_public_profile))
         .route("/v1/me/avatar", put(put_avatar).delete(delete_avatar))
@@ -47,9 +55,8 @@ async fn login(
     State(state): State<AppState>,
     peer: Option<axum::extract::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     headers: HeaderMap,
-    RawJson(raw): RawJson,
+    Body(body): Body<LoginRequest>,
 ) -> Result<Response, ApiError> {
-    let body: LoginRequest = extract::parse(raw)?;
     let address = extract::client_address(peer.map(|found| found.0.0), &headers);
     let device = extract::device_label(&headers);
     let result = identity::login_from(
@@ -65,6 +72,60 @@ async fn login(
     let mut response = Json(result.user).into_response();
     set_cookie(&mut response, &cookie)?;
     Ok(response)
+}
+
+#[derive(serde::Deserialize)]
+struct PasswordResetRequest {
+    email: String,
+}
+
+/// Asks for a password reset mail. Every well-formed request gets the same answer (202, no body) at
+/// the same speed whether or not the account exists, is disabled, or has a password at all: the
+/// request is counted and the rest happens in a background task. It answers 404 while the server
+/// sends no e-mail (for every request alike, so that says nothing about accounts either).
+async fn password_reset_request(
+    State(state): State<AppState>,
+    peer: Option<axum::extract::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
+    headers: HeaderMap,
+    Body(body): Body<PasswordResetRequest>,
+) -> Result<Response, ApiError> {
+    let Some(mailer) = state.mailer.clone() else {
+        return Err(CoreError::NotFound.into());
+    };
+    let (_, email_key) = identity::normalize_email(&body.email)?;
+    let address = extract::client_address(peer.map(|found| found.0.0), &headers);
+    let admitted = identity::admit_reset_request(
+        &state.pool,
+        &state.limits.login_throttle,
+        &email_key,
+        address.as_deref(),
+    )
+    .await?;
+    if admitted {
+        let pool = state.pool.clone();
+        tokio::spawn(async move {
+            identity::process_reset_request(&pool, &mailer, &email_key).await;
+        });
+    }
+    Ok(StatusCode::ACCEPTED.into_response())
+}
+
+#[derive(serde::Deserialize)]
+struct PasswordResetConfirm {
+    token: String,
+    password: String,
+}
+
+/// Sets a new password with a reset token (from the mailed link) and ends every session of the account.
+async fn password_reset_confirm(
+    State(state): State<AppState>,
+    Body(body): Body<PasswordResetConfirm>,
+) -> Result<Response, ApiError> {
+    if state.mailer.is_none() {
+        return Err(CoreError::NotFound.into());
+    }
+    identity::confirm_password_reset(&state.pool, &body.token, &body.password).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 fn set_cookie(response: &mut Response, cookie: &str) -> Result<(), ApiError> {
@@ -119,9 +180,8 @@ struct PublicProfileRequest {
 async fn update_public_profile(
     State(state): State<AppState>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<PublicProfileRequest>,
 ) -> Result<Response, ApiError> {
-    let body: PublicProfileRequest = extract::parse(raw)?;
     let updated = identity::update_public_profile(
         &state.pool,
         user_id,
@@ -154,7 +214,7 @@ async fn put_avatar(
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
-    identity::set_avatar(&state.pool, object_store(&state)?, user_id, &body, mime).await?;
+    identity::set_avatar(&state.pool, object_store(&state)?, user_id, body, mime).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -191,9 +251,8 @@ async fn get_avatar(
 async fn update_me(
     State(state): State<AppState>,
     Session(session): Session,
-    RawJson(raw): RawJson,
+    Body(body): Body<UpdateProfileRequest>,
 ) -> Result<Response, ApiError> {
-    let body: UpdateProfileRequest = extract::parse(raw)?;
     let updated = identity::update_profile(
         &state.pool,
         &session,
@@ -217,9 +276,8 @@ struct ReauthPasswordRequest {
 async fn reauth_password(
     State(state): State<AppState>,
     Session(session): Session,
-    RawJson(raw): RawJson,
+    Body(body): Body<ReauthPasswordRequest>,
 ) -> Result<Response, ApiError> {
-    let body: ReauthPasswordRequest = extract::parse(raw)?;
     identity::reauth_with_password(&state.pool, &session, &body.password).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
@@ -245,10 +303,9 @@ async fn auth_start(
     Path(provider): Path<String>,
     headers: HeaderMap,
     session: Option<Session>,
-    RawJson(raw): RawJson,
+    Body(body): Body<AuthStartRequest>,
 ) -> Result<Response, ApiError> {
     let session = session.map(|Session(session)| session);
-    let body: AuthStartRequest = extract::parse(raw)?;
     let intent = match body.intent.as_deref().unwrap_or("login") {
         "login" => identity::Intent::Login,
         "invite" => identity::Intent::Invite,
@@ -277,9 +334,8 @@ async fn reauth_provider_start(
     State(state): State<AppState>,
     Path(provider): Path<String>,
     Session(session): Session,
-    RawJson(raw): RawJson,
+    Body(body): Body<AuthStartRequest>,
 ) -> Result<Response, ApiError> {
-    let body: AuthStartRequest = extract::parse(raw)?;
     let url = identity::start(
         &state.pool,
         &state.providers,

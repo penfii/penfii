@@ -153,7 +153,7 @@ impl CollabHub {
     /// previous owner stopped. The returned task runs for the life of the process.
     pub fn spawn_owner(self: &Arc<Self>, database_url: String) -> tokio::task::JoinHandle<()> {
         let hub = self.clone();
-        tokio::spawn(async move {
+        crate::lifecycle::spawn_worker("co-editing owner", async move {
             while !hub.shutting_down.load(Ordering::SeqCst) {
                 match PgConnection::connect(&database_url).await {
                     Ok(mut conn) => {

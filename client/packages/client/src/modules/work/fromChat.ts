@@ -1,7 +1,8 @@
 import type { Message, RichTextDoc, Ticket } from '@penfii/contracts'
 import { api } from '../../api'
 import { newIdempotencyKey } from '@penfii/api-client'
-import { plainText, type DisplayNames } from '../../richtext'
+import { plainText } from '../../richtext/text'
+import type { DisplayNames } from '../../richtext'
 import type { ChatSource } from './panelParam'
 
 const TITLE_MAX = 120

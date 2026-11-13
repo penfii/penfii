@@ -75,7 +75,8 @@
 .ticket-panel > .ticket-panel-head { position: static; margin: 0; flex: none; }
 .ticket-id { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; }
 .ticket-status { flex: 0 1 8.5rem; min-width: 0; max-width: 100%; }
-.ticket-siblings { display: inline-flex; align-items: center; min-width: 0; }
+.ticket-siblings { display: inline-flex; align-items: center; flex: none; }
+.ticket-head-tools { display: flex; align-items: center; gap: var(--space-1); flex: none; }
 .key-button { border: 0; background: transparent; color: var(--text-secondary); font-size: .8rem; letter-spacing: .03em; padding: .1rem .3rem; border-radius: var(--radius-sm); }
 .key-button:hover { background: var(--bg-muted); }
 .panel-back { display: none; }
@@ -199,7 +200,6 @@
 @media (max-width: 960px) {
   .ticket-panel-head { flex-wrap: nowrap; }
   .head-cluster { flex-wrap: wrap; overflow: visible; }
-  .ticket-siblings { flex: 1 1 100%; overflow-x: auto; }
   .ticket-panel-head button, .ticket-panel-head .btn { white-space: nowrap; }
   /* The shell stacks into one column here; the panel is a full-screen overlay above it. */
   .product-shell.has-detail.detail-ticket { grid-template-columns: 1fr; }
@@ -510,6 +510,19 @@
   border-radius: 999px; background: var(--danger); color: #fff; font-size: 0.65rem; line-height: 1.15rem; text-align: center;
 }
 .inbox-tools { display: flex; justify-content: flex-end; margin-bottom: var(--space-3); }
+.inbox-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+.inbox-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-3); }
+.inbox-chips { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; min-width: 0; }
+.chip { border: 1px solid var(--border-strong); background: var(--bg-elevated); color: var(--text-secondary); border-radius: 999px; padding: 4px 12px; font: inherit; cursor: pointer; }
+.chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); }
+.chip.more { border-style: dashed; }
+.chip:focus-visible { outline: none; box-shadow: var(--focus); }
+.chip-divider { width: 1px; align-self: stretch; background: var(--border-strong); margin: 2px 2px; }
+.inbox-options { position: relative; }
+.inbox-options-panel { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; min-width: 240px; display: grid; gap: var(--space-2); padding: var(--space-3); background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: var(--radius-md); box-shadow: var(--shadow-md); }
+.inbox-option { display: flex; align-items: center; gap: var(--space-2); }
+.inbox-day { font-size: 0.85rem; color: var(--text-muted); margin: var(--space-4) 0 var(--space-2); }
+.nav-count { margin-left: auto; min-width: 18px; padding: 0 6px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-strong); font-size: .75rem; line-height: 18px; text-align: center; }
 .inbox-row { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 .inbox-row.unread { border-left: 3px solid var(--accent); background: var(--bg-elevated); }
 .inbox-open { display: grid; gap: 0.1rem; text-align: left; border: 0; background: transparent; padding: 0; min-width: 0; }
@@ -707,7 +720,7 @@
 .scroll-hint .to-top { border: 1px solid var(--border); background: transparent; color: var(--text-secondary); border-radius: 999px; padding: .1rem .6rem; font-size: .75rem; }
 .scroll-hint .to-top:hover { border-color: var(--accent); color: var(--text); }
 .comment-composer { flex: none; padding: var(--space-2) var(--space-4) var(--space-3); border-top: 1px solid var(--border); background: var(--bg-elevated); }
-.ticket-panel-head:has(.compact-title) .ticket-saved, .ticket-panel-head:has(.compact-title) .kind-chip { display: none; }
+.ticket-panel-head:has(.compact-title) .kind-chip { display: none; }
 .ticket-panel-head .key-button { white-space: nowrap; flex: none; }
 .description-view.clamped { padding-bottom: 0; }
 .planning-body > .btn { justify-self: start; width: auto; }
@@ -720,7 +733,7 @@
 /* A narrow panel keeps the key, State and close control readable: the saved/watch buttons drop to icons. */
 .ticket-saved { flex: 0 0 auto; }
 .ticket-id { flex: 0 0 auto; }
-@container ticket-panel (max-width: 560px) {
+@container ticket-panel (max-width: 719px) {
   .ticket-saved .btn-label { display: none; }
 }
 @media (max-width: 960px) {
@@ -851,3 +864,91 @@
 
 /* Phone: a card is moved to another State by name, since it cannot be dragged. Sits left of the move-to-top button. */
 .card-move { position: absolute; top: .3rem; right: 2.7rem; z-index: 2; width: 2.2rem; height: 2.2rem; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border-strong); border-radius: var(--radius-sm, 6px); background: var(--bg-elevated); color: var(--text-secondary); font-size: .95rem; line-height: 1; }
+
+.mention-list { z-index: 60; min-width: 220px; max-width: 320px; max-height: 260px; overflow-y: auto; background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: var(--radius-md); box-shadow: var(--shadow-md); }
+.mention-list ul { list-style: none; margin: 0; padding: var(--space-1); }
+.mention-option { display: flex; align-items: baseline; gap: var(--space-2); padding: 6px 10px; border-radius: var(--radius-sm); cursor: pointer; }
+.mention-option.is-selected { background: var(--accent-soft); }
+.mention-option.is-nonmember .mention-name, .mention-option.is-nonmember .mention-detail { color: var(--text-muted); }
+.mention-detail { color: var(--text-muted); }
+.mention-empty { margin: 0; padding: 8px 12px; color: var(--text-muted); }
+
+.link-chip { display: inline-flex; align-items: baseline; gap: 4px; max-width: 100%; padding: 0 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.link-chip:hover { text-decoration: underline; }
+.link-chip.is-unavailable { background: var(--bg-muted); color: var(--text-muted); }
+.link-chip-mark { opacity: .7; }
+
+/* Inbox: spacing that matches the rows, the undo bar, and the phone layout */
+.inbox-toolbar { padding-inline: var(--space-4); }
+.inbox-day { padding-inline: var(--space-4); }
+.inbox-more { padding: 0 var(--space-4) var(--space-4); }
+.inbox-undo {
+  position: sticky; bottom: var(--space-3); z-index: 15; width: fit-content; max-width: calc(100% - 2 * var(--space-4));
+  display: flex; align-items: center; gap: var(--space-3); margin: var(--space-2) auto 0; padding: var(--space-2) var(--space-3);
+  background: var(--text); color: var(--bg); border-radius: var(--radius-md); box-shadow: var(--shadow-md);
+}
+.inbox-undo-action { border: 0; background: transparent; color: inherit; font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; padding: var(--space-1) var(--space-2); min-height: 32px; }
+.inbox-undo-action:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.inbox-row .saved-actions { display: flex; align-items: center; gap: 2px; }
+@media (max-width: 960px) {
+  /* The phone's top bar already names the screen; the lead and a second big title only push the list down. */
+  .mobile-shell .inbox-heading { justify-content: flex-end; padding-block: var(--space-2); border-bottom: 0; }
+  .mobile-shell .inbox-heading > div { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  /* One row of filters that scrolls sideways (the cut-off chip says there is more), with the options beside it. */
+  .mobile-shell .inbox-toolbar { flex-wrap: nowrap; gap: var(--space-2); padding-inline: 0 var(--space-4); }
+  .mobile-shell .inbox-chips { flex: 1 1 auto; flex-wrap: nowrap; overflow-x: auto; padding: 2px var(--space-2) 2px var(--space-4); scrollbar-width: none; overscroll-behavior-x: contain; }
+  .mobile-shell .inbox-chips::-webkit-scrollbar { display: none; }
+  .mobile-shell .inbox-chips .chip { flex: none; min-height: 36px; }
+  .mobile-shell .inbox-options { flex: none; }
+  .mobile-shell .inbox-options > .btn { min-height: 36px; padding-inline: var(--space-3); }
+  .mobile-shell .inbox-heading .btn { min-height: 36px; padding-block: 0; }
+  /* Text on the left, the four actions in a 2 x 2 block on the right: a row is about as tall as its text. */
+  .mobile-shell .inbox-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .mobile-shell .inbox-row .saved-actions { display: grid; grid-template-columns: repeat(2, 40px); gap: 0; }
+  .mobile-shell .inbox-undo { bottom: var(--space-2); }
+}
+
+/* Archive */
+/* Bottom-right: the top-right corner belongs to the "move to top" button. It sits over the card's own open button,
+   so it is at least 24px (and 32px on a touch screen or phone) and the card keeps a gutter for it: a missed tap
+   must not open the ticket instead. */
+.ticket-card input.card-pick { position: absolute; bottom: 0.4rem; right: 0.4rem; z-index: 1; margin: 0; width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; cursor: pointer; }
+.ticket-card:has(.card-pick) .ticket-card-open { padding-right: 2.25rem; }
+@media (pointer: coarse), (max-width: 640px) {
+  .ticket-card input.card-pick { width: 2rem; height: 2rem; min-width: 2rem; min-height: 2rem; }
+  .ticket-card:has(.card-pick) .ticket-card-open { padding-right: 2.75rem; }
+}
+.archive-panel { border: 1px solid var(--border, #d0d7de); border-radius: 0.5rem; padding: 0.75rem 1rem; margin: 0.5rem var(--space-4, 1rem); }
+.archive-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.archive-panel .link-button { background: none; border: 0; padding: 0; text-align: left; cursor: pointer; color: inherit; text-decoration: underline; }
+.sprint-archive-note { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; font-size: 0.875rem; }
+.list-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; margin: 0.5rem 0; }
+.list-tools input[type="search"] { flex: 1 1 12rem; min-width: 0; }
+.trash-row { flex-wrap: wrap; gap: 0.25rem 0.75rem; }
+.trash-held { flex-basis: 100%; }
+@media (max-width: 640px) {
+  .archive-head { flex-wrap: wrap; }
+  .list-tools > * { flex: 1 1 100%; }
+  .archive-panel { padding: 0.5rem 0.75rem; margin-inline: var(--space-2, 0.5rem); }
+}
+
+/* The folded object actions (narrow panel): one More button and its menu, kept inside the panel's right edge. */
+.ticket-more { position: relative; flex: none; }
+.ticket-more-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; min-width: 14rem; display: grid; padding: var(--space-1); border: 1px solid var(--border-strong, var(--border)); border-radius: var(--radius-md); background: var(--bg-elevated); box-shadow: var(--shadow-md, 0 4px 16px rgb(0 0 0 / .18)); }
+.ticket-more-item { display: flex; align-items: center; gap: var(--space-2); width: 100%; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); white-space: nowrap; }
+.ticket-more-item:hover:not(:disabled), .ticket-more-item:focus-visible { background: var(--bg-muted); }
+.ticket-more-check { flex: 0 0 1em; color: var(--accent-text, var(--accent)); }
+.ticket-panel-head { z-index: 3; }
+
+/* Members: search above the list, one fixed-width row per person, the pager below. */
+.admin-member-search { width: 100%; max-width: 24rem; margin: var(--space-2) 0; }
+.members-table { table-layout: fixed; }
+.members-table th:nth-child(1) { width: 30%; }
+.members-table th:nth-child(2) { width: 12%; }
+.members-table th:nth-child(4) { width: 18%; }
+.members-table th:last-child, .members-table .admin-col-actions { width: 3.5rem; text-align: right; }
+.members-table td { overflow-wrap: anywhere; }
+.admin-pager { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-top: var(--space-3); }
+.admin-subnav { display: flex; flex-wrap: wrap; gap: .35rem; margin: var(--space-3) 0; }
+.admin-subnav a { border: 1px solid var(--border); border-radius: 999px; padding: .15rem .75rem; font-size: .85rem; color: var(--text-secondary); text-decoration: none; }
+.admin-subnav a.active { border-color: var(--accent); color: var(--text); background: var(--accent-soft, transparent); font-weight: 600; }

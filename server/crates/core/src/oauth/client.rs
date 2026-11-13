@@ -106,17 +106,17 @@ impl HttpClientFetcher {
     pub fn new() -> Self {
         Self {
             recent: Mutex::new(VecDeque::new()),
-            private_hosts: std::env::var("PENFII_MCP_CIMD_PRIVATE_HOSTS")
-                .unwrap_or_default()
-                .split(',')
-                .map(|host| host.trim().to_ascii_lowercase())
-                .filter(|host| !host.is_empty())
-                .collect(),
+            // Checked when the process started (`config::startup_checks`).
+            private_hosts: crate::config::hosts(
+                &crate::config::process_env,
+                "PENFII_MCP_CIMD_PRIVATE_HOSTS",
+            )
+            .unwrap_or_default(),
         }
     }
 
     fn allow_fetch(&self) -> bool {
-        let mut recent = self.recent.lock().unwrap();
+        let mut recent = self.recent.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
         while recent
             .front()
@@ -319,7 +319,8 @@ pub async fn resolve(
     client_id: &str,
 ) -> Result<Client, CoreError> {
     let cached = sqlx::query(
-        "SELECT id, client_id, kind, client_name, redirect_uris, expires_at, disabled_at
+        "SELECT id, client_id, kind, client_name, redirect_uris, expires_at, disabled_at,
+                (expires_at IS NULL OR expires_at > now()) AS fresh
          FROM penfii.oauth_clients WHERE client_id = $1",
     )
     .bind(client_id)
@@ -331,8 +332,9 @@ pub async fn resolve(
         if disabled.is_some() {
             return Err(CoreError::NotFound);
         }
-        let expires: Option<chrono::DateTime<chrono::Utc>> = row.try_get("expires_at")?;
-        if !is_url || expires.is_none_or(|at| at > chrono::Utc::now()) {
+        // Whether the cached document is still fresh is the database's clock's call.
+        let fresh: bool = row.try_get("fresh")?;
+        if !is_url || fresh {
             return from_row(row);
         }
     }

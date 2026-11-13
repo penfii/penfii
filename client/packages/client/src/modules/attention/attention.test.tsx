@@ -45,6 +45,7 @@ const item = (over: object = {}) => ({
 beforeEach(() => {
   localStorage.setItem('penfii.locale', 'en-US')
   Object.values(api).forEach((fn) => fn.mockReset())
+  api.searchDirectory.mockResolvedValue({ query: '', results: [] })
   api.getInbox.mockResolvedValue({ items: [], nextCursor: null, unreadCount: 0, unreadCapped: false })
   api.getFavorites.mockResolvedValue([])
   api.getFavoriteFolders.mockResolvedValue([])
@@ -87,10 +88,70 @@ describe('Inbox', () => {
     await waitFor(() => expect(api.inboxReadAll).toHaveBeenCalledWith('w', undefined))
   })
 
+  it('offers to undo an archive and restores the unread state it had', async () => {
+    api.getInbox.mockResolvedValue({ items: [item()], nextCursor: null, unreadCount: 1, unreadCapped: false })
+    api.inboxCommand.mockResolvedValueOnce({ id: 'i1', state: 'ARCHIVED', version: 2 }).mockResolvedValueOnce({ id: 'i1', state: 'READ', version: 3 }).mockResolvedValueOnce({ id: 'i1', state: 'UNREAD', version: 4 })
+    mount('/w/w/inbox', '/w/:workspaceId/inbox', <InboxPage />)
+    await screen.findByText('Mina assigned a Task to you')
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }))
+    expect(await screen.findByText('Archived')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(api.inboxCommand).toHaveBeenCalledWith('i1', 'unarchive', { expectedVersion: 2 }))
+    await waitFor(() => expect(api.inboxCommand).toHaveBeenCalledWith('i1', 'unread', { expectedVersion: 3 }))
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+  })
+
+  it('does not offer an undo for the read toggle, which stays on the row', async () => {
+    api.getInbox.mockResolvedValue({ items: [item()], nextCursor: null, unreadCount: 1, unreadCapped: false })
+    api.inboxCommand.mockResolvedValue({ id: 'i1', state: 'READ', version: 2 })
+    mount('/w/w/inbox', '/w/:workspaceId/inbox', <InboxPage />)
+    await screen.findByText('Mina assigned a Task to you')
+    fireEvent.click(screen.getByRole('button', { name: 'Mark read' }))
+    await waitFor(() => expect(api.inboxCommand).toHaveBeenCalled())
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+  })
+
   it('says the Invitations filter is empty because no producer exists', async () => {
     mount('/w/w/inbox?box=invitations', '/w/:workspaceId/inbox', <InboxPage />)
     expect(await screen.findByText('This server does not create invitation notices yet.')).toBeTruthy()
-    await waitFor(() => expect(api.getInbox).toHaveBeenCalledWith('w', expect.objectContaining({ filter: 'invitations' })))
+    await waitFor(() => expect(api.getInbox).toHaveBeenCalledWith('w', expect.objectContaining({ filter: ['invitations'] })))
+  })
+
+  it('sends the unread Filter as state and ORs several types into one filter', async () => {
+    mount('/w/w/inbox?view=inbox&type=mentions,replies&unread=1', '/w/:workspaceId/inbox', <InboxPage />)
+    await waitFor(() => expect(api.getInbox).toHaveBeenCalledWith('w', expect.objectContaining({ view: 'inbox', filter: ['mentions', 'replies'], state: 'unread' })))
+  })
+
+  it('lets the unread Filter win over "show read", and keeps the View Options on this device', async () => {
+    mount('/w/w/inbox?view=inbox', '/w/:workspaceId/inbox', <InboxPage />)
+    await waitFor(() => expect(api.getInbox).toHaveBeenCalledWith('w', expect.objectContaining({ state: 'all' })))
+    fireEvent.click(screen.getByRole('button', { name: 'View options' }))
+    fireEvent.click(screen.getByLabelText('Show read notifications'))
+    await waitFor(() => expect(api.getInbox).toHaveBeenCalledWith('w', expect.objectContaining({ state: 'unread' })))
+    fireEvent.click(screen.getByLabelText('Show snoozed notifications'))
+    await waitFor(() => expect(api.getInbox).toHaveBeenCalledWith('w', expect.objectContaining({ includeSnoozed: true })))
+    expect(JSON.parse(localStorage.getItem('penfii.inbox.viewOptions') ?? '{}')).toEqual({ showRead: false, showSnoozed: true, groupByDay: true })
+  })
+
+  it('opens the archive, lists archived items by archivedAt and restores one with unarchive', async () => {
+    api.getInbox.mockResolvedValue({ items: [item({ state: 'ARCHIVED', archivedAt: '2026-10-23T07:00:00Z' })], nextCursor: null, unreadCount: 0, unreadCapped: false })
+    api.inboxCommand.mockResolvedValue({ id: 'i1', state: 'READ', version: 3 })
+    mount('/w/w/inbox?view=archived', '/w/:workspaceId/inbox', <InboxPage />)
+    await screen.findByText('Mina assigned a Task to you')
+    expect(api.getInbox).toHaveBeenCalledWith('w', expect.objectContaining({ view: 'archived', state: 'all' }))
+    expect(screen.queryByRole('button', { name: 'Mark all read' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Unread' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Restore to Inbox' }))
+    await waitFor(() => expect(api.inboxCommand).toHaveBeenCalledWith('i1', 'unarchive', { expectedVersion: 1, until: undefined }))
+  })
+
+  it('tells an empty Inbox from a filter with no match', async () => {
+    mount('/w/w/inbox?view=inbox', '/w/:workspaceId/inbox', <InboxPage />)
+    expect(await screen.findByText('Your inbox is empty.')).toBeTruthy()
+    cleanup()
+    mount('/w/w/inbox?view=inbox&type=mentions', '/w/:workspaceId/inbox', <InboxPage />)
+    expect(await screen.findByText('No notifications match')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Clear filters' })).toBeTruthy()
   })
 
   it('says how late a reminder arrived', async () => {

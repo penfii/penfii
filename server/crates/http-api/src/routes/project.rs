@@ -8,6 +8,7 @@ use penfii_contracts::CreateProjectRequest;
 use penfii_core::calendar;
 use penfii_core::organization;
 use penfii_core::personal;
+use penfii_core::platform::ChangeNotice;
 use penfii_core::project_access;
 use penfii_core::work::{self};
 use serde_json::json;
@@ -15,7 +16,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
-use crate::extract::{self, Actor, RawJson};
+use crate::extract::{self, Actor, Body};
 
 use axum::Router;
 use axum::routing::{delete, get, patch, post, put};
@@ -54,6 +55,21 @@ pub(super) fn routes() -> Router<AppState> {
             "/v1/projects/{id}/teams/{team_id}/participation",
             put(set_project_team_participation),
         )
+        .route(
+            "/v1/projects/{id}/private-channels",
+            get(project_private_channels),
+        )
+}
+
+/// The Project's private channels for its admin, readable or not (names and counts, no messages).
+async fn project_private_channels(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Actor(user_id): Actor,
+) -> Result<Response, ApiError> {
+    let items =
+        penfii_core::conversation::project_private_channels(&state.pool, user_id, id).await?;
+    Ok(Json(serde_json::json!({ "items": items })).into_response())
 }
 
 async fn project_members(
@@ -76,9 +92,8 @@ async fn create_project(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<CreateProjectRequest>,
 ) -> Result<Response, ApiError> {
-    let body: CreateProjectRequest = extract::parse(raw)?;
     let project = organization::create_project(
         &state.pool,
         user_id,
@@ -102,9 +117,8 @@ async fn update_project(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<UpdateProjectBody>,
 ) -> Result<Response, ApiError> {
-    let body: UpdateProjectBody = extract::parse(raw)?;
     let project = organization::update_project_estimate_unit(
         &state.pool,
         user_id,
@@ -112,6 +126,7 @@ async fn update_project(
         &body.estimate_unit,
     )
     .await?;
+    state.publish([ChangeNotice::Project { project_id }]);
     Ok(Json(project).into_response())
 }
 
@@ -136,9 +151,8 @@ async fn put_project_calendar(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<PutCalendarBody>,
 ) -> Result<Response, ApiError> {
-    let body: PutCalendarBody = extract::parse(raw)?;
     let saved = calendar::put_calendar(
         &state.pool,
         user_id,
@@ -148,6 +162,7 @@ async fn put_project_calendar(
         body.definition,
     )
     .await?;
+    state.publish([ChangeNotice::Project { project_id }]);
     let status = if body.expected_version == 0 {
         StatusCode::CREATED
     } else {
@@ -201,9 +216,8 @@ async fn add_pin(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<AddPinBody>,
 ) -> Result<Response, ApiError> {
-    let body: AddPinBody = extract::parse(raw)?;
     let pins = personal::add_pin(
         &state.pool,
         user_id,
@@ -236,9 +250,8 @@ async fn set_designation(
     State(state): State<AppState>,
     Path((project_id, member_id)): Path<(Uuid, Uuid)>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<DesignationBody>,
 ) -> Result<Response, ApiError> {
-    let body: DesignationBody = extract::parse(raw)?;
     let (waive, pins) = personal::set_designation(
         &state.pool,
         user_id,
@@ -272,9 +285,8 @@ async fn set_project_grant(
     State(state): State<AppState>,
     Path((id, target)): Path<(Uuid, Uuid)>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<RoleBody>,
 ) -> Result<Response, ApiError> {
-    let body: RoleBody = extract::parse(raw)?;
     let role = body
         .role
         .ok_or_else(|| penfii_core::CoreError::validation("role is required"))?;
@@ -287,7 +299,8 @@ async fn remove_project_grant(
     Path((id, target)): Path<(Uuid, Uuid)>,
     Actor(user_id): Actor,
 ) -> Result<Response, ApiError> {
-    project_access::remove_grant(&state.pool, user_id, id, target).await?;
+    let notices = project_access::remove_grant(&state.pool, user_id, id, target).await?;
+    state.publish(notices);
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -305,7 +318,8 @@ async fn unlink_project_team(
     Path((id, team_id)): Path<(Uuid, Uuid)>,
     Actor(user_id): Actor,
 ) -> Result<Response, ApiError> {
-    project_access::unlink_team(&state.pool, user_id, id, team_id).await?;
+    let notices = project_access::unlink_team(&state.pool, user_id, id, team_id).await?;
+    state.publish(notices);
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -323,10 +337,16 @@ async fn set_project_team_participation(
     State(state): State<AppState>,
     Path((id, team_id)): Path<(Uuid, Uuid)>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<RoleBody>,
 ) -> Result<Response, ApiError> {
-    let body: RoleBody = extract::parse(raw)?;
-    project_access::set_team_participation(&state.pool, user_id, id, team_id, body.role.as_deref())
-        .await?;
+    let notices = project_access::set_team_participation(
+        &state.pool,
+        user_id,
+        id,
+        team_id,
+        body.role.as_deref(),
+    )
+    .await?;
+    state.publish(notices);
     Ok(StatusCode::NO_CONTENT.into_response())
 }

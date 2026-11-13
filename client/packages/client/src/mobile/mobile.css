@@ -2,7 +2,7 @@
 .mobile-shell {
   display: flex;
   flex-direction: column;
-  height: 100dvh;
+  height: var(--m-vh, 100dvh);
   overflow: hidden;
   background: var(--bg);
   color: var(--text);
@@ -31,24 +31,24 @@
 .mobile-tabs {
   flex: 0 0 auto;
   display: flex;
-  overflow-x: auto;
-  scrollbar-width: none;
   border-top: 1px solid var(--border);
   background: var(--bg-elevated);
   padding-bottom: env(safe-area-inset-bottom);
 }
-.mobile-tabs::-webkit-scrollbar { display: none; }
+/* Six equal tabs: each is a sixth of the width, so the bar fits at 320px and nothing scrolls sideways. */
 .mobile-tab {
   position: relative;
-  flex: 0 0 72px;
-  flex-shrink: 0;
+  flex: 1 1 0;
+  min-width: 0;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
   min-height: 56px;
+  padding-inline: 2px;
   color: var(--text-muted);
-  font-size: .7rem; font-weight: 600; text-decoration: none;
+  font-size: .68rem; font-weight: 600; text-decoration: none;
 }
+.mobile-tab-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mobile-tab.active { color: var(--accent-strong); background: var(--accent-soft); }
-.mobile-tab-badge { position: absolute; top: 4px; right: 12px; min-width: 18px; padding: 0 4px; border-radius: 9px; background: var(--danger, #8d3535); color: #fff; font-size: .65rem; line-height: 18px; text-align: center; }
+.mobile-tab-badge { position: absolute; top: 4px; right: max(2px, calc(50% - 22px)); min-width: 18px; padding: 0 4px; border-radius: 9px; background: var(--danger, #8d3535); color: #fff; font-size: .65rem; line-height: 18px; text-align: center; }
 
 
 .mobile-shortcuts { flex: 0 0 auto; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); padding: var(--space-4) var(--space-4) 0; }
@@ -114,7 +114,6 @@
 
 /* Ticket panel: a pushed screen with a back control; the close cross is for wider screens. */
 .mobile-shell .ticket-panel > .ticket-panel-head .panel-close { display: none; }
-.mobile-shell .ticket-panel .ticket-siblings { display: none; }
 .mobile-shell .ticket-panel-head { position: sticky; top: 0; z-index: 2; }
 .mobile-shell .detail-panel { position: fixed; inset: 0; z-index: 80; width: auto; max-width: none; border: 0; padding-bottom: env(safe-area-inset-bottom); }
 
@@ -208,3 +207,42 @@ html.m-scroll-locked .mobile-main :is(.page-scroll, .work-scroll, .workspace-nav
 .mobile-shell .reply-count, .mobile-shell .author-link, .mobile-shell .chip, .mobile-shell .saved-open, .mobile-shell .quick-add-trigger { min-height: 36px; }
 .mobile-shell .reply-count, .mobile-shell .author-link { display: inline-flex; align-items: center; }
 .mobile-shell input[type="checkbox"], .mobile-shell input[type="radio"] { width: 22px; height: 22px; }
+
+/* Root app bar: the area's name at the left, Search and the account at the right. */
+.mobile-bar.is-root { display: flex; justify-content: space-between; gap: var(--space-2); padding-inline: var(--space-4) var(--space-2); }
+.mobile-bar.is-root h1 { text-align: left; max-width: none; min-width: 0; flex: 1 1 auto; }
+.mobile-bar.is-root .mobile-bar-end { gap: 2px; }
+.mobile-bar-button { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 50%; color: var(--text); }
+.mobile-bar-button[aria-current="page"] { background: var(--accent-soft); color: var(--accent-strong); }
+
+/*
+ * Chrome while reading. The app bar and the tabs never move. A project's section tabs and tools, and a
+ * channel's header, fold away when scrolling down on a short screen and return on scrolling up (see
+ * useChromeCollapse); with the keyboard open they fold away too, and so do the tabs.
+ */
+@media (max-height: 760px) {
+  .mobile-shell[data-chrome="collapsed"] :is(.project-header, .view-bar, .conversation-frame > .context-bar) { display: none; }
+}
+.mobile-shell[data-keyboard] :is(.project-header, .view-bar, .conversation-frame > .context-bar, .mobile-tabs) { display: none; }
+
+/* A pushed screen ends in an input (a channel's composer, a comment box) and has no tab bar: its notices go under the app bar so they never cover what is being typed into. */
+@media (max-width: 640px) {
+  html:has(.mobile-shell.is-push) .notice-host { bottom: auto; top: calc(52px + env(safe-area-inset-top)); }
+}
+
+/* A result notice never covers an open sheet: while one is open it moves to the top of the screen. */
+@media (max-width: 640px) {
+  html.m-scroll-locked .notice-host { bottom: auto; top: calc(var(--space-3) + env(safe-area-inset-top)); z-index: 200; }
+}
+
+/* Editing a document on a phone: one row (save state, Finish editing, Save) that stays at the top while the page scrolls. */
+.mobile-shell .doc-topbar.is-editing { flex-wrap: nowrap; gap: var(--space-2); padding: var(--space-2) var(--space-3); min-height: 0; }
+.mobile-shell .doc-topbar.is-editing .doc-crumb { display: none; }
+.mobile-shell .doc-topbar.is-editing .doc-status { flex: 1 1 auto; min-width: 0; margin-left: 0; white-space: normal; line-height: 1.25; font-size: .78rem; }
+.mobile-shell .doc-topbar.is-editing .doc-actions { flex: 0 0 auto; flex-wrap: nowrap; }
+
+/* Administration on a phone: the pushed bar already names the page and the Settings root lists its siblings, so the strip, the page title and its lead give their room to the content. */
+.mobile-shell .workspace-admin > .admin-subnav, .mobile-shell .workspace-admin > .field-hint { display: none; }
+.mobile-shell .workspace-admin > h1 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.mobile-shell .members-table, .mobile-shell .admin-table-wrap table { margin: 0; width: 100%; max-width: 100%; }
+.mobile-shell .members-table td.admin-col-actions { text-align: left; width: auto; }

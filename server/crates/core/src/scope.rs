@@ -6,7 +6,6 @@
 
 use penfii_contracts::{
     BulkItemResult, BulkResult, ChildSummary, ScopeDataset, ScopeProject, ScopedTicket, Ticket,
-    TicketLabel,
 };
 use serde_json::{Value, json};
 use sqlx::{PgConnection, PgPool, Row};
@@ -182,29 +181,8 @@ async fn describe_tickets(
     channel_ids: &[Uuid],
 ) -> Result<Vec<ScopedTicket>, CoreError> {
     // Labels in one query.
+    crate::work::attach_labels_batch(&mut *tx, &mut tickets).await?;
     let ids: Vec<Uuid> = tickets.iter().map(|t| t.id).collect();
-    let label_rows = sqlx::query(
-        "SELECT tl.ticket_id,l.id,l.name,l.color FROM penfii.ticket_labels tl
-         JOIN penfii.labels l ON l.id=tl.label_id AND l.retired_at IS NULL
-         WHERE tl.ticket_id=ANY($1) ORDER BY l.name,l.id",
-    )
-    .bind(&ids)
-    .fetch_all(&mut *tx)
-    .await?;
-    let mut labels: HashMap<Uuid, Vec<TicketLabel>> = HashMap::new();
-    for row in label_rows {
-        labels
-            .entry(row.try_get("ticket_id")?)
-            .or_default()
-            .push(TicketLabel {
-                id: row.try_get("id")?,
-                name: row.try_get("name")?,
-                color: row.try_get("color")?,
-            });
-    }
-    for item in &mut tickets {
-        item.labels = labels.remove(&item.id).unwrap_or_default();
-    }
     planning::attach_planning(tx, &mut tickets, actor_id).await?;
     // State names and categories, channel names.
     let status_ids: Vec<Uuid> = tickets.iter().map(|t| t.status_id).collect();
@@ -291,6 +269,9 @@ pub enum BulkChange {
     Sprint(Option<Uuid>),
     AddMilestones(Vec<Uuid>),
     RemoveMilestones(Vec<Uuid>),
+    /// Archive or trash: Project admin only, through the single-Ticket lifecycle commands.
+    Archive,
+    Trash,
 }
 
 impl BulkChange {
@@ -304,6 +285,8 @@ impl BulkChange {
             Self::Sprint(id) => json!({"type":"SPRINT","sprintId":id}),
             Self::AddMilestones(ids) => json!({"type":"ADD_MILESTONES","milestoneIds":ids}),
             Self::RemoveMilestones(ids) => json!({"type":"REMOVE_MILESTONES","milestoneIds":ids}),
+            Self::Archive => json!({"type":"ARCHIVE"}),
+            Self::Trash => json!({"type":"TRASH"}),
         }
     }
 }
@@ -321,7 +304,18 @@ fn failure(error: CoreError) -> (String, String) {
             ("reauth_required".into(), "sign in again to continue".into())
         }
         CoreError::RateLimited { .. } => ("rate_limited".into(), "too many attempts".into()),
-        CoreError::Internal(message) => ("internal".into(), message),
+        CoreError::DbUnavailable(cause) => {
+            tracing::warn!(cause, "bulk change item: database unavailable");
+            (
+                "db_unavailable".into(),
+                "the database is temporarily unavailable".into(),
+            )
+        }
+        CoreError::Internal(message) => {
+            // What the driver said (it can name a table or a constraint) stays in the log.
+            tracing::error!("{message}");
+            ("internal".into(), "internal error".into())
+        }
     }
 }
 
@@ -412,6 +406,15 @@ async fn change_one(
                 milestones.retain(|id| !ids.contains(id));
             }
             planning::set_milestones(pool, actor_id, ticket_id, milestones, key).await
+        }
+        BulkChange::Archive => {
+            let (_, notice) =
+                crate::ticket_lifecycle::archive_ticket(pool, actor_id, ticket_id).await?;
+            Ok((current, notice))
+        }
+        BulkChange::Trash => {
+            let notice = crate::ticket_lifecycle::trash_ticket(pool, actor_id, ticket_id).await?;
+            Ok((current, Some(notice)))
         }
     }
 }

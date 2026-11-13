@@ -10,18 +10,20 @@ mod tickets;
 
 pub use activity::{activity, revision_detail, revisions, ticket_activity};
 pub use board::{
-    board, create_project_label, project_labels, project_members, project_ticket_types,
+    board, create_project_label, project_labels, project_members, project_readable,
+    project_ticket_types, ticket_change_visible,
 };
+pub use changes::{ProjectChange, ProjectChanges, project_changes_since};
 pub(crate) use changes::{project_change, record_change, record_status_category};
 pub(crate) use comments::comment_change;
 pub use comments::{comments, create_comment, delete_comment, edit_comment};
 pub use restore::{RestoreInput, restore_ticket};
 pub use states::{StateInput, StateUpdate, create_state, delete_state, update_state, workflow};
-pub(crate) use tickets::load_live_ticket;
 pub use tickets::{
     TicketInput, TicketUpdate, change_status, children, create_ticket, get_ticket, move_ticket,
     update_ticket,
 };
+pub(crate) use tickets::{load_live_ticket, load_readable_ticket};
 
 use chrono::{DateTime, NaiveDate, Utc};
 use penfii_contracts::{
@@ -38,7 +40,7 @@ use crate::plan_fields;
 use crate::planning;
 use crate::project_role::{channel_allowed, require_project_role};
 
-pub(crate) const TICKET_COLUMNS: &str = "t.id,t.workspace_id,t.project_id,t.channel_id,t.public_key,t.title,t.description,t.hierarchy_kind,t.parent_id,t.status_id,t.assignee_id,(SELECT u.display_name FROM penfii.users u WHERE u.id=t.assignee_id) AS assignee_name,t.priority,t.due_on,t.revision_no,t.created_at,t.updated_at,t.ticket_type_id AS type_id,ty.name AS type_name,ty.color AS type_color,pt.public_key AS parent_key,pt.title AS parent_title,pt.hierarchy_kind AS parent_kind,t.estimate_value::text AS estimate_value,t.estimate_unit,tsc.planned_start_at AS schedule_start,tsc.duration_minutes AS schedule_duration,tsc.is_milestone AS schedule_milestone,(tsc.ticket_id IS NOT NULL) AS has_schedule";
+pub(crate) const TICKET_COLUMNS: &str = "t.id,t.workspace_id,t.project_id,t.channel_id,t.public_key,t.title,t.description,t.hierarchy_kind,t.parent_id,t.status_id,t.assignee_id,(SELECT u.display_name FROM penfii.users u WHERE u.id=t.assignee_id) AS assignee_name,t.priority,t.due_on,t.revision_no,t.created_at,t.updated_at,t.archived_at,t.ticket_type_id AS type_id,ty.name AS type_name,ty.color AS type_color,pt.public_key AS parent_key,pt.title AS parent_title,pt.hierarchy_kind AS parent_kind,t.estimate_value::text AS estimate_value,t.estimate_unit,tsc.planned_start_at AS schedule_start,tsc.duration_minutes AS schedule_duration,tsc.is_milestone AS schedule_milestone,(tsc.ticket_id IS NOT NULL) AS has_schedule";
 
 pub(crate) const TICKET_FROM: &str = "penfii.tickets t LEFT JOIN penfii.ticket_types ty ON ty.id=t.ticket_type_id LEFT JOIN penfii.tickets pt ON pt.id=t.parent_id AND pt.trashed_at IS NULL AND pt.purged_at IS NULL LEFT JOIN penfii.ticket_schedules tsc ON tsc.ticket_id=t.id";
 
@@ -67,6 +69,7 @@ pub(crate) struct TicketRow {
     revision_no: i64,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    archived_at: Option<DateTime<Utc>>,
     type_id: Option<Uuid>,
     type_name: Option<String>,
     type_color: Option<String>,
@@ -135,6 +138,7 @@ pub(crate) fn ticket(row: TicketRow) -> Ticket {
         revision_no: row.revision_no,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        archived_at: row.archived_at,
     }
 }
 
@@ -145,12 +149,50 @@ pub(crate) async fn attach_labels(
     let rows=sqlx::query("SELECT l.id,l.name,l.color FROM penfii.ticket_labels tl JOIN penfii.labels l ON l.id=tl.label_id WHERE tl.ticket_id=$1 AND l.retired_at IS NULL ORDER BY l.name,l.id").bind(ticket.id).fetch_all(&mut *conn).await?;
     ticket.labels = rows
         .into_iter()
-        .map(|row| TicketLabel {
-            id: row.get("id"),
-            name: row.get("name"),
-            color: row.get("color"),
+        .map(|row| -> Result<_, sqlx::Error> {
+            Ok(TicketLabel {
+                id: row.try_get("id")?,
+                name: row.try_get("name")?,
+                color: row.try_get("color")?,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
+    Ok(())
+}
+
+/// The labels of many Tickets in one query (the Board, the Team and Workspace scopes). Every Ticket gets
+/// its labels, in name order, whatever the number of Tickets.
+pub(crate) async fn attach_labels_batch(
+    conn: &mut PgConnection,
+    tickets: &mut [Ticket],
+) -> Result<(), CoreError> {
+    if tickets.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<Uuid> = tickets.iter().map(|t| t.id).collect();
+    let rows = sqlx::query(
+        "SELECT tl.ticket_id,l.id,l.name,l.color FROM penfii.ticket_labels tl
+         JOIN penfii.labels l ON l.id=tl.label_id AND l.retired_at IS NULL
+         WHERE tl.ticket_id=ANY($1) ORDER BY l.name,l.id",
+    )
+    .bind(&ids)
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut labels: std::collections::HashMap<Uuid, Vec<TicketLabel>> =
+        std::collections::HashMap::new();
+    for row in rows {
+        labels
+            .entry(row.try_get("ticket_id")?)
+            .or_default()
+            .push(TicketLabel {
+                id: row.try_get("id")?,
+                name: row.try_get("name")?,
+                color: row.try_get("color")?,
+            });
+    }
+    for ticket in tickets.iter_mut() {
+        ticket.labels = labels.remove(&ticket.id).unwrap_or_default();
+    }
     Ok(())
 }
 
@@ -186,8 +228,10 @@ pub(crate) async fn attach_children(
     if ticket.hierarchy_kind == "SUBTASK" {
         return Ok(());
     }
-    let rows = sqlx::query("SELECT c.channel_id,s.category FROM penfii.tickets c JOIN penfii.workflow_statuses s ON s.id=c.status_id WHERE c.parent_id=$1 AND c.archived_at IS NULL AND c.trashed_at IS NULL AND c.purged_at IS NULL")
+    let rows = sqlx::query("SELECT c.channel_id,s.category FROM penfii.tickets c JOIN penfii.workflow_statuses s ON s.id=c.status_id WHERE c.parent_id=$1 AND ($2 OR c.archived_at IS NULL) AND c.trashed_at IS NULL AND c.purged_at IS NULL")
         .bind(ticket.id)
+        // An archived parent counts the children that were archived with it.
+        .bind(ticket.archived_at.is_some())
         .fetch_all(&mut *conn)
         .await?;
     let mut access: HashMap<Uuid, bool> = HashMap::new();

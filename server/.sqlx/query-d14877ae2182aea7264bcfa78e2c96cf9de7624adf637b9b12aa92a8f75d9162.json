@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO penfii.auth_throttle (scope, key_hash, window_start, failures)\n             VALUES ($1, $2, $3, 0) ON CONFLICT (scope, key_hash) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bytea",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d14877ae2182aea7264bcfa78e2c96cf9de7624adf637b9b12aa92a8f75d9162"
+}

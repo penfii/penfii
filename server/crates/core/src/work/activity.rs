@@ -103,15 +103,17 @@ async fn mcp_clients(
     .await?;
     Ok(rows
         .into_iter()
-        .map(|row| {
-            let id: String = row.get("resource_id");
-            let key = match row.get::<Option<i64>, _>("resource_revision") {
-                Some(revision) => format!("{id}:{revision}"),
-                None => id,
-            };
-            (key, row.get("client_name"))
+        .map(|row| -> Result<_, sqlx::Error> {
+            Ok({
+                let id: String = row.try_get("resource_id")?;
+                let key = match row.try_get::<Option<i64>, _>("resource_revision")? {
+                    Some(revision) => format!("{id}:{revision}"),
+                    None => id,
+                };
+                (key, row.try_get("client_name")?)
+            })
         })
-        .collect())
+        .collect::<Result<HashMap<_, _>, sqlx::Error>>()?)
 }
 
 fn activity_via(
@@ -135,23 +137,26 @@ fn activity_via(
         .cloned()
 }
 
-fn activity_keys(rows: &[sqlx::postgres::PgRow]) -> (Vec<(Uuid, i64)>, Vec<String>) {
+/// The revisions (Ticket, number) and comment ids the rows refer to.
+type ActivityKeys = (Vec<(Uuid, i64)>, Vec<String>);
+
+fn activity_keys(rows: &[sqlx::postgres::PgRow]) -> Result<ActivityKeys, sqlx::Error> {
     let mut revisions = Vec::new();
     let mut comments = Vec::new();
     for row in rows {
-        let kind: String = row.get("activity_kind");
+        let kind: String = row.try_get("activity_kind")?;
         if kind == "ticket.commented" {
-            let data: Value = row.get("data");
+            let data: Value = row.try_get("data")?;
             if let Some(id) = data.get("commentId").and_then(Value::as_str) {
                 comments.push(id.to_string());
             }
         } else if (!is_link_activity(&kind) || kind == "ticket.created")
-            && let Some(no) = row.get::<Option<i64>, _>("ticket_revision_no")
+            && let Some(no) = row.try_get::<Option<i64>, _>("ticket_revision_no")?
         {
-            revisions.push((row.get::<Uuid, _>("ticket_id"), no));
+            revisions.push((row.try_get::<Uuid, _>("ticket_id")?, no));
         }
     }
-    (revisions, comments)
+    Ok((revisions, comments))
 }
 
 pub async fn ticket_activity(
@@ -179,54 +184,62 @@ pub async fn ticket_activity(
     .await?;
     let more = rows.len() as i64 > limit;
     rows.truncate(limit as usize);
-    let revisions = with_previous(
-        rows.iter()
-            .filter(|row| {
-                !is_link_activity(&row.get::<String, _>("activity_kind"))
-                    && row.get::<Option<i64>, _>("ticket_revision_no").is_some()
-            })
-            .filter_map(|row| row.get::<Option<i64>, _>("ticket_revision_no")),
-    );
+    let mut with_revision = Vec::new();
+    for row in &rows {
+        if !is_link_activity(&row.try_get::<String, _>("activity_kind")?)
+            && let Some(no) = row.try_get::<Option<i64>, _>("ticket_revision_no")?
+        {
+            with_revision.push(no);
+        }
+    }
+    let revisions = with_previous(with_revision.into_iter());
     let names = status_names(&mut tx, access.project_id).await?;
     let views = revision_views(&mut tx, ticket_id, &revisions, &names).await?;
-    let (revision_keys, comment_keys) = activity_keys(&rows);
+    let (revision_keys, comment_keys) = activity_keys(&rows)?;
     let clients = mcp_clients(&mut tx, &revision_keys, &comment_keys).await?;
     tx.commit().await?;
     let next_cursor = if more {
-        rows.last()
-            .map(|row| paging::encode_cursor(row.get("occurred_at"), row.get("id")))
+        match rows.last() {
+            Some(row) => Some(paging::encode_cursor(
+                row.try_get("occurred_at")?,
+                row.try_get("id")?,
+            )),
+            None => None,
+        }
     } else {
         None
     };
     let items = rows
         .into_iter()
-        .map(|row| {
-            let kind: String = row.get("activity_kind");
-            let revision_no: Option<i64> = row.get("ticket_revision_no");
-            let changes = match (kind.as_str(), revision_no) {
-                (kind, _) if is_link_activity(kind) => Vec::new(),
-                (_, None) => Vec::new(),
-                (_, Some(n)) => match (views.get(&(n - 1)), views.get(&n)) {
-                    (Some(from), Some(to)) => work_history::diff(from, to),
-                    _ => Vec::new(),
-                },
-            };
-            let data: Value = row.get("data");
-            let via = activity_via(&clients, &kind, ticket_id, revision_no, &data);
-            TicketActivity {
-                id: row.get("id"),
-                ticket_id: row.get("ticket_id"),
-                revision_no,
-                activity_kind: kind,
-                actor_user_id: row.get("actor_user_id"),
-                actor_name: row.get("actor_name"),
-                data,
-                via,
-                changes,
-                occurred_at: row.get("occurred_at"),
-            }
+        .map(|row| -> Result<_, sqlx::Error> {
+            Ok({
+                let kind: String = row.try_get("activity_kind")?;
+                let revision_no: Option<i64> = row.try_get("ticket_revision_no")?;
+                let changes = match (kind.as_str(), revision_no) {
+                    (kind, _) if is_link_activity(kind) => Vec::new(),
+                    (_, None) => Vec::new(),
+                    (_, Some(n)) => match (views.get(&(n - 1)), views.get(&n)) {
+                        (Some(from), Some(to)) => work_history::diff(from, to),
+                        _ => Vec::new(),
+                    },
+                };
+                let data: Value = row.try_get("data")?;
+                let via = activity_via(&clients, &kind, ticket_id, revision_no, &data);
+                TicketActivity {
+                    id: row.try_get("id")?,
+                    ticket_id: row.try_get("ticket_id")?,
+                    revision_no,
+                    activity_kind: kind,
+                    actor_user_id: row.try_get("actor_user_id")?,
+                    actor_name: row.try_get("actor_name")?,
+                    data,
+                    via,
+                    changes,
+                    occurred_at: row.try_get("occurred_at")?,
+                }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
     Ok(ActivityPage { items, next_cursor })
 }
 
@@ -239,29 +252,35 @@ pub async fn activity(
     let mut tx = pool.begin().await?;
     let _ = require_project_role(&mut tx, project_id, actor_id, false).await?;
     let rows=sqlx::query("SELECT a.id,a.ticket_id,a.origin_channel_id,a.ticket_revision_no,a.actor_user_id,u.display_name AS actor_name,a.activity_kind,a.data,a.occurred_at FROM penfii.activity_entries a JOIN penfii.tickets t ON t.id=a.ticket_id LEFT JOIN penfii.users u ON u.id=a.actor_user_id WHERE a.origin_project_id=$1 ORDER BY a.occurred_at DESC,a.id DESC LIMIT 100").bind(project_id).fetch_all(&mut *tx).await?;
-    let (revision_keys, comment_keys) = activity_keys(&rows);
+    let (revision_keys, comment_keys) = activity_keys(&rows)?;
     let clients = mcp_clients(&mut tx, &revision_keys, &comment_keys).await?;
     let mut out = Vec::new();
     for row in rows {
-        let channel: Option<Uuid> = row.get("origin_channel_id");
+        let channel: Option<Uuid> = row.try_get("origin_channel_id")?;
         if !channel_allowed(&mut tx, channel, actor_id).await? {
             continue;
         }
-        let kind: String = row.get("activity_kind");
-        let revision_no: Option<i64> = row.get("ticket_revision_no");
-        let data: Value = row.get("data");
-        let via = activity_via(&clients, &kind, row.get("ticket_id"), revision_no, &data);
+        let kind: String = row.try_get("activity_kind")?;
+        let revision_no: Option<i64> = row.try_get("ticket_revision_no")?;
+        let data: Value = row.try_get("data")?;
+        let via = activity_via(
+            &clients,
+            &kind,
+            row.try_get("ticket_id")?,
+            revision_no,
+            &data,
+        );
         out.push(TicketActivity {
-            id: row.get("id"),
-            ticket_id: row.get("ticket_id"),
+            id: row.try_get("id")?,
+            ticket_id: row.try_get("ticket_id")?,
             revision_no,
             activity_kind: kind,
-            actor_user_id: row.get("actor_user_id"),
-            actor_name: row.get("actor_name"),
+            actor_user_id: row.try_get("actor_user_id")?,
+            actor_name: row.try_get("actor_name")?,
             data,
             via,
             changes: Vec::new(),
-            occurred_at: row.get("occurred_at"),
+            occurred_at: row.try_get("occurred_at")?,
         });
     }
     tx.commit().await?;
@@ -293,42 +312,54 @@ pub async fn revisions(
     .await?;
     let more = rows.len() as i64 > limit;
     rows.truncate(limit as usize);
-    let numbers = with_previous(rows.iter().map(|row| row.get::<i64, _>("revision_no")));
+    let mut listed = Vec::new();
+    for row in &rows {
+        listed.push(row.try_get::<i64, _>("revision_no")?);
+    }
+    let numbers = with_previous(listed.into_iter());
     let names = status_names(&mut tx, access.project_id).await?;
     let views = revision_views(&mut tx, ticket_id, &numbers, &names).await?;
     let keys: Vec<(Uuid, i64)> = rows
         .iter()
-        .map(|row| (ticket_id, row.get::<i64, _>("revision_no")))
-        .collect();
+        .map(|row| -> Result<_, sqlx::Error> {
+            Ok((ticket_id, row.try_get::<i64, _>("revision_no")?))
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
     let clients = mcp_clients(&mut tx, &keys, &[]).await?;
     tx.commit().await?;
     let next_before = if more {
-        rows.last().map(|row| row.get::<i64, _>("revision_no"))
+        match rows.last() {
+            Some(row) => Some(row.try_get::<i64, _>("revision_no")?),
+            None => None,
+        }
     } else {
         None
     };
     let items = rows
         .into_iter()
-        .map(|row| {
-            let revision_no: i64 = row.get("revision_no");
-            let changed_fields = match (views.get(&(revision_no - 1)), views.get(&revision_no)) {
-                (Some(from), Some(to)) => work_history::diff(from, to)
-                    .into_iter()
-                    .map(|change| change.field)
-                    .collect(),
-                _ => Vec::new(),
-            };
-            RevisionSummary {
-                revision_no,
-                actor_user_id: row.get("actor_user_id"),
-                actor_name: row.get("actor_name"),
-                recorded_at: row.get("recorded_at"),
-                changed_fields,
-                restore_source_revision_no: row.get("restore_source_revision_no"),
-                via: clients.get(&format!("{ticket_id}:{revision_no}")).cloned(),
-            }
+        .map(|row| -> Result<_, sqlx::Error> {
+            Ok({
+                let revision_no: i64 = row.try_get("revision_no")?;
+                let changed_fields = match (views.get(&(revision_no - 1)), views.get(&revision_no))
+                {
+                    (Some(from), Some(to)) => work_history::diff(from, to)
+                        .into_iter()
+                        .map(|change| change.field)
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                RevisionSummary {
+                    revision_no,
+                    actor_user_id: row.try_get("actor_user_id")?,
+                    actor_name: row.try_get("actor_name")?,
+                    recorded_at: row.try_get("recorded_at")?,
+                    changed_fields,
+                    restore_source_revision_no: row.try_get("restore_source_revision_no")?,
+                    via: clients.get(&format!("{ticket_id}:{revision_no}")).cloned(),
+                }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
     Ok(RevisionPage { items, next_before })
 }
 

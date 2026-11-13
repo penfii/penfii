@@ -21,6 +21,9 @@ use crate::origin::AllowedOrigin;
 use axum::Router;
 use axum::routing::get;
 
+/// The most changes a reconnecting Project socket is caught up with; further behind than this it reads the Project again.
+const PROJECT_REPLAY_LIMIT: i64 = 500;
+
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/v1/ws", get(ws))
@@ -85,9 +88,70 @@ async fn handle_project(socket: WebSocket, state: AppState, user_id: Uuid, proje
     let Ok(_board) = work::board(&state.pool, project_id, user_id).await else {
         return;
     };
+    // The socket is already subscribed, so a change committed from here on reaches `rx`. The feed is read after that:
+    // everything up to `head` comes from it (or is already in the client's view), everything after from `rx`.
+    let Ok(feed) = work::project_changes_since(
+        &state.pool,
+        project_id,
+        hello.after_change_seq.max(0),
+        PROJECT_REPLAY_LIMIT,
+    )
+    .await
+    else {
+        return;
+    };
+    let head = feed.head;
+    let after = hello.after_change_seq;
+    // `after` 0 is a client with nothing yet (it reads the Board when it gets `project.ready`). Otherwise it holds
+    // everything up to `after`: it is caught up from the feed when the feed can say what happened, and told to read
+    // the Project again when it cannot (a position the feed does not know, or too far behind).
+    if after > 0 {
+        if after > head || after < feed.floor || feed.truncated {
+            if send_json(
+                &mut sink,
+                &json!({"v":1,"type":"project.resync_required","projectId":project_id}),
+            )
+            .await
+            .is_err()
+            {
+                return;
+            }
+        } else {
+            let mut visible = std::collections::HashMap::new();
+            for change in &feed.changes {
+                let seen = match visible.get(&change.ticket_id) {
+                    Some(seen) => *seen,
+                    None => {
+                        // The same check as for a live change: Project role and the Ticket's channel.
+                        match work::ticket_change_visible(
+                            &state.pool,
+                            project_id,
+                            change.ticket_id,
+                            user_id,
+                        )
+                        .await
+                        {
+                            Ok(seen) => {
+                                visible.insert(change.ticket_id, seen);
+                                seen
+                            }
+                            Err(_) => return,
+                        }
+                    }
+                };
+                if !seen {
+                    continue;
+                }
+                let frame = json!({"v":1,"type":"project.ticket.change","projectId":project_id,"ticketId":change.ticket_id,"ticketRevisionNo":change.ticket_revision_no,"changeKind":change.change_kind,"changeSeq":change.change_seq});
+                if send_json(&mut sink, &frame).await.is_err() {
+                    return;
+                }
+            }
+        }
+    }
     let _ = send_json(
         &mut sink,
-        &json!({"v":1,"type":"project.ready","projectId":project_id}),
+        &json!({"v":1,"type":"project.ready","projectId":project_id,"headSeq":head}),
     )
     .await;
     loop {
@@ -105,13 +169,29 @@ async fn handle_project(socket: WebSocket, state: AppState, user_id: Uuid, proje
                 if matches!(event, ChangeNotice::Access { user_id: target } if target == user_id) {
                     return;
                 }
-                let ChangeNotice::Ticket{project_id:event_project,ticket_id,ticket_revision_no,change_kind,..}=event else {continue};
-                if event_project!=project_id {continue;}
-                let Ok(current)=work::board(&state.pool,project_id,user_id).await else{return;};
-                let visible=current.columns.iter().any(|c|c.tickets.iter().any(|t|t.id==ticket_id));
-                if !visible {continue;}
-                let frame=json!({"v":1,"type":"project.ticket.change","projectId":project_id,"ticketId":ticket_id,"ticketRevisionNo":ticket_revision_no,"changeKind":change_kind});
-                if send_json(&mut sink,&frame).await.is_err(){return;}
+                match event {
+                    ChangeNotice::Ticket { project_id: event_project, change_seq, ticket_id, ticket_revision_no, change_kind } => {
+                        if event_project != project_id { continue; }
+                        // Changes up to `head` were sent from the feed above (or the client already holds them).
+                        if change_seq <= head { continue; }
+                        // One ticket, one small check (Project role and the ticket's channel): never the whole Board.
+                        match work::ticket_change_visible(&state.pool, project_id, ticket_id, user_id).await {
+                            Ok(true) => {}
+                            Ok(false) => continue,
+                            Err(_) => return,
+                        }
+                        let frame = json!({"v":1,"type":"project.ticket.change","projectId":project_id,"ticketId":ticket_id,"ticketRevisionNo":ticket_revision_no,"changeKind":change_kind,"changeSeq":change_seq});
+                        if send_json(&mut sink, &frame).await.is_err() { return; }
+                    }
+                    // Many tickets changed at once: the client reads the Board again.
+                    ChangeNotice::Project { project_id: event_project } => {
+                        if event_project != project_id { continue; }
+                        if work::project_readable(&state.pool, project_id, user_id).await.is_err() { return; }
+                        let frame = json!({"v":1,"type":"project.resync_required","projectId":project_id});
+                        if send_json(&mut sink, &frame).await.is_err() { return; }
+                    }
+                    _ => continue,
+                }
             }
         }
     }

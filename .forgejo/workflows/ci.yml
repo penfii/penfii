@@ -84,6 +84,7 @@ jobs:
       # tests make the first index build of the search tests miss OpenSearch's request timeouts (search_unavailable).
       # Timing-sensitive tests (the collab hub's lock wait, the search index build) can miss their limits on this shared
       # runner whichever test it is: one retry; a real failure fails twice.
+      - run: make tools
       - run: make integration || { echo "make integration failed; retrying once"; make integration; }
         env:
           RUST_TEST_THREADS: "4"

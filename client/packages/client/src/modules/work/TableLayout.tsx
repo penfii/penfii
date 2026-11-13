@@ -100,6 +100,7 @@ export function TableLayout({
         ) : null
       case 'ESTIMATE':
         return ticket.estimate ? <span className="estimate-chip">{formatEstimate(ticket.estimate)}</span> : null
+      case 'DUE_ON':
       default: {
         if (!ticket.dueOn) return null
         const done = ticket.stateCategory === 'DONE' || ticket.stateCategory === 'CANCELED'

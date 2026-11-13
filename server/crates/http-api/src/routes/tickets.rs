@@ -13,7 +13,7 @@ use uuid::Uuid;
 use super::key;
 use crate::AppState;
 use crate::error::ApiError;
-use crate::extract::{self, Actor, RawJson, present_or_null};
+use crate::extract::{self, Actor, Body, present_or_null};
 
 use axum::Router;
 use axum::routing::{get, patch, post};
@@ -202,9 +202,8 @@ async fn create_project_label(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<CreateProjectLabelBody>,
 ) -> Result<Response, ApiError> {
-    let body: CreateProjectLabelBody = extract::parse(raw)?;
     let label =
         work::create_project_label(&state.pool, user_id, project_id, &body.name, body.color)
             .await?;
@@ -230,9 +229,8 @@ async fn create_ticket(
     Path(project_id): Path<Uuid>,
     headers: HeaderMap,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<CreateTicketBody>,
 ) -> Result<Response, ApiError> {
-    let body: CreateTicketBody = extract::parse(raw)?;
     let (ticket, change) = work::create_ticket(
         &state.pool,
         user_id,
@@ -265,9 +263,8 @@ async fn update_ticket(
     Path(ticket_id): Path<Uuid>,
     headers: HeaderMap,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<UpdateTicketBody>,
 ) -> Result<Response, ApiError> {
-    let body: UpdateTicketBody = extract::parse(raw)?;
     let (ticket, change) = work::update_ticket(
         &state.pool,
         user_id,
@@ -312,9 +309,8 @@ async fn create_ticket_comment(
     State(state): State<AppState>,
     Path(ticket_id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<CreateCommentBody>,
 ) -> Result<Response, ApiError> {
-    let body: CreateCommentBody = extract::parse(raw)?;
     let (comment, change) =
         work::create_comment(&state.pool, user_id, ticket_id, body.body, &body.file_ids).await?;
     state.publish([change]);
@@ -325,9 +321,8 @@ async fn edit_ticket_comment(
     State(state): State<AppState>,
     Path((ticket_id, comment_id)): Path<(Uuid, Uuid)>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<EditCommentBody>,
 ) -> Result<Response, ApiError> {
-    let body: EditCommentBody = extract::parse(raw)?;
     let (comment, change) =
         work::edit_comment(&state.pool, user_id, ticket_id, comment_id, body.body).await?;
     state.publish([change]);
@@ -356,9 +351,8 @@ async fn change_ticket_status(
     Path(ticket_id): Path<Uuid>,
     headers: HeaderMap,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<ChangeStatusBody>,
 ) -> Result<Response, ApiError> {
-    let body: ChangeStatusBody = extract::parse(raw)?;
     let (ticket, change) = work::change_status(
         &state.pool,
         user_id,
@@ -408,9 +402,8 @@ async fn restore_ticket(
     Path(ticket_id): Path<Uuid>,
     headers: HeaderMap,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<RestoreTicketBody>,
 ) -> Result<Response, ApiError> {
-    let body: RestoreTicketBody = extract::parse(raw)?;
     let (ticket, change) = work::restore_ticket(
         &state.pool,
         user_id,

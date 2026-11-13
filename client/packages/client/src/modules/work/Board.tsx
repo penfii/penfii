@@ -1,15 +1,20 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { useParams } from 'react-router'
 import { newIdempotencyKey } from '@penfii/api-client'
 import type { MovePlacement, ProjectBoard, ProjectMember, ProjectPlanning, Ticket, ViewDefinition } from '@penfii/contracts'
 import { api } from '../../api'
-import { EmptyState } from '../../design/ui'
+import { EmptyState, useConfirm } from '../../design/ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { queryKeys } from '../../queryKeys'
 import { isSamePlace, placeInBoard, placementAt, placementForStep } from './boardMoves'
 import { BoardColumn } from './BoardColumn'
+import { BulkLifecycleBar } from './BulkLifecycleBar'
+import { finishedSelection, restoreFromTrash, useBulkLifecycle, type LifecycleAction } from './bulkLifecycle'
+import { notify } from '../../design/notices'
+import { useIsMobile } from '../../design/useIsMobile'
 import { useTicketPanel } from './panelParam'
-import { refreshTicket } from './refresh'
+import { holdBoardRefresh, noteOwnChange, refreshTicket } from './refresh'
 import { moveErrorKey } from './moveErrors'
 import { allTickets } from './ticketModel'
 import { buildColumns, canReorder, siblingIds } from './viewModel'
@@ -45,6 +50,56 @@ export function BoardLayout({
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [focusId, setFocusId] = useState<string | null>(null)
   const setMessage = onMessage
+  const { workspaceId = '' } = useParams()
+  // Completed and Canceled cards can be chosen for a bulk archive or trash, by the Project admin.
+  const [chosen, setChosen] = useState<Set<string>>(() => new Set())
+  const lifecycle = useBulkLifecycle(workspaceId, (outcome) => {
+    // What was not processed stays chosen; what was processed has left the Board.
+    setChosen(new Set(outcome.items.filter((item) => !item.ok).map((item) => item.ticketId)))
+    void queryClient.invalidateQueries({ queryKey: boardKey })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.projectArchive(projectId) })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.projectTrash(projectId) })
+  })
+  const selectedIds = useMemo(() => finishedSelection(chosen, data), [chosen, data])
+  const { confirm, dialog: confirmDialog } = useConfirm()
+  const mobile = useIsMobile()
+  const refreshLifecycle = () => {
+    void queryClient.invalidateQueries({ queryKey: boardKey })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.projectArchive(projectId) })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.projectTrash(projectId) })
+  }
+  /** Trash is asked about first and can be taken back; the result also stays in the bar until it is dismissed. */
+  async function runLifecycle(action: LifecycleAction) {
+    // On a phone the result carries Undo instead of a blocking question (the design's choice for the small screen).
+    if (action === 'TRASH' && !mobile && !(await confirm({ title: t('bulk.lifecycle.trashConfirmTitle'), body: t('bulk.lifecycle.trashConfirm', { count: String(selectedIds.length) }), confirmLabel: t('bulk.lifecycle.trash') }))) return
+    const outcome = await lifecycle.run(action, selectedIds)
+    if (!outcome || action !== 'TRASH') return
+    const moved = outcome.items.filter((item) => item.ok).map((item) => item.ticketId)
+    if (outcome.failed > 0) {
+      notify({ kind: 'error', message: t('bulk.lifecycle.trashPartial', { total: String(outcome.total), ok: String(outcome.succeeded), failed: String(outcome.failed) }) })
+    } else if (moved.length > 0) {
+      notify({
+        message: t('bulk.lifecycle.trashDone', { total: String(outcome.total) }),
+        action: {
+          label: t('notice.undo'),
+          run: () => void restoreFromTrash(moved).then(({ ok, failed }) => {
+            refreshLifecycle()
+            // The bar's "moved to the trash" is no longer true once they are back.
+            if (ok > 0) lifecycle.clear()
+            if (failed === 0) notify({ message: t('bulk.lifecycle.undone', { count: String(ok) }) })
+            else notify({ kind: 'error', message: t('bulk.lifecycle.undonePartial', { total: String(moved.length), ok: String(ok), failed: String(failed) }) })
+          }),
+        },
+      })
+    }
+  }
+  function togglePick(ticketId: string) {
+    setChosen((current) => {
+      const next = new Set(current)
+      if (!next.delete(ticketId)) next.add(ticketId)
+      return next
+    })
+  }
 
   useEffect(() => {
     if (!focusId) return
@@ -96,18 +151,25 @@ export function BoardLayout({
         : { id: column.sprintId ?? '', name: column.name, state: planning?.sprints.find((item) => item.id === column.sprintId)?.state ?? 'PLANNED', inherited: false }
       : undefined
     setMoving((items) => new Set(items).add(ticketId))
-    queryClient.setQueryData(boardKey, placeInBoard(current, ticketId, { statusId: toStatus, sprint, placement: placement ?? undefined }))
+    // No read of the Board may land on the card's way, and what is on screen now is what to go back to if the move fails.
+    const release = holdBoardRefresh(queryClient, projectId)
+    await queryClient.cancelQueries({ queryKey: boardKey })
+    const before = queryClient.getQueryData<ProjectBoard>(boardKey) ?? current
+    queryClient.setQueryData(boardKey, placeInBoard(before, ticketId, { statusId: toStatus, sprint, placement: placement ?? undefined }))
     try {
-      if (toSprint) await api.assignSprint(ticketId, column.sprintId ?? null, newIdempotencyKey())
+      if (toSprint) noteOwnChange(ticketId, (await api.assignSprint(ticketId, column.sprintId ?? null, newIdempotencyKey())).revisionNo)
       if (toStatus !== undefined || placement) {
-        await api.moveTicket(
+        const moved = await api.moveTicket(
           ticketId,
           { ...(toStatus !== undefined ? { expectedRevision: ticket.revisionNo, statusId: toStatus } : {}), ...(placement ?? {}) },
           newIdempotencyKey(),
         )
+        noteOwnChange(ticketId, moved.revisionNo)
       }
       if (placement) setFocusId(ticketId)
     } catch (cause) {
+      // Back to what was there. When the first step (the Sprint) worked and the second did not, the read below shows the truth.
+      queryClient.setQueryData(boardKey, before)
       explain(cause)
     } finally {
       setMoving((items) => {
@@ -115,7 +177,9 @@ export function BoardLayout({
         next.delete(ticketId)
         return next
       })
-      await refreshTicket(queryClient, ticketId, projectId)
+      release(false)
+      // Read in the background: the card is free to move again as soon as the server has answered.
+      void refreshTicket(queryClient, ticketId, projectId)
     }
   }
 
@@ -203,6 +267,21 @@ export function BoardLayout({
     <>
       {hint ? <small className="field-hint board-hint">{hint}</small> : null}
       {message ? <p className="board-error" role="alert">{message}</p> : null}
+      {data.canManageWorkflow && (selectedIds.length > 0 || lifecycle.result) ? (
+        <BulkLifecycleBar
+          count={selectedIds.length}
+          running={lifecycle.running}
+          result={lifecycle.result}
+          last={lifecycle.last}
+          names={new Map(allTickets(data).map((ticket) => [ticket.id, { key: ticket.key, title: ticket.title }]))}
+          onRun={(action) => void runLifecycle(action)}
+          onClear={() => {
+            setChosen(new Set())
+            lifecycle.clear()
+          }}
+        />
+      ) : null}
+      {confirmDialog}
       {total === 0 ? <p className="board-empty">{t('work.board.empty')}</p> : null}
       <div className="board-viewport">
         <div
@@ -248,6 +327,8 @@ export function BoardLayout({
               onReorder={reorderBy}
               moveToTopFor={(ticket) => moveToTopFor(column, ticket)}
               onSetWip={setWip}
+              picked={data.canManageWorkflow ? new Set(selectedIds) : undefined}
+              onPick={togglePick}
             />
           ))}
         </div>

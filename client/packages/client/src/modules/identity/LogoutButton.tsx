@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router'
 import { api } from '../../api'
 import { useI18n } from '../../i18n/I18nProvider'
-import { clearAllNewDocDrafts } from '../docs/newDocDraft'
+import { endUserSession } from '../../app/userBoundary'
 
 export function LogoutButton() {
   const { t } = useI18n()
@@ -14,8 +14,7 @@ export function LogoutButton() {
       className="btn btn-secondary"
       onClick={() => {
         void api.logout().finally(() => {
-          clearAllNewDocDrafts()
-          queryClient.clear()
+          endUserSession(queryClient, { forget: true })
           void navigate('/login')
         })
       }}

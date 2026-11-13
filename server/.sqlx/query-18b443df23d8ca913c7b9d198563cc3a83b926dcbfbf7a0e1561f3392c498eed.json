@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO penfii.password_reset_tokens (id, user_id, token_hash, expires_at)\n         VALUES ($1, $2, $3, now() + make_interval(secs => $4))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bytea",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "18b443df23d8ca913c7b9d198563cc3a83b926dcbfbf7a0e1561f3392c498eed"
+}

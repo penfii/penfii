@@ -119,6 +119,31 @@ impl Env {
             .unwrap();
         self.objects.get(&key).await.is_ok()
     }
+
+    /// Runs the storage consumer. Other outbox rows are held aside so this does not dispatch them.
+    async fn settle_storage(&self) {
+        sqlx::query(
+            "UPDATE penfii.outbox SET available_at = now() + interval '1 day'
+             WHERE dispatched_at IS NULL
+               AND event_id NOT IN (
+                   SELECT event_id FROM penfii.domain_events WHERE event_kind = 'storage.file_delete'
+               )",
+        )
+        .execute(&self.pool)
+        .await
+        .unwrap();
+        let mut registry = penfii_core::events::Registry::default();
+        registry
+            .external
+            .push(penfii_core::files::storage_consumer(self.objects.clone()));
+        penfii_core::events::run_until_idle(&self.pool, &registry)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE penfii.outbox SET available_at = now() WHERE dispatched_at IS NULL")
+            .execute(&self.pool)
+            .await
+            .unwrap();
+    }
 }
 
 async fn project_with_editor(env: &Env, editor: &Person) -> String {
@@ -398,6 +423,7 @@ async fn body_and_comment_files_bind_once_and_follow_the_ticket(pool: PgPool) {
         .await;
     assert_eq!(removed.status, StatusCode::NO_CONTENT);
     assert!(env.file_row(notes).await.0, "the file is retired");
+    env.settle_storage().await;
     assert!(!env.has_object(notes).await, "and its object removed");
     assert_eq!(
         env.send(
@@ -443,6 +469,7 @@ async fn body_and_comment_files_bind_once_and_follow_the_ticket(pool: PgPool) {
         .await;
     assert_eq!(gone.status, StatusCode::NO_CONTENT, "{}", gone.body);
     assert!(env.file_row(photo).await.0, "the comment's file is retired");
+    env.settle_storage().await;
     assert!(!env.has_object(photo).await, "and its object removed");
     assert_eq!(
         env.send(
@@ -578,6 +605,7 @@ async fn trash_hides_files_restore_returns_them_and_purge_erases_them(pool: PgPo
     assert!(env.has_object(body_file).await && env.has_object(comment_file).await);
     let purged = env.send(&env.owner, "POST", &cmd("purge"), None).await;
     assert_eq!(purged.status, StatusCode::NO_CONTENT, "{}", purged.body);
+    env.settle_storage().await;
     for file in [body_file, comment_file] {
         assert!(env.file_row(file).await.0, "file retired");
         assert!(!env.has_object(file).await, "object removed");
@@ -933,6 +961,7 @@ async fn doc_comments_carry_files_that_follow_the_page_and_the_comment(pool: PgP
         .await;
     assert_eq!(removed.status, StatusCode::NO_CONTENT);
     assert!(env.file_row(shot).await.0);
+    env.settle_storage().await;
     assert!(!env.has_object(shot).await);
     assert_eq!(
         env.send(&env.owner, "GET", &url, None).await.status,
@@ -978,6 +1007,7 @@ async fn uploads_nobody_attached_are_swept_and_attached_ones_stay(pool: PgPool) 
         1
     );
     assert!(env.file_row(stray).await.0);
+    env.settle_storage().await;
     assert!(!env.has_object(stray).await);
     assert!(!env.file_row(kept).await.0);
     assert!(env.has_object(kept).await);
@@ -1306,5 +1336,183 @@ async fn an_upload_sent_twice_at_once_keeps_its_bytes(pool: PgPool) {
     assert!(
         env.has_object(file).await,
         "a finished file keeps its bytes"
+    );
+}
+
+/// One pass of the storage consumer. Other outbox rows wait, so this does not dispatch them.
+async fn step_storage(env: &Env) {
+    sqlx::query(
+        "UPDATE penfii.outbox SET available_at = now() + interval '1 day'
+         WHERE dispatched_at IS NULL
+           AND event_id NOT IN (
+               SELECT event_id FROM penfii.domain_events WHERE event_kind = 'storage.file_delete'
+           )",
+    )
+    .execute(&env.pool)
+    .await
+    .unwrap();
+    let mut registry = penfii_core::events::Registry {
+        backoff_base_secs: 0,
+        max_backoff_secs: 0,
+        ..Default::default()
+    };
+    registry
+        .external
+        .push(penfii_core::files::storage_consumer(env.objects.clone()));
+    penfii_core::events::fan_out(&env.pool, &registry, 100)
+        .await
+        .unwrap();
+    let consumer = registry.external[0].clone();
+    penfii_core::events::run_external_consumer(&env.pool, &registry, &consumer)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE penfii.outbox SET available_at = now() WHERE dispatched_at IS NULL")
+        .execute(&env.pool)
+        .await
+        .unwrap();
+}
+
+async fn storage_receipt(env: &Env, file: Uuid) -> (String, i32) {
+    sqlx::query_as(
+        "SELECT r.state, r.attempts
+         FROM penfii.consumer_receipts r
+         JOIN penfii.domain_events e ON e.event_id = r.event_id
+         WHERE r.consumer = 'storage' AND e.target_id = $1
+         ORDER BY r.updated_at DESC
+         LIMIT 1",
+    )
+    .bind(file)
+    .fetch_one(&env.pool)
+    .await
+    .unwrap()
+}
+
+/// Object deletion follows the commit: a failed delete is retried, a missed run is caught up, a
+/// repeated event and a missing object succeed, and a live file's object is left alone.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn retired_files_lose_their_objects_after_commit(pool: PgPool) {
+    let env = setup(pool).await;
+    let gone = env.upload(&env.owner, "gone.txt", b"gone").await;
+    let kept = env.upload(&env.owner, "kept.txt", b"kept").await;
+    assert!(env.has_object(gone).await && env.has_object(kept).await);
+
+    // (c) the delete commits and returns while the object is still there.
+    let deleted = env
+        .send(&env.owner, "DELETE", &format!("/v1/files/{gone}"), None)
+        .await;
+    assert_eq!(deleted.status, StatusCode::NO_CONTENT, "{}", deleted.body);
+    assert!(env.file_row(gone).await.0);
+    assert!(
+        env.has_object(gone).await,
+        "not removed until the consumer runs"
+    );
+
+    // (b) the first delete fails; the file stays retired and the receipt waits.
+    env.objects.fail_next_deletes(1);
+    step_storage(&env).await;
+    assert!(env.has_object(gone).await);
+    assert!(env.file_row(gone).await.0);
+    let (state, attempts) = storage_receipt(&env, gone).await;
+    assert_eq!(state, "PENDING");
+    assert_eq!(attempts, 1);
+
+    // The retry removes it.
+    step_storage(&env).await;
+    assert!(!env.has_object(gone).await);
+    let (state, attempts) = storage_receipt(&env, gone).await;
+    assert_eq!(state, "DONE");
+    assert_eq!(
+        attempts, 2,
+        "the retry is a new claim; the failure itself did not add one"
+    );
+
+    // (d) the object is already gone, and a second event for the same file still succeeds.
+    let mut tx = env.pool.begin().await.unwrap();
+    penfii_core::events::emit_simple(
+        &mut tx,
+        env.ws,
+        "FILE",
+        gone,
+        "storage.file_delete",
+        None,
+        json!({}),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    step_storage(&env).await;
+    let (state, _) = storage_receipt(&env, gone).await;
+    assert_eq!(state, "DONE");
+
+    // (e) an event for a file that is not deleted does not remove its object.
+    let mut tx = env.pool.begin().await.unwrap();
+    penfii_core::events::emit_simple(
+        &mut tx,
+        env.ws,
+        "FILE",
+        kept,
+        "storage.file_delete",
+        None,
+        json!({}),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    step_storage(&env).await;
+    assert!(env.has_object(kept).await);
+    assert!(!env.file_row(kept).await.0);
+
+    // (f) retiring one file does not touch the other file's object.
+    let other = env.upload(&env.owner, "other.txt", b"other").await;
+    env.send(&env.owner, "DELETE", &format!("/v1/files/{kept}"), None)
+        .await;
+    step_storage(&env).await;
+    assert!(!env.has_object(kept).await);
+    assert!(env.has_object(other).await);
+}
+
+/// A delete that lands while the upload is still writing must not leave the object behind.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_delete_during_upload_leaves_no_object(pool: PgPool) {
+    let env = setup_with(
+        pool,
+        ObjectStore::in_memory_slow_writes(std::time::Duration::from_millis(400)),
+    )
+    .await;
+    let content = b"uploaded and deleted together";
+    let created = env
+        .send(
+            &env.owner,
+            "POST",
+            &format!("/v1/workspaces/{}/files", env.ws),
+            Some(json!({"filename": "race.txt", "byteSize": content.len()})),
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+    let id = created.body["id"].as_str().unwrap().to_string();
+    let path = format!("/v1/files/{id}/content");
+    let app = env.app.clone();
+    let cookie = env.owner.cookie.clone();
+    let bytes = content.to_vec();
+    let upload =
+        tokio::spawn(
+            async move { raw(&app, "PUT", &path, Some(&cookie), None, Some(bytes)).await },
+        );
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let deleted = env
+        .send(&env.owner, "DELETE", &format!("/v1/files/{id}"), None)
+        .await;
+    let uploaded = upload.await.unwrap();
+    assert!(
+        deleted.status == StatusCode::NO_CONTENT || deleted.status == StatusCode::CONFLICT,
+        "{}",
+        deleted.body
+    );
+    let _ = uploaded;
+    env.settle_storage().await;
+    let file: Uuid = id.parse().unwrap();
+    assert!(
+        !env.has_object(file).await,
+        "the late upload must not leave an object"
     );
 }

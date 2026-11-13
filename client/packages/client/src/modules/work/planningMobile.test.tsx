@@ -32,6 +32,9 @@ beforeEach(() => {
   api.getSprintResults.mockResolvedValue({ sprint: sprint('s1', 'Sprint One', 'COMPLETED'), baselineCount: 0, baselineRecordedAt: null, results: [] })
   api.getFavorites.mockResolvedValue([])
   api.getLater.mockResolvedValue([])
+  api.getSprintArchiveSchedule.mockResolvedValue(null)
+  api.getProjectVelocity.mockResolvedValue({ unit: null, generatedAt: '2026-11-01T00:00:00Z', scope: 'VISIBLE_TICKETS', sprints: [] })
+  api.getSprintReport.mockResolvedValue({ sprint: { id: 's1' }, availability: { available: false, reason: 'NOT_STARTED' }, provisional: false, generatedAt: '2026-11-01T00:00:00Z', scope: 'VISIBLE_TICKETS', startPlan: null, completed: null, remaining: null, adherence: null, burndown: [], changes: [], tickets: [] })
 })
 afterEach(cleanup)
 

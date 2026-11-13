@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE penfii.auth_throttle\n             SET failures = $3, window_start = CASE WHEN $4 THEN $5 ELSE window_start END,\n                 locked_until = $6\n             WHERE scope = $1 AND key_hash = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bytea",
+        "Int4",
+        "Bool",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6f64e09423d4daf8b16073730ac18f1dca28cffebbf84f44bce4306d39b10ddc"
+}

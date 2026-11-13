@@ -12,6 +12,18 @@
 	}
 }
 
+# Headers of every page response; `args[0]` is the request matcher and `args[1]` the Referrer-Policy.
+(page_headers) {
+	header {args[0]} {
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy {args[1]}
+		Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()"
+		-Server
+	}
+}
+
 :80 {
 	# File bytes are streamed with Range. Compressing them would make a 206 body not match the
 	# ranges a video player seeks, so those paths are left as core-api sent them.
@@ -25,14 +37,16 @@
 	# Strict-Transport-Security belongs to the outer proxy that terminates TLS.
 	# File responses keep the CSP core-api set for them (`sandbox`, no script). The page policy
 	# would replace it, and a file opened on its own would then be a page of this origin.
-	header @pages {
-		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
-		X-Content-Type-Options nosniff
-		X-Frame-Options DENY
-		Referrer-Policy strict-origin-when-cross-origin
-		Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()"
-		-Server
+	# The page a password-reset mail opens gets `no-referrer`: its token is in the address fragment, which
+	# a browser never sends to a server or in a Referer, and this is the second guard, so nothing the page
+	# opens can learn even the address. Every other page keeps `strict-origin-when-cross-origin`.
+	@reset path /reset-password
+	@pages_default {
+		not path /v1/files/* /v1/attachments/*
+		not path /reset-password
 	}
+	import page_headers @pages_default strict-origin-when-cross-origin
+	import page_headers @reset no-referrer
 
 	# Health probes of core-api (liveness and readiness); without these they would fall through to the SPA.
 	handle /healthz {

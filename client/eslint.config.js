@@ -7,9 +7,9 @@ import { defineConfig } from 'eslint/config'
 import tseslint from 'typescript-eslint'
 
 export default defineConfig(
-  { ignores: ['**/dist/**', '**/node_modules/**'] },
+  { ignores: ['**/dist/**', '**/node_modules/**', '**/test-results/**', '**/playwright-report/**'] },
   {
-    files: ['packages/*/src/**/*.{ts,tsx}', 'apps/*/src/**/*.{ts,tsx}'],
+    files: ['packages/*/src/**/*.{ts,tsx}', 'apps/*/src/**/*.{ts,tsx}', 'apps/e2e/{tests,support}/**/*.ts'],
     languageOptions: {
       parser: tseslint.parser,
       parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
@@ -25,6 +25,8 @@ export default defineConfig(
       'react-hooks/exhaustive-deps': 'error',
       '@typescript-eslint/no-floating-promises': 'error',
       '@typescript-eslint/no-misused-promises': 'error',
+      // A new member of a union must be handled (or deliberately ignored) everywhere it is switched on.
+      '@typescript-eslint/switch-exhaustiveness-check': 'error',
       ...pluginQuery.configs['flat/recommended'][0].rules,
     },
   },

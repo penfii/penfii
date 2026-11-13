@@ -1,14 +1,13 @@
 import { useParams } from 'react-router'
 import { WorkspaceAdmin } from '../modules/admin/WorkspaceAdmin'
-import { McpPolicySettings } from '../modules/identity'
+import { parseAdminSection } from '../modules/admin/adminSections'
 
-/** Workspace administration (Settings > Workspace administration). */
+/** Workspace administration (Settings > Workspace). One page per section; `:section` picks it. */
 export function AdminPage() {
-  const { workspaceId = '' } = useParams()
+  const { workspaceId = '', section } = useParams()
   return (
     <div className="page-scroll">
-      <WorkspaceAdmin workspaceId={workspaceId} />
-      <McpPolicySettings workspaceId={workspaceId} />
+      <WorkspaceAdmin workspaceId={workspaceId} section={parseAdminSection(section)} />
     </div>
   )
 }

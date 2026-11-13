@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
-use crate::extract::{self, Actor, RawJson, present_or_null};
+use crate::extract::{Actor, Body, present_or_null};
 
 use axum::Router;
 use axum::routing::{get, patch, post, put};
@@ -58,9 +58,8 @@ async fn update_team(
     State(state): State<AppState>,
     Path((id, team_id)): Path<(Uuid, Uuid)>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<UpdateTeamBody>,
 ) -> Result<Response, ApiError> {
-    let body: UpdateTeamBody = extract::parse(raw)?;
     let team = organization::update_team(
         &state.pool,
         user_id,
@@ -104,9 +103,8 @@ async fn create_team(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<CreateTeamRequest>,
 ) -> Result<Response, ApiError> {
-    let body: CreateTeamRequest = extract::parse(raw)?;
     let team = organization::create_team(
         &state.pool,
         user_id,
@@ -145,9 +143,8 @@ async fn create_department(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<DepartmentWrite>,
 ) -> Result<Response, ApiError> {
-    let body: DepartmentWrite = extract::parse(raw)?;
     let department =
         organization::create_department(&state.pool, user_id, id, &body.name, body.parent_id)
             .await?;
@@ -158,9 +155,8 @@ async fn update_department(
     State(state): State<AppState>,
     Path((id, department_id)): Path<(Uuid, Uuid)>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<DepartmentWrite>,
 ) -> Result<Response, ApiError> {
-    let body: DepartmentWrite = extract::parse(raw)?;
     let department = organization::update_department(
         &state.pool,
         user_id,
@@ -186,9 +182,8 @@ async fn place_team(
     State(state): State<AppState>,
     Path((id, team_id)): Path<(Uuid, Uuid)>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<PlaceTeamRequest>,
 ) -> Result<Response, ApiError> {
-    let body: PlaceTeamRequest = extract::parse(raw)?;
     let team =
         organization::place_team(&state.pool, user_id, id, team_id, body.department_id).await?;
     Ok(Json(team).into_response())

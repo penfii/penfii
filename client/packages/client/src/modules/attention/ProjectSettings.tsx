@@ -10,6 +10,7 @@ import { formatStamp } from '../../format'
 import { useI18n } from '../../i18n/I18nProvider'
 import { queryKeys } from '../../queryKeys'
 import { queries } from '../../queries'
+import { ProjectPrivateChannels } from './ProjectPrivateChannels'
 import { TrashSection } from '../admin/TrashSection'
 import { PersonPicker } from '../spaces/PersonPicker'
 import { AddFromTeam } from './AddFromTeam'
@@ -41,7 +42,8 @@ export function ProjectSettings({ workspaceId, projectId }: { workspaceId: strin
       <EstimateUnitSection projectId={projectId} unit={board.data.estimateUnit ?? 'NONE'} />
       <CalendarSection projectId={projectId} />
       <Permissions workspaceId={workspaceId} projectId={projectId} />
-      <TrashSection workspaceId={workspaceId} projectId={projectId} />
+      <ProjectPrivateChannels workspaceId={workspaceId} projectId={projectId} />
+      <TrashSection projectId={projectId} canPurge={board.data.canManageWorkflow} />
     </div>
   )
 }
@@ -69,6 +71,8 @@ function Permissions({ workspaceId, projectId }: { workspaceId: string; projectI
   const changed = async () => {
     await queryClient.invalidateQueries({ queryKey: queryKeys.projectPermissions(projectId) })
     await queryClient.invalidateQueries({ queryKey: queryKeys.space(workspaceId) })
+    // Taking part in the Project decides who counts in its private channels.
+    await queryClient.invalidateQueries({ queryKey: queryKeys.projectPrivateChannels(projectId) })
   }
   // Grants, Team links and Team roles: a failure (for example the last admin) shows one message and the list reloads.
   const access = useMutation({

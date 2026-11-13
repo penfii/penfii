@@ -1,10 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
+import { useQueryClient } from '@tanstack/react-query'
 import type { DocContent, ReferenceKind } from '@penfii/contracts'
 import { api } from '../../api'
 import { Button, Dialog } from '../../design/ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { useSession } from '../identity/useSession'
+import { queryKeys } from '../../queryKeys'
 import { UnsavedBlocker } from './UnsavedBlocker'
 import { ShareScopePicker, type ShareScope } from './ShareScopePicker'
 import { useScopeLabel } from './useScopeLabel'
@@ -36,6 +38,7 @@ export function DraftDoc({
 }) {
   const { t } = useI18n()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const session = useSession()
   const userId = session.data?.id
   const open = useCallback((kind: ReferenceKind, id: string, hints: { projectId?: string }) => {
@@ -118,6 +121,8 @@ export function DraftDoc({
         await api.saveDoc(page.id, { expectedRevisionNo: page.revisionNo, title: trimmed, content })
       }
       if (userId) clearNewDocDraft(userId, workspaceId)
+      // The new page is in the list before it opens, so it is there to see and to select.
+      await queryClient.invalidateQueries({ queryKey: queryKeys.all.docTree(workspaceId) })
       setAskScope(false)
       onCreated(page.id)
     } catch {

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE penfii.outbox SET dispatched_at=now() WHERE event_id=$1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b3fa152a70f4467e591b06180fa2c7875a3acda475814cbf49a09b2d3ac6569f"
+}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { RichTextDoc } from '@penfii/contracts'
-import { messageBodyBytes, plainText, RichTextEditor, type RichTextEditorHandle } from '../../richtext'
+import { messageBodyBytes, plainText, RichTextEditor, type MentionCandidate, type RichTextEditorHandle } from '../../richtext'
 import { useI18n } from '../../i18n/I18nProvider'
 import { EmojiPicker } from '../emoji/EmojiPicker'
 import { AttachButton } from '../files/AttachButton'
@@ -19,6 +19,7 @@ export function Composer({
   sendLabel,
   workspaceId,
   focusToken = null,
+  searchMentions,
 }: {
   value: RichTextDoc
   onChange: (value: RichTextDoc) => void
@@ -31,6 +32,8 @@ export function Composer({
   workspaceId: string
   /** Changes when this composer becomes the one the person should type into. Null leaves focus alone. */
   focusToken?: string | null
+  /** `@` lists the people this finds. Absent: no mention picking in this composer. */
+  searchMentions?: (query: string) => Promise<MentionCandidate[]>
 }) {
   const { t } = useI18n()
   const editorRef = useRef<RichTextEditorHandle>(null)
@@ -92,6 +95,7 @@ export function Composer({
         onChange={onChange}
         onSend={() => { void send() }}
         onFiles={addFiles}
+        mentions={searchMentions ? { search: searchMentions } : undefined}
         label={label}
         placeholder={placeholder ?? t('composer.placeholder')}
       />

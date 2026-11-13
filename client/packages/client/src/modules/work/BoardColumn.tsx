@@ -38,6 +38,8 @@ export function BoardColumn({
   onReorder,
   moveToTopFor,
   onSetWip,
+  picked,
+  onPick,
 }: {
   column: ColumnModel
   states: Map<string, WorkflowState>
@@ -69,6 +71,9 @@ export function BoardColumn({
   /** Returns null when moving this card to the top would change nothing. */
   moveToTopFor: (ticket: Ticket) => (() => void) | null
   onSetWip: (stateId: string, limit: number | null) => Promise<boolean>
+  /** The Tickets chosen for a bulk archive/trash. Only Completed and Canceled cards can be chosen. */
+  picked?: Set<string>
+  onPick?: (ticketId: string) => void
 }) {
   const { t } = useI18n()
   const [over, setOver] = useState(false)
@@ -178,6 +183,7 @@ export function BoardColumn({
                 onMoveTo={(columnId) => onMoveTo(ticket, columnId)}
                 onReorder={(step) => onReorder(ticket, step)}
                 onMoveToTop={canEdit && canDrop ? (moveToTopFor(ticket) ?? undefined) : undefined}
+                pick={picked && onPick && (states.get(ticket.statusId)?.category === 'DONE' || states.get(ticket.statusId)?.category === 'CANCELED') ? { checked: picked.has(ticket.id), onToggle: () => onPick(ticket.id) } : undefined}
               />
             </div>
           )

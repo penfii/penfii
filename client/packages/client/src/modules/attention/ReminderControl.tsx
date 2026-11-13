@@ -7,6 +7,7 @@ import { formatStamp } from '../../format'
 import { useI18n } from '../../i18n/I18nProvider'
 import { localTimeZone, reminderPresets, toLocalInput } from './reminderTimes'
 import { queryKeys } from '../../queryKeys'
+import { useNow } from '../../ui/useNow'
 
 /** A one-shot Reminder on a Later card. It stops by itself when the card is finished. */
 export function ReminderControl({ item }: { item: LaterItem }) {
@@ -15,12 +16,13 @@ export function ReminderControl({ item }: { item: LaterItem }) {
   const [open, setOpen] = useState(false)
   const [custom, setCustom] = useState('')
   const [error, setError] = useState('')
+  const now = useNow()
   const reminder = item.reminder ?? null
   const scheduled = reminder?.state === 'SCHEDULED'
 
   async function save(at: Date) {
     setError('')
-    if (at.getTime() < Date.now() - 60_000) {
+    if (at.getTime() < now - 60_000) {
       setError(t('reminder.past'))
       return
     }
@@ -55,7 +57,7 @@ export function ReminderControl({ item }: { item: LaterItem }) {
           ))}
           <label>
             {t('reminder.custom')}
-            <input type="datetime-local" value={custom} min={toLocalInput(new Date())} onChange={(event) => setCustom(event.target.value)} />
+            <input type="datetime-local" value={custom} min={toLocalInput(new Date(now))} onChange={(event) => setCustom(event.target.value)} />
           </label>
           <Button type="button" disabled={custom === ''} onClick={() => void save(new Date(custom))}>{t('reminder.save')}</Button>
           <small className="hint">{t('reminder.help')}</small>

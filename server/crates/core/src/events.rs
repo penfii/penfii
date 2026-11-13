@@ -70,12 +70,22 @@ pub struct NewEvent<'a> {
 
 /// Writes the event and its outbox row. The caller owns the transaction.
 pub async fn emit(conn: &mut PgConnection, event: NewEvent<'_>) -> Result<Uuid, CoreError> {
-    let event_id = Uuid::new_v4();
     let actor_kind = if event.actor_user_id.is_some() {
         "USER"
     } else {
         "SYSTEM"
     };
+    emit_with_kind(conn, event, actor_kind).await
+}
+
+/// `emit` with an explicit `actor_kind`. Human commands stay on [`emit`] (`USER` / `SYSTEM`).
+/// Incoming webhooks record `INTEGRATION`.
+pub async fn emit_with_kind(
+    conn: &mut PgConnection,
+    event: NewEvent<'_>,
+    actor_kind: &str,
+) -> Result<Uuid, CoreError> {
+    let event_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO penfii.domain_events(event_id,workspace_id,target_kind,target_id,target_version,event_kind,actor_kind,actor_user_id,initiated_by_user_id,command_id,schema_version,facts,security_context)
          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$8,$9,1,$10,$11)",
@@ -93,8 +103,7 @@ pub async fn emit(conn: &mut PgConnection, event: NewEvent<'_>) -> Result<Uuid, 
     .bind(event.security_context)
     .execute(&mut *conn)
     .await?;
-    sqlx::query("INSERT INTO penfii.outbox(event_id) VALUES($1)")
-        .bind(event_id)
+    sqlx::query!("INSERT INTO penfii.outbox(event_id) VALUES($1)", event_id)
         .execute(&mut *conn)
         .await?;
     Ok(event_id)
@@ -231,10 +240,12 @@ pub async fn fan_out(pool: &PgPool, registry: &Registry, limit: i64) -> Result<u
             .execute(&mut *tx)
             .await?;
         }
-        sqlx::query("UPDATE penfii.outbox SET dispatched_at=now() WHERE event_id=$1")
-            .bind(event_id)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query!(
+            "UPDATE penfii.outbox SET dispatched_at=now() WHERE event_id=$1",
+            event_id
+        )
+        .execute(&mut *tx)
+        .await?;
     }
     tx.commit().await?;
     Ok(rows.len())
@@ -242,8 +253,17 @@ pub async fn fan_out(pool: &PgPool, registry: &Registry, limit: i64) -> Result<u
 
 const EVENT_COLUMNS: &str = "e.event_id,e.seq,e.workspace_id,e.target_kind,e.target_id,e.target_version,e.event_kind,e.actor_user_id,e.command_id,e.facts,e.security_context,e.occurred_at";
 
+/// What a consumer's panic is recorded as: an `Internal` error whose text starts with this, and whose code
+/// is `panic`. The consumer's event then follows the ordinary failure path (attempts, backoff, `DEAD`).
+const PANIC_PREFIX: &str = "panic: ";
+
+fn panic_error(message: &str) -> CoreError {
+    CoreError::Internal(format!("{PANIC_PREFIX}{message}"))
+}
+
 fn code_of(error: &CoreError) -> String {
     match error {
+        CoreError::Internal(message) if message.starts_with(PANIC_PREFIX) => "panic".into(),
         CoreError::NotFound => "not_found".into(),
         CoreError::Unauthenticated => "unauthenticated".into(),
         CoreError::Validation(_) => "validation".into(),
@@ -251,11 +271,16 @@ fn code_of(error: &CoreError) -> String {
         CoreError::Conflict { code, .. } | CoreError::Rule { code, .. } => (*code).into(),
         CoreError::ReauthRequired { .. } => "reauth_required".into(),
         CoreError::RateLimited { .. } => "rate_limited".into(),
+        CoreError::DbUnavailable(_) => "db_unavailable".into(),
         CoreError::Internal(_) => "internal".into(),
     }
 }
 
-async fn record_failure(
+/// The failure of a PostgreSQL consumer's event. The receipt row is locked by the transaction that
+/// handles it (`FOR UPDATE SKIP LOCKED` in [`run_pg_consumer`]), so nobody else can change it
+/// meanwhile and no lease token is needed; the attempt is counted here, when it failed (a rolled
+/// back transaction leaves no claim behind).
+async fn record_pg_failure(
     conn: &mut PgConnection,
     registry: &Registry,
     event_id: Uuid,
@@ -315,7 +340,18 @@ pub async fn run_pg_consumer(
     for row in &rows {
         let event = EventRow::from_row(row)?;
         let mut savepoint = sqlx::Connection::begin(&mut *tx).await?;
-        match consumer.handle(&mut savepoint, &event).await {
+        // A panic in the consumer is this event's failure, like an error: the savepoint is rolled back and the
+        // attempt is counted, so one event that always panics ends as DEAD instead of taking the worker down.
+        let result = match crate::lifecycle::contained(consumer.handle(&mut savepoint, &event))
+            .await
+        {
+            Ok(result) => result,
+            Err(message) => {
+                tracing::error!(consumer = consumer.name(), event_id = %event.event_id, %message, "event consumer panicked");
+                Err(panic_error(&message))
+            }
+        };
+        match result {
             Ok(()) => {
                 savepoint.commit().await?;
                 sqlx::query(
@@ -328,7 +364,8 @@ pub async fn run_pg_consumer(
             }
             Err(error) => {
                 savepoint.rollback().await?;
-                record_failure(&mut tx, registry, event.event_id, consumer.name(), &error).await?;
+                record_pg_failure(&mut tx, registry, event.event_id, consumer.name(), &error)
+                    .await?;
             }
         }
         handled += 1;
@@ -347,6 +384,10 @@ pub async fn run_external_consumer(
     consumer: &Arc<dyn ExternalConsumer>,
 ) -> Result<usize, CoreError> {
     let token = Uuid::new_v4();
+    // `attempts` counts claims: every claim of a receipt, the first and a re-claim after its lease
+    // ran out, adds one, in the same statement that takes the lease. A receipt that has already been
+    // claimed `max_attempts` times and is claimed again (its worker never reported back, again and
+    // again) is not handed out: it becomes DEAD, so a worker that keeps dying cannot go on forever.
     let claimed = sqlx::query(&format!(
         "WITH picked AS (
             SELECT r.event_id FROM penfii.consumer_receipts r
@@ -361,44 +402,111 @@ pub async fn run_external_consumer(
          ),
          marked AS (
             UPDATE penfii.consumer_receipts r
-            SET state='RUNNING', lease_token=$3, lease_until=now() + make_interval(secs => $4::double precision), updated_at=now()
+            SET state = CASE WHEN r.attempts >= $6 THEN 'DEAD' ELSE 'RUNNING' END,
+                attempts = CASE WHEN r.attempts >= $6 THEN r.attempts ELSE r.attempts + 1 END,
+                lease_token = CASE WHEN r.attempts >= $6 THEN NULL ELSE $3 END,
+                lease_until = CASE WHEN r.attempts >= $6 THEN NULL
+                                   ELSE now() + make_interval(secs => $4::double precision) END,
+                last_error_code = CASE WHEN r.attempts >= $6 THEN 'lease_expired' ELSE r.last_error_code END,
+                updated_at = now()
             FROM picked WHERE r.event_id=picked.event_id AND r.consumer=$1
-            RETURNING r.event_id
+            RETURNING r.event_id, r.state
          )
-         SELECT {EVENT_COLUMNS} FROM marked m JOIN penfii.domain_events e ON e.event_id=m.event_id ORDER BY e.seq"
+         SELECT {EVENT_COLUMNS} FROM marked m JOIN penfii.domain_events e ON e.event_id=m.event_id
+         WHERE m.state = 'RUNNING' ORDER BY e.seq"
     ))
     .bind(consumer.name())
     .bind(registry.batch)
     .bind(token)
     .bind(registry.lease_secs as f64)
     .bind(registry.workspace)
+    .bind(registry.max_attempts)
     .fetch_all(pool)
     .await?;
     let mut handled = 0;
     for row in &claimed {
         let event = EventRow::from_row(row)?;
-        let result = consumer.handle(pool, &event).await;
-        let mut conn = pool.acquire().await?;
-        match result {
+        let result = match crate::lifecycle::contained(consumer.handle(pool, &event)).await {
+            Ok(result) => result,
+            Err(message) => {
+                tracing::error!(consumer = consumer.name(), event_id = %event.event_id, %message, "event consumer panicked");
+                Err(panic_error(&message))
+            }
+        };
+        // Both outcomes are reported under the lease token this worker was given: when the lease ran
+        // out and another worker claimed the receipt, this report changes nothing.
+        let applied = match result {
             Ok(()) => {
                 sqlx::query(
                     "UPDATE penfii.consumer_receipts SET state='DONE', last_error_code=NULL, lease_token=NULL, lease_until=NULL, updated_at=now()
-                     WHERE event_id=$1 AND consumer=$2 AND lease_token=$3",
+                     WHERE event_id=$1 AND consumer=$2 AND lease_token=$3 AND state='RUNNING'",
                 )
                 .bind(event.event_id)
                 .bind(consumer.name())
                 .bind(token)
-                .execute(&mut *conn)
-                .await?;
+                .execute(pool)
+                .await?
+                .rows_affected()
+                    == 1
             }
             Err(error) => {
-                record_failure(&mut conn, registry, event.event_id, consumer.name(), &error)
-                    .await?;
+                fail_claimed(pool, registry, event.event_id, consumer.name(), token, &error).await?
             }
+        };
+        if !applied {
+            tracing::warn!(
+                consumer = consumer.name(),
+                event_id = %event.event_id,
+                "stale consumer result ignored: the lease was taken over by another worker"
+            );
         }
         handled += 1;
     }
     Ok(handled)
+}
+
+/// The failure of an external consumer's event, reported by the worker that holds the lease `token`.
+/// One statement: the attempts were counted when the receipt was claimed, so this only decides what
+/// the receipt becomes (`DEAD` once `max_attempts` claims are used up, else `PENDING` after the
+/// backoff of that attempt count) and releases the lease. `false` when the lease is no longer this
+/// worker's (another worker claimed the receipt, or an operator reset it): nothing is changed.
+async fn fail_claimed(
+    pool: &PgPool,
+    registry: &Registry,
+    event_id: Uuid,
+    consumer: &str,
+    token: Uuid,
+    error: &CoreError,
+) -> Result<bool, CoreError> {
+    // Only a code is stored. A payload could carry text the reader may not see.
+    let code = code_of(error);
+    let updated = sqlx::query(
+        "UPDATE penfii.consumer_receipts
+         SET state = CASE WHEN attempts >= $4 THEN 'DEAD' ELSE 'PENDING' END,
+             last_error_code = $5, lease_token = NULL, lease_until = NULL,
+             available_at = now() + make_interval(secs =>
+                 LEAST($7::double precision,
+                       $6::double precision * power(2, LEAST(GREATEST(attempts - 1, 0), 20)))),
+             updated_at = now()
+         WHERE event_id = $1 AND consumer = $2 AND lease_token = $3 AND state = 'RUNNING'
+         RETURNING attempts, state",
+    )
+    .bind(event_id)
+    .bind(consumer)
+    .bind(token)
+    .bind(registry.max_attempts)
+    .bind(&code)
+    .bind(registry.backoff_base_secs as f64)
+    .bind(registry.max_backoff_secs as f64)
+    .fetch_optional(pool)
+    .await?;
+    let Some(row) = updated else {
+        return Ok(false);
+    };
+    let attempts: i32 = row.try_get("attempts")?;
+    let state: String = row.try_get("state")?;
+    tracing::warn!(consumer, %event_id, attempts, %state, code = %code, "event consumer failed");
+    Ok(true)
 }
 
 /// A delivery that failed too often and was given up on.
@@ -412,25 +520,15 @@ pub struct DeadReceipt {
 }
 
 pub async fn dead_receipts(pool: &PgPool, limit: i64) -> Result<Vec<DeadReceipt>, CoreError> {
-    let rows = sqlx::query(
+    Ok(sqlx::query_as!(
+        DeadReceipt,
         "SELECT r.event_id, r.consumer, e.event_kind, r.attempts, r.last_error_code
          FROM penfii.consumer_receipts r JOIN penfii.domain_events e ON e.event_id=r.event_id
          WHERE r.state='DEAD' ORDER BY e.seq LIMIT $1",
+        limit
     )
-    .bind(limit)
     .fetch_all(pool)
-    .await?;
-    rows.iter()
-        .map(|row| {
-            Ok(DeadReceipt {
-                event_id: row.try_get("event_id")?,
-                consumer: row.try_get("consumer")?,
-                event_kind: row.try_get("event_kind")?,
-                attempts: row.try_get("attempts")?,
-                last_error_code: row.try_get("last_error_code")?,
-            })
-        })
-        .collect()
+    .await?)
 }
 
 /// Gives dead deliveries a fresh set of attempts. Only `DEAD` receipts change, so a delivery that
@@ -482,48 +580,65 @@ pub fn spawn(pool: PgPool, registry: Registry) -> Vec<tokio::task::JoinHandle<()
     let idle = Duration::from_millis(500);
     {
         let (pool, registry) = (pool.clone(), registry.clone());
-        handles.push(tokio::spawn(async move {
-            loop {
-                match fan_out(&pool, &registry, 100).await {
-                    Ok(0) => tokio::time::sleep(idle).await,
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::warn!(?error, "event fan-out failed");
-                        tokio::time::sleep(Duration::from_secs(2)).await;
+        handles.push(crate::lifecycle::spawn_worker(
+            "event fan-out",
+            async move {
+                while !crate::lifecycle::stopping() {
+                    match fan_out(&pool, &registry, 100).await {
+                        Ok(0) => crate::lifecycle::pause(idle).await,
+                        Ok(_) => {}
+                        Err(error) => {
+                            tracing::warn!(?error, "event fan-out failed");
+                            crate::lifecycle::pause(Duration::from_secs(2)).await;
+                        }
                     }
                 }
-            }
-        }));
+            },
+        ));
     }
     for consumer in registry.pg.clone() {
         let (pool, registry) = (pool.clone(), registry.clone());
-        handles.push(tokio::spawn(async move {
-            loop {
-                match run_pg_consumer(&pool, &registry, &consumer).await {
-                    Ok(0) => tokio::time::sleep(idle).await,
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::warn!(?error, consumer = consumer.name(), "consumer batch failed");
-                        tokio::time::sleep(Duration::from_secs(2)).await;
+        handles.push(crate::lifecycle::spawn_worker(
+            "event consumer",
+            async move {
+                while !crate::lifecycle::stopping() {
+                    match run_pg_consumer(&pool, &registry, &consumer).await {
+                        Ok(0) => crate::lifecycle::pause(idle).await,
+                        Ok(_) => {}
+                        Err(error) => {
+                            tracing::warn!(
+                                ?error,
+                                consumer = consumer.name(),
+                                "consumer batch failed"
+                            );
+                            crate::lifecycle::pause(Duration::from_secs(2)).await;
+                        }
                     }
                 }
-            }
-        }));
+            },
+        ));
     }
     for consumer in registry.external.clone() {
         let (pool, registry) = (pool.clone(), registry.clone());
-        handles.push(tokio::spawn(async move {
-            loop {
-                match run_external_consumer(&pool, &registry, &consumer).await {
-                    Ok(0) => tokio::time::sleep(idle).await,
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::warn!(?error, consumer = consumer.name(), "consumer batch failed");
-                        tokio::time::sleep(Duration::from_secs(2)).await;
+        handles.push(crate::lifecycle::spawn_worker(
+            "external event consumer",
+            async move {
+                while !crate::lifecycle::stopping() {
+                    match run_external_consumer(&pool, &registry, &consumer).await {
+                        Ok(0) => crate::lifecycle::pause(idle).await,
+                        Ok(_) => {}
+                        Err(error) => {
+                            tracing::warn!(
+                                ?error,
+                                consumer = consumer.name(),
+                                "consumer batch failed"
+                            );
+                            crate::lifecycle::pause(Duration::from_secs(2)).await;
+                        }
                     }
                 }
-            }
-        }));
+            },
+        ));
     }
     handles
 }

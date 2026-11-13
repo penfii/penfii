@@ -1149,7 +1149,7 @@ async fn t43_a_file_in_a_doc_is_readable_by_that_docs_readers_and_only_while_it_
     let key = format!("p63/{file_id}");
     sqlx::query("INSERT INTO penfii.files(id,workspace_id,storage_key,filename,byte_size,detected_mime,state,created_by) VALUES($1,$2,$3,'도면.png',5,'image/png','AVAILABLE',$4)")
         .bind(file_id).bind(ws).bind(&key).bind(alice_id).execute(&world.pool).await.unwrap();
-    server.objects.put(&key, b"bytes").await.unwrap();
+    server.objects.put(&key, &b"bytes"[..]).await.unwrap();
     let path = format!("/v1/files/{file_id}/content");
 
     // Before it is in a Doc it is alice's pending upload: only she can read it.

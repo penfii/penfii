@@ -12,6 +12,10 @@ use sqlx::migrate::{Migration, MigrationType, Migrator};
 use uuid::Uuid;
 
 fn migrator(files: &[(i64, &str)]) -> Migrator {
+    migrator_tx(files, false)
+}
+
+fn migrator_tx(files: &[(i64, &str)], no_tx: bool) -> Migrator {
     Migrator {
         migrations: Cow::Owned(
             files
@@ -22,7 +26,7 @@ fn migrator(files: &[(i64, &str)]) -> Migrator {
                         Cow::Owned(format!("m{version}")),
                         MigrationType::Simple,
                         Cow::Owned((*sql).to_owned()),
-                        false,
+                        no_tx,
                     )
                 })
                 .collect(),
@@ -52,7 +56,10 @@ async fn exists(pool: &PgPool, table: &str) -> bool {
 async fn the_real_history_is_recorded_once_and_applying_again_changes_nothing(pool: PgPool) {
     let _turn = crate::common::MIGRATING.acquire().await.unwrap();
     apply_migrations(&pool).await.expect("first run");
-    assert_eq!(recorded(&pool, "penfii").await, vec![1]);
+    assert_eq!(
+        recorded(&pool, "penfii").await,
+        vec![1, 2, 3, 4, 5, 6, 7, 8]
+    );
     let tables: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM pg_tables WHERE schemaname = 'penfii' AND tablename <> '_sqlx_migrations'",
     )
@@ -67,7 +74,10 @@ async fn the_real_history_is_recorded_once_and_applying_again_changes_nothing(po
         .unwrap();
     apply_migrations(&pool).await.expect("second run");
     apply_migrations(&pool).await.expect("third run");
-    assert_eq!(recorded(&pool, "penfii").await, vec![1]);
+    assert_eq!(
+        recorded(&pool, "penfii").await,
+        vec![1, 2, 3, 4, 5, 6, 7, 8]
+    );
     let kept: i64 =
         sqlx::query_scalar("SELECT count(*) FROM penfii.foundation_state WHERE key = 'kept'")
             .fetch_one(&pool)
@@ -96,7 +106,10 @@ async fn instances_that_start_together_apply_each_migration_once(pool: PgPool) {
     for run in runs {
         run.await.unwrap().expect("every instance succeeds");
     }
-    assert_eq!(recorded(&pool, "penfii").await, vec![1]);
+    assert_eq!(
+        recorded(&pool, "penfii").await,
+        vec![1, 2, 3, 4, 5, 6, 7, 8]
+    );
 }
 
 #[sqlx::test(migrator = "crate::common::GUARD")]
@@ -263,4 +276,66 @@ async fn migrations_are_safe_to_apply_again_over_existing_data(pool: PgPool) {
     )
     .await;
     assert_eq!(s, StatusCode::OK, "{plan}");
+}
+
+/// `CREATE INDEX CONCURRENTLY` is refused inside a transaction and accepted in a no-transaction
+/// file. sqlx sends a file as one script, and PostgreSQL runs a multi-statement script as one
+/// transaction, so a *failed* script does not leave its earlier statements. The gap that does
+/// leave objects behind is a crash after the script and before the history row: the same file,
+/// written so it can run again, then applies.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_no_transaction_migration_can_build_an_index_concurrently_and_be_rerun(pool: PgPool) {
+    let _turn = crate::common::MIGRATING.acquire().await.unwrap();
+    let refused = run_migrator(
+        &pool,
+        &migrator_tx(
+            &[(
+                1,
+                "CREATE TABLE mig_txidx.t (n int); CREATE INDEX CONCURRENTLY t_n ON mig_txidx.t (n);",
+            )],
+            false,
+        ),
+        "mig_txidx",
+    )
+    .await
+    .expect_err("CONCURRENTLY inside the transactional file");
+    assert!(
+        refused.to_string().to_lowercase().contains("concurrently"),
+        "{refused}"
+    );
+    assert!(!exists(&pool, "mig_txidx.t").await);
+
+    let table = "CREATE TABLE mig_notx.t (n int);";
+    run_migrator(&pool, &migrator(&[(1, table)]), "mig_notx")
+        .await
+        .unwrap();
+    let index = "CREATE INDEX CONCURRENTLY IF NOT EXISTS t_n ON mig_notx.t (n);";
+    run_migrator(
+        &pool,
+        &migrator_tx(&[(1, table), (2, index)], true),
+        "mig_notx",
+    )
+    .await
+    .unwrap();
+    let valid: bool = sqlx::query_scalar(
+        "SELECT indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+         WHERE c.relname = 't_n'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(valid, "the index was built outside a transaction");
+    // The script committed and the history row did not (a crash in between).
+    sqlx::query("DELETE FROM mig_notx._sqlx_migrations WHERE version = 2")
+        .execute(&pool)
+        .await
+        .unwrap();
+    run_migrator(
+        &pool,
+        &migrator_tx(&[(1, table), (2, index)], true),
+        "mig_notx",
+    )
+    .await
+    .unwrap();
+    assert_eq!(recorded(&pool, "mig_notx").await, vec![1, 2]);
 }

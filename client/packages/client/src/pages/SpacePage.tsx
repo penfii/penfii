@@ -11,10 +11,11 @@ import { NotFoundState } from '../ui/NotFoundState'
 import { ConversationPane } from './ConversationPane'
 import { MemberStack } from '../modules/people/MemberStack'
 import { channelScopeLabel, visibilityLabel } from '../modules/spaces/visibilityLabel'
-import { canChangeChannel, canInviteToChannel, canLeaveChannel, canSetChannelRoles } from '../modules/spaces/capabilities'
+import { canChangeChannel, canChangeVisibility, canInviteToChannel, canLeaveChannel, canRunChannelPeople, canSetChannelRoles } from '../modules/spaces/capabilities'
 import { ChannelMembersDialog } from '../modules/spaces/ChannelMembersDialog'
 import { LeaveChannelButton } from '../modules/spaces/LeaveChannelButton'
-import { Button } from '../design/ui'
+import { Button, useConfirm } from '../design/ui'
+import { ChannelWebhooksButton } from '../modules/conversations/ChannelWebhooks'
 import { useWorkspaceRole } from '../modules/spaces/useWorkspaceRole'
 
 export function ConversationFrame() {
@@ -66,7 +67,7 @@ export function ConversationFrame() {
             <MemberStack members={projectMembers.data ?? []} />
             <MuteButton channelId={channel.id} />
             {channel.visibility === 'PRIVATE' ? (
-              <ChannelPeopleButton workspaceId={workspaceId} channelId={channel.id} canAdd={canInviteToChannel(channel, project)} canSetRoles={canSetChannelRoles(channel, project)} open={peopleOpen} onOpenChange={setPeopleOpen} />
+              <ChannelPeopleButton workspaceId={workspaceId} channelId={channel.id} canAdd={canInviteToChannel(channel, project)} canSetRoles={canSetChannelRoles(channel, project)} canRemove={canRunChannelPeople(channel, project)} canSetInvites={canRunChannelPeople(channel, project)} allowMemberInvites={channel.allowMemberInvites} open={peopleOpen} onOpenChange={setPeopleOpen} />
             ) : null}
             {canLeaveChannel(channel) ? (
               <LeaveChannelButton
@@ -82,6 +83,9 @@ export function ConversationFrame() {
               />
             ) : null}
             {canChangeChannel(channel, workspaceRole, project) ? (
+              <ChannelWebhooksButton channelId={channel.id} />
+            ) : null}
+            {canChangeVisibility(channel, workspaceRole, project) ? (
               <VisibilitySelect
                 channelId={channel.id}
                 visibility={channel.visibility}
@@ -112,6 +116,9 @@ function ChannelPeopleButton({
   channelId,
   canAdd,
   canSetRoles,
+  canRemove,
+  canSetInvites,
+  allowMemberInvites,
   open,
   onOpenChange,
 }: {
@@ -119,6 +126,9 @@ function ChannelPeopleButton({
   channelId: string
   canAdd: boolean
   canSetRoles: boolean
+  canRemove: boolean
+  canSetInvites: boolean
+  allowMemberInvites?: boolean
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
@@ -129,7 +139,7 @@ function ChannelPeopleButton({
       <Button type="button" onClick={() => setOpen(true)}>
         {t('channel.addPeople')}
       </Button>
-      <ChannelMembersDialog open={open} onClose={() => setOpen(false)} workspaceId={workspaceId} channelId={channelId} canAdd={canAdd} canSetRoles={canSetRoles} />
+      <ChannelMembersDialog open={open} onClose={() => setOpen(false)} workspaceId={workspaceId} channelId={channelId} canAdd={canAdd} canSetRoles={canSetRoles} canRemove={canRemove} canSetInvites={canSetInvites} allowMemberInvites={allowMemberInvites} />
     </>
   )
 }
@@ -148,24 +158,36 @@ function VisibilitySelect({
   onChanged: () => void
 }) {
   const { t } = useI18n()
+  const { confirm, dialog } = useConfirm()
   const [value, setValue] = useState(visibility)
   const [error, setError] = useState(false)
+  // Turning it private closes it to everyone who is not a member; turning it public shows what was said
+  // in it to people who could not read it. Neither changes who is a member. Say so before doing it.
+  async function change(next: 'PUBLIC' | 'PRIVATE') {
+    if (next === value) return
+    const body = next === 'PRIVATE' ? t('channel.visibility.confirmPrivate') : t('channel.visibility.confirmPublic')
+    if (!(await confirm({ title: t('channel.visibility'), body, confirmLabel: t('channel.visibility.change'), tone: next === 'PUBLIC' ? 'danger' : 'primary' }))) return
+    setValue(next)
+    setError(false)
+    void api.updateChannel(channelId, { visibility: next }).then(onChanged).catch(() => {
+      setValue(visibility)
+      setError(true)
+    })
+  }
   return (
-    <label className="hint">
-      {t('channel.visibility')}
-      <select
-        value={value}
-        onChange={(event) => {
-          const next = event.target.value === 'PRIVATE' ? 'PRIVATE' : 'PUBLIC'
-          setValue(next)
-          setError(false)
-          void api.updateChannel(channelId, { visibility: next }).then(onChanged).catch(() => setError(true))
-        }}
-      >
-        <option value="PUBLIC">{publicLabel}</option>
-        <option value="PRIVATE">{visibilityLabel(t, 'PRIVATE', inProject)}</option>
-      </select>
-      {error ? <span className="form-error">{t('error.generic')}</span> : null}
-    </label>
+    <>
+      {dialog}
+      <label className="hint">
+        {t('channel.visibility')}
+        <select
+          value={value}
+          onChange={(event) => void change(event.target.value === 'PRIVATE' ? 'PRIVATE' : 'PUBLIC')}
+        >
+          <option value="PUBLIC">{publicLabel}</option>
+          <option value="PRIVATE">{visibilityLabel(t, 'PRIVATE', inProject)}</option>
+        </select>
+        {error ? <span className="form-error">{t('error.generic')}</span> : null}
+      </label>
+    </>
   )
 }

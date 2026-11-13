@@ -40,38 +40,47 @@ pub struct OAuthConfig {
 
 impl OAuthConfig {
     pub fn new(public_url: &str, fetcher: Arc<dyn ClientFetcher>) -> Result<Self, String> {
+        Self::from_lookup(public_url, fetcher, &crate::config::process_env)
+    }
+
+    /// The settings are read strictly (see [`crate::config`]): a value that is set and cannot be read stops the
+    /// start. A lifetime of `0` means the default.
+    pub fn from_lookup(
+        public_url: &str,
+        fetcher: Arc<dyn ClientFetcher>,
+        lookup: crate::config::Lookup<'_>,
+    ) -> Result<Self, String> {
         Ok(Self {
             public_url: validate_public_url(public_url)?,
             fetcher,
-            access_ttl: Duration::seconds(env_seconds("PENFII_MCP_ACCESS_TTL_SECONDS", 3600)),
-            refresh_idle_ttl: Duration::seconds(env_seconds(
+            access_ttl: Duration::seconds(seconds(lookup, "PENFII_MCP_ACCESS_TTL_SECONDS", 3600)?),
+            refresh_idle_ttl: Duration::seconds(seconds(
+                lookup,
                 "PENFII_MCP_REFRESH_IDLE_SECONDS",
                 30 * 86_400,
-            )),
-            refresh_absolute_ttl: Duration::seconds(env_seconds(
+            )?),
+            refresh_absolute_ttl: Duration::seconds(seconds(
+                lookup,
                 "PENFII_MCP_REFRESH_ABSOLUTE_SECONDS",
                 90 * 86_400,
-            )),
-            dcr_enabled: env_flag("PENFII_MCP_DCR_ENABLED"),
-            policy_defaults: PolicyDefaults::from_env(),
-            allowed_origins: std::env::var("PENFII_MCP_ALLOWED_ORIGINS")
-                .unwrap_or_default()
-                .split(',')
-                .map(|part| part.trim().trim_end_matches('/').to_string())
-                .filter(|part| !part.is_empty())
-                .collect(),
+            )?),
+            dcr_enabled: crate::config::boolean(lookup, "PENFII_MCP_DCR_ENABLED")?.unwrap_or(false),
+            policy_defaults: PolicyDefaults::from_lookup(lookup)?,
+            allowed_origins: crate::config::origins(lookup, "PENFII_MCP_ALLOWED_ORIGINS")?,
         })
     }
 
     /// `None` while `PENFII_MCP_ENABLED` is off. Turning it on without a usable public URL is an
     /// error the process must not start with.
     pub fn from_env(fetcher: Arc<dyn ClientFetcher>) -> Result<Option<Self>, String> {
-        if !env_flag("PENFII_MCP_ENABLED") {
+        let lookup = &crate::config::process_env;
+        // The other MCP settings are read (and refused when wrong) only while the gateway is on.
+        if !crate::config::boolean(lookup, "PENFII_MCP_ENABLED")?.unwrap_or(false) {
             return Ok(None);
         }
-        let public_url = std::env::var("PENFII_PUBLIC_URL")
-            .map_err(|_| "PENFII_MCP_ENABLED needs PENFII_PUBLIC_URL".to_string())?;
-        Self::new(&public_url, fetcher).map(Some)
+        let public_url = crate::config::get(lookup, "PENFII_PUBLIC_URL")
+            .ok_or_else(|| "PENFII_MCP_ENABLED needs PENFII_PUBLIC_URL".to_string())?;
+        Self::from_lookup(&public_url, fetcher, lookup).map(Some)
     }
 
     pub fn issuer(&self) -> &str {
@@ -163,17 +172,10 @@ pub fn validate_public_url(raw: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
-fn env_flag(name: &str) -> bool {
-    matches!(
-        std::env::var(name).ok().as_deref().map(str::trim),
-        Some("1" | "true" | "TRUE" | "yes" | "on")
-    )
-}
-
-fn env_seconds(name: &str, default: i64) -> i64 {
-    std::env::var(name)
-        .ok()
-        .and_then(|raw| raw.trim().parse::<i64>().ok())
+/// A lifetime in seconds (or days): not set or `0` is the default, a positive number is taken, anything else is an
+/// error.
+fn seconds(lookup: crate::config::Lookup<'_>, name: &str, default: i64) -> Result<i64, String> {
+    Ok(crate::config::integer(lookup, name, 0)?
         .filter(|value| *value > 0)
-        .unwrap_or(default)
+        .unwrap_or(default))
 }

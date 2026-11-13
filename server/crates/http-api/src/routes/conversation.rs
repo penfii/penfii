@@ -16,7 +16,7 @@ use uuid::Uuid;
 use super::{finish, key};
 use crate::AppState;
 use crate::error::ApiError;
-use crate::extract::{self, Actor, Q, RawJson};
+use crate::extract::{self, Actor, Body, Q, RawJson};
 
 use axum::Router;
 use axum::routing::{get, patch, post, put};
@@ -69,9 +69,8 @@ async fn create_channel(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<CreateChannelRequest>,
 ) -> Result<Response, ApiError> {
-    let body: CreateChannelRequest = extract::parse(raw)?;
     let channel = conversation::create_channel(
         &state.pool,
         user_id,
@@ -90,17 +89,18 @@ async fn update_channel(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<UpdateChannelRequest>,
 ) -> Result<Response, ApiError> {
-    let body: UpdateChannelRequest = extract::parse(raw)?;
-    let channel = conversation::update_channel(
+    let (channel, notices) = conversation::update_channel(
         &state.pool,
         user_id,
         id,
         body.visibility.as_deref(),
         body.description.as_deref(),
+        body.allow_member_invites,
     )
     .await?;
+    state.publish(notices);
     Ok(Json(channel).into_response())
 }
 
@@ -136,9 +136,8 @@ async fn set_channel_member_role(
     State(state): State<AppState>,
     Path((id, member_id)): Path<(Uuid, Uuid)>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<SetChannelMemberRoleRequest>,
 ) -> Result<Response, ApiError> {
-    let body: SetChannelMemberRoleRequest = extract::parse(raw)?;
     let (member, change) =
         conversation::set_channel_member_role(&state.pool, user_id, id, member_id, &body.role)
             .await?;
@@ -160,9 +159,8 @@ async fn create_dm(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<CreateDmRequest>,
 ) -> Result<Response, ApiError> {
-    let body: CreateDmRequest = extract::parse(raw)?;
     let dm = conversation::create_dm(&state.pool, user_id, id, &body.user_ids).await?;
     Ok((StatusCode::CREATED, Json(dm)).into_response())
 }

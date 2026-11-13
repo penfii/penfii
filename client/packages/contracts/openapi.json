@@ -10,6 +10,17 @@
     }
   ],
   "components": {
+    "responses": {
+      "DbUnavailable": {
+        "description": "db_unavailable: the database could not serve this request right now because of its availability or of contention (a lock not granted in time, a deadlock, no connection to be had, a connection that was lost). It says nothing about the database and gives no retry hint: no Retry-After header and no extra fields. Any operation that reads or writes the database can answer it; try the request again later. It is not the answer to a request that failed for another reason (those stay 4xx or an internal error).",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" },
+            "example": { "code": "db_unavailable", "message": "the database is temporarily unavailable" }
+          }
+        }
+      }
+    },
     "parameters": {
       "IdempotencyKey": {
         "name": "Idempotency-Key",
@@ -33,6 +44,609 @@
       }
     },
     "schemas": {
+      "Ticket": {
+        "type": "object",
+        "required": [
+          "id",
+          "workspaceId",
+          "projectId",
+          "key",
+          "title",
+          "description",
+          "hierarchyKind",
+          "statusId",
+          "labels",
+          "revisionNo",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workspaceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "projectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "channelId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "hierarchyKind": {
+            "type": "string"
+          },
+          "parentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "statusId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "assigneeId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "assigneeName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TicketLabel"
+            }
+          },
+          "priority": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dueOn": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "ticketType": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TicketType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parent": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TicketRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "childSummary": {
+            "$ref": "#/components/schemas/ChildSummary"
+          },
+          "dependencies": {
+            "$ref": "#/components/schemas/DependencySummary"
+          },
+          "sprint": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SprintRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "milestones": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MilestoneRef"
+            }
+          },
+          "movedToTopAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "estimate": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TicketEstimate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "schedule": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TicketSchedule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revisionNo": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "archivedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "TicketLabel": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "color": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "TicketType": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "color": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "TicketRef": {
+        "type": "object",
+        "required": [
+          "id",
+          "key",
+          "title",
+          "hierarchyKind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "hierarchyKind": {
+            "type": "string"
+          }
+        }
+      },
+      "ChildSummary": {
+        "type": "object",
+        "required": [
+          "total",
+          "done",
+          "canceled"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer"
+          },
+          "done": {
+            "type": "integer"
+          },
+          "canceled": {
+            "type": "integer"
+          }
+        }
+      },
+      "DependencySummary": {
+        "type": "object",
+        "required": [
+          "openBlockers",
+          "blockedBy",
+          "blocks"
+        ],
+        "properties": {
+          "openBlockers": {
+            "type": "integer"
+          },
+          "blockedBy": {
+            "type": "integer"
+          },
+          "blocks": {
+            "type": "integer"
+          }
+        }
+      },
+      "SprintRef": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "state",
+          "inherited"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "inherited": {
+            "type": "boolean"
+          }
+        }
+      },
+      "MilestoneRef": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "state"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
+      "ProjectBoard": {
+        "type": "object",
+        "required": [
+          "projectId",
+          "workflowVersion",
+          "canEdit",
+          "canManageWorkflow",
+          "states",
+          "columns"
+        ],
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workflowVersion": {
+            "type": "integer"
+          },
+          "estimateUnit": {
+            "type": "string"
+          },
+          "canEdit": {
+            "type": "boolean"
+          },
+          "canManageWorkflow": {
+            "type": "boolean"
+          },
+          "states": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowState"
+            }
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BoardColumn"
+            }
+          }
+        }
+      },
+      "BoardColumn": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "category",
+          "position",
+          "stateId",
+          "stateIds",
+          "tickets"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "position": {
+            "type": "integer"
+          },
+          "stateId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stateIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "ticketCount": {
+            "type": "integer"
+          },
+          "wipLimit": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tickets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Ticket"
+            }
+          }
+        }
+      },
+      "WorkflowState": {
+        "type": "object",
+        "required": [
+          "id",
+          "projectId",
+          "name",
+          "category",
+          "position",
+          "isInitial"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "projectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "position": {
+            "type": "integer"
+          },
+          "isInitial": {
+            "type": "boolean"
+          },
+          "wipLimit": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProjectPlanning": {
+        "type": "object",
+        "required": [
+          "canManage",
+          "sprints",
+          "milestones"
+        ],
+        "properties": {
+          "canManage": {
+            "type": "boolean"
+          },
+          "sprints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Sprint"
+            }
+          },
+          "milestones": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Milestone"
+            }
+          }
+        }
+      },
+      "Sprint": {
+        "type": "object",
+        "required": [
+          "id",
+          "projectId",
+          "name",
+          "state",
+          "startsOn",
+          "endsOn",
+          "version"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "projectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "goal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "startsOn": {
+            "type": "string",
+            "format": "date"
+          },
+          "endsOn": {
+            "type": "string",
+            "format": "date"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "endedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "timeZone": {
+            "type": "string"
+          },
+          "estimateUnit": {
+            "type": "string"
+          }
+        }
+      },
+      "Milestone": {
+        "type": "object",
+        "required": [
+          "id",
+          "projectId",
+          "name",
+          "state",
+          "version"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "projectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "targetOn": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "state": {
+            "type": "string"
+          },
+          "reachedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer"
+          }
+        }
+      },
       "Error": {
         "type": "object",
         "required": [
@@ -251,14 +865,37 @@
           },
           "inviteToken": {
             "type": "string",
-            "description": "Present only when PENFII_DEV_RETURN_INVITE_TOKEN=1"
+            "description": "The secret of the invitation link (`/invite/<token>`). It is in the answer that creates or re-issues the invitation and nowhere else: only its hash is stored."
           },
           "teamId": {
             "type": "string",
             "format": "uuid",
             "description": "The Team the new member is meant to join, if the invitation named one."
+          },
+          "reissued": {
+            "type": "boolean",
+            "description": "True when the e-mail already had an open invitation: it got a new link and expiry instead of a second invitation, and the previous link stopped working."
+          },
+          "emailStatus": {
+            "type": "string",
+            "enum": ["NOT_CONFIGURED", "SENT", "FAILED"],
+            "description": "The e-mail delivery of the link, separate from the invitation itself. NOT_CONFIGURED: the server sends no e-mail (copy the link). FAILED never means the invitation failed; the link works."
+          },
+          "emailError": {
+            "type": "string",
+            "description": "A fixed short phrase saying why a FAILED delivery failed. Present only with FAILED."
           }
-        }
+        },
+        "required": [
+          "id",
+          "workspaceId",
+          "email",
+          "role",
+          "expiresAt",
+          "inviteToken",
+          "reissued",
+          "emailStatus"
+        ]
       },
       "InvitationTeamOutcome": {
         "type": "object",
@@ -649,6 +1286,11 @@
           },
           "authorDisplayName": {
             "type": "string"
+          },
+          "authorKind": {
+            "type": "string",
+            "enum": ["HUMAN", "INTEGRATION"],
+            "description": "HUMAN for a person, INTEGRATION for an incoming-webhook actor."
           },
           "threadRootId": {
             "type": [
@@ -1154,6 +1796,7 @@
         "required": [
           "contextKind",
           "contextId",
+          "generation",
           "payload"
         ],
         "properties": {
@@ -1170,11 +1813,9 @@
             "format": "uuid"
           },
           "generation": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid"
+            "type": "string",
+            "format": "uuid",
+            "description": "The input session of the compose box: a time-ordered UUID (v7) the client makes when the box goes from empty to typed. A save of a session that is over, or older than the stored one, is refused with draft_closed and changes nothing."
           },
           "expectedVersion": {
             "type": [
@@ -2172,6 +2813,217 @@
           "teams"
         ]
       },
+      "ProjectImpact": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "NO_ADMIN",
+              "NO_DIRECT_ADMIN"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "name",
+          "kind"
+        ]
+      },
+      "OffboardingImpact": {
+        "type": "object",
+        "properties": {
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectImpact"
+            }
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChannelImpact"
+            }
+          }
+        },
+        "required": [
+          "projects",
+          "channels"
+        ]
+      },
+      "FormerAdmin": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "userId",
+          "displayName"
+        ]
+      },
+      "ProjectWithoutAdmin": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "ticketPrefix": {
+            "type": "string"
+          },
+          "formerAdmins": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FormerAdmin"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "ticketPrefix",
+          "formerAdmins"
+        ]
+      },
+      "AdminRecovery": {
+        "type": "object",
+        "properties": {
+          "newAccess": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "newAccess"
+        ]
+      },
+      "ChannelImpact": {
+        "type": "object",
+        "properties": {
+          "channelId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "channelId",
+          "name",
+          "projectId"
+        ]
+      },
+      "FormerManager": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "userId",
+          "displayName"
+        ]
+      },
+      "ManagedChannel": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "description": { "type": ["string", "null"] },
+          "memberCount": { "type": "integer" },
+          "managerCount": { "type": "integer" },
+          "allowMemberInvites": { "type": "boolean" },
+          "archived": { "type": "boolean" },
+          "isMember": { "type": "boolean" }
+        },
+        "required": ["id", "name", "description", "memberCount", "managerCount", "allowMemberInvites", "archived", "isMember"]
+      },
+      "ChannelWithoutManager": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "projectName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "memberCount": {
+            "type": "integer"
+          },
+          "formerManagers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FormerManager"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "projectId",
+          "projectName",
+          "memberCount",
+          "formerManagers",
+          "createdAt"
+        ]
+      },
+      "ManagerRecovery": {
+        "type": "object",
+        "properties": {
+          "newAccess": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "newAccess"
+        ]
+      },
       "InvitationSummary": {
         "type": "object",
         "properties": {
@@ -2223,7 +3075,10 @@
           },
           "teamId": { "type": "string", "format": "uuid", "nullable": true },
           "teamName": { "type": "string", "nullable": true },
-          "teamStatus": { "type": "string", "enum": ["ACTIVE", "ARCHIVED", "GONE"], "nullable": true, "description": "The invited Team's state now; null when the invitation names no Team." }
+          "teamStatus": { "type": "string", "enum": ["ACTIVE", "ARCHIVED", "GONE"], "nullable": true, "description": "The invited Team's state now; null when the invitation names no Team." },
+          "emailStatus": { "type": "string", "enum": ["NOT_CONFIGURED", "SENT", "FAILED"], "nullable": true, "description": "The last e-mail delivery of the link; null when none was recorded (an invitation from before e-mail delivery existed). It never changes status." },
+          "emailAttemptedAt": { "type": "string", "format": "date-time", "nullable": true },
+          "emailError": { "type": "string", "nullable": true, "description": "A fixed short phrase saying why a FAILED delivery failed." }
         },
         "required": [
           "id",
@@ -2339,6 +3194,96 @@
           "items"
         ]
       },
+      "ArchivedTicket": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "hierarchyKind": {
+            "type": "string"
+          },
+          "archivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "archivedBy": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "archivedByName": {
+            "type": "string",
+            "nullable": true
+          },
+          "trashed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "title",
+          "hierarchyKind",
+          "archivedAt",
+          "trashed"
+        ]
+      },
+      "SprintArchiveSchedule": {
+        "type": "object",
+        "properties": {
+          "sprintId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "dueAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "timeZone": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "SCHEDULED",
+              "DONE",
+              "CANCELED"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "archivedCount": {
+            "type": "integer",
+            "nullable": true
+          },
+          "skippedCount": {
+            "type": "integer",
+            "nullable": true
+          },
+          "finishedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "sprintId",
+          "dueAt",
+          "timeZone",
+          "state",
+          "version"
+        ]
+      },
       "TrashedTicket": {
         "type": "object",
         "properties": {
@@ -2367,6 +3312,22 @@
           "trashedByName": {
             "type": "string",
             "nullable": true
+          },
+          "archived": {
+            "type": "boolean",
+            "description": "Also archived: a restore brings it back archived."
+          },
+          "purgeAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When the automatic purge takes it (trashedAt plus PENFII_TRASH_RETENTION_DAYS); null when the automatic purge is off."
+          },
+          "purgeBlocked": {
+            "type": "string",
+            "enum": ["children", "dependencies"],
+            "nullable": true,
+            "description": "Set while children or dependencies keep the ticket from being purged, automatically or by hand."
           }
         },
         "required": [
@@ -2374,7 +3335,8 @@
           "key",
           "title",
           "hierarchyKind",
-          "trashedAt"
+          "trashedAt",
+          "archived"
         ]
       },
       "Readiness": {
@@ -2610,6 +3572,49 @@
             ]
           }
         }
+      },
+      "CreateWebhookRequest": {
+        "type": "object",
+        "required": ["name", "authMode"],
+        "properties": {
+          "name": { "type": "string" },
+          "authMode": { "type": "string", "enum": ["URL_SECRET", "SIGNATURE"] },
+          "actorId": { "type": ["string", "null"], "format": "uuid" },
+          "displayName": { "type": ["string", "null"] }
+        },
+        "additionalProperties": false
+      },
+      "Webhook": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "channelId": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "authMode": { "type": "string" },
+          "actorId": { "type": "string", "format": "uuid" },
+          "actorDisplayName": { "type": "string" },
+          "revoked": { "type": "boolean" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "rotatedAt": { "type": ["string", "null"], "format": "date-time" }
+        },
+        "additionalProperties": false
+      },
+      "WebhookCreated": {
+        "type": "object",
+        "required": ["webhook", "secret"],
+        "properties": {
+          "webhook": { "$ref": "#/components/schemas/Webhook" },
+          "secret": { "type": "string", "description": "Returned only from create and rotate." }
+        },
+        "additionalProperties": false
+      },
+      "WebhookList": {
+        "type": "object",
+        "required": ["items"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/Webhook" } }
+        },
+        "additionalProperties": false
       }
     },
     "securitySchemes": {
@@ -2623,8 +3628,9 @@
   "paths": {
     "/v1/server-info": {
       "get": {
-        "summary": "Server features and configured limits",
+        "summary": "Server features and configured limits. `features` also names what depends on the configuration: `mcp` (the MCP gateway), `email` (the server sends e-mail: invitations are mailed too) and `password-reset` (password reset by e-mail, which needs e-mail).",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "ok",
             "content": {
@@ -2643,6 +3649,7 @@
       "post": {
         "summary": "Create a session cookie",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "user",
             "content": {
@@ -2696,8 +3703,130 @@
       "post": {
         "summary": "Revoke the session cookie",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "cleared"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client"
+          }
+        ],
+        "security": []
+      }
+    },
+    "/v1/auth/password-reset/request": {
+      "post": {
+        "operationId": "requestPasswordReset",
+        "summary": "Ask for a password reset mail. Only while the server sends e-mail (feature `password-reset` in /v1/server-info; 404 otherwise). Every well-formed request is answered the same way (202, no body) and as fast, whether or not the address has an account, the account is disabled, or it only signs in through a provider: the request is counted and the rest runs in the background. A mail is sent only to an enabled account with a password. The link in it (`/reset-password#<token>`) works once and for 30 minutes, and a newer request replaces it. Counted per address, per account and per account-and-address with the sign-in limits (`PENFII_LOGIN_THROTTLE_*`), on counters of their own; a full counter answers the same 202 and sends nothing.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["email"],
+                "properties": {
+                  "email": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "202": {
+            "description": "accepted"
+          },
+          "400": {
+            "description": "validation (the address is not an e-mail address)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "the server sends no e-mail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client"
+          }
+        ],
+        "security": []
+      }
+    },
+    "/v1/auth/password-reset/confirm": {
+      "post": {
+        "operationId": "confirmPasswordReset",
+        "summary": "Set a new password with the token of a reset link. The password follows the usual rule (15 to 128 characters, not a known weak one); a password that breaks it is refused with 400 and the link stays usable. On success every session of the account ends, and the person signs in again; nothing signs them in. A token that is unknown, used, replaced or expired, or whose account is disabled, is refused the same way (409 reset_token_invalid).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["token", "password"],
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "204": {
+            "description": "the password was set"
+          },
+          "400": {
+            "description": "validation (the password does not meet the rule)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "the server sends no e-mail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reset_token_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
         "parameters": [
@@ -2712,6 +3841,7 @@
       "get": {
         "summary": "Current user",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "user",
             "content": {
@@ -2775,6 +3905,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The user",
             "content": {
@@ -2803,6 +3934,7 @@
       "patch": {
         "summary": "Change the caller's public profile",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "user",
             "content": {
@@ -2817,11 +3949,13 @@
     "/v1/me/avatar": {
       "put": {
         "summary": "Replace the caller's profile photo (bytes in object storage, key on the account)",
-        "responses": { "204": { "description": "stored" } }
+        "responses": {
+      "503": { "$ref": "#/components/responses/DbUnavailable" }, "204": { "description": "stored" } }
       },
       "delete": {
         "summary": "Remove the caller's profile photo",
-        "responses": { "204": { "description": "removed" } }
+        "responses": {
+      "503": { "$ref": "#/components/responses/DbUnavailable" }, "204": { "description": "removed" } }
       }
     },
     "/v1/users/{id}/avatar": {
@@ -2830,7 +3964,8 @@
         "parameters": [
           { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
         ],
-        "responses": { "200": { "description": "image bytes" } }
+        "responses": {
+      "503": { "$ref": "#/components/responses/DbUnavailable" }, "200": { "description": "image bytes" } }
       }
     },
     "/v1/workspaces/{id}/people": {
@@ -2840,6 +3975,7 @@
           { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "people",
             "content": {
@@ -2863,6 +3999,7 @@
       "get": {
         "summary": "Workspaces of the caller",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "list",
             "content": {
@@ -2916,6 +4053,7 @@
       "post": {
         "summary": "Create the first workspace of the instance (bootstrap only)",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "created",
             "content": {
@@ -2993,6 +4131,7 @@
       "get": {
         "summary": "Whether the caller may create a workspace now (only while the instance has none)",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "state",
             "content": {
@@ -3031,8 +4170,19 @@
     },
     "/v1/workspaces/{id}/invitations": {
       "post": {
-        "summary": "Invite by email",
+        "summary": "Invite by email. There is one open invitation per e-mail: inviting an address that has a valid (unexpired) one re-issues it (200, `reissued` true; the old link stops working, the expiry starts again, role and Team are those of the request). An expired invitation does not count: inviting the address again makes a new invitation (201) and the old one is listed as EXPIRED. The answer carries the link token whether or not the server sends e-mail; with e-mail set up the link is also mailed after the invitation is committed, and a failed mail is reported in `emailStatus` without failing the invitation. Workspace owner or admin only.",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": {
+            "description": "re-issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invitation"
+                }
+              }
+            }
+          },
           "201": {
             "description": "created",
             "content": {
@@ -3129,6 +4279,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "invitations",
             "content": {
@@ -3210,6 +4361,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "preview",
             "content": {
@@ -3251,6 +4403,7 @@
       "post": {
         "summary": "Accept an invitation without a session",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "accepted",
             "content": {
@@ -3307,6 +4460,7 @@
           { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "departments",
             "content": {
@@ -3343,6 +4497,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "created",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Department" } } }
@@ -3373,6 +4528,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "updated",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Department" } } }
@@ -3385,7 +4541,8 @@
           { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
           { "name": "department_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
         ],
-        "responses": { "204": { "description": "deleted" } }
+        "responses": {
+      "503": { "$ref": "#/components/responses/DbUnavailable" }, "204": { "description": "deleted" } }
       }
     },
     "/v1/workspaces/{id}/teams/{team_id}/department": {
@@ -3409,6 +4566,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "placed",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Team" } } }
@@ -3420,6 +4578,7 @@
       "post": {
         "summary": "Create a team with its first members. Workspace owner or admin only; the creator is not added unless listed.",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "created",
             "content": {
@@ -3514,6 +4673,7 @@
           "content": { "application/json": { "schema": { "type": "object", "properties": { "name": { "type": "string" }, "timeZone": { "type": "string" } } } } }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": { "description": "updated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Workspace" } } } },
           "400": { "description": "validation" },
           "403": { "description": "not owner or admin" }
@@ -3534,6 +4694,7 @@
           "content": { "application/json": { "schema": { "type": "object", "properties": { "name": { "type": "string" }, "description": { "type": ["string", "null"] } } } } }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": { "description": "updated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Team" } } } },
           "400": { "description": "validation" },
           "403": { "description": "not a manager" },
@@ -3551,6 +4712,7 @@
           { "name": "team_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": { "description": "archived", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Team" } } } },
           "403": { "description": "not an owner or admin" },
           "404": { "description": "not found" },
@@ -3568,6 +4730,7 @@
           { "name": "team_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": { "description": "restored", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Team" } } } },
           "403": { "description": "not an owner or admin" },
           "404": { "description": "not found" },
@@ -3585,6 +4748,7 @@
           { "name": "team_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": { "description": "the linked Projects", "content": { "application/json": { "schema": { "type": "object", "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/TeamProject" } } }, "required": ["items"] } } } },
           "404": { "description": "not found" }
         },
@@ -3595,6 +4759,7 @@
       "post": {
         "summary": "Create a project",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "created",
             "content": {
@@ -3671,6 +4836,7 @@
       "get": {
         "summary": "Visible teams, projects, channels, and the caller's DMs",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "space",
             "content": {
@@ -3734,6 +4900,7 @@
       "post": {
         "summary": "Create a channel",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "created",
             "content": {
@@ -3810,6 +4977,7 @@
       "post": {
         "summary": "Join a public channel",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "channel",
             "content": {
@@ -3876,6 +5044,7 @@
       "post": {
         "summary": "Create a new DM conversation",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "created",
             "content": {
@@ -3952,6 +5121,7 @@
       "get": {
         "summary": "Conversation metadata when accessible",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "conversation",
             "content": {
@@ -4015,6 +5185,7 @@
       "get": {
         "summary": "Root messages, newest first",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "messages",
             "content": {
@@ -4100,6 +5271,7 @@
       "post": {
         "summary": "Send a message",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "created",
             "content": {
@@ -4189,6 +5361,7 @@
       "get": {
         "summary": "Thread root and replies, oldest first",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "messages",
             "content": {
@@ -4276,6 +5449,7 @@
       "patch": {
         "summary": "Edit a message",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "message",
             "content": {
@@ -4363,6 +5537,7 @@
       "delete": {
         "summary": "Delete a message",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "tombstone",
             "content": {
@@ -4432,6 +5607,7 @@
       "get": {
         "summary": "Prior bodies for the author or a channel content auditor",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "history",
             "content": {
@@ -4495,6 +5671,7 @@
       "put": {
         "summary": "Add a reaction",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "state",
             "content": {
@@ -4572,6 +5749,7 @@
       "delete": {
         "summary": "Remove a reaction",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "state",
             "content": {
@@ -4651,6 +5829,7 @@
       "get": {
         "summary": "Get or create the conversation read cursor",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "read",
             "content": {
@@ -4712,6 +5891,7 @@
       "post": {
         "summary": "Update the conversation read cursor",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "read",
             "content": {
@@ -4801,6 +5981,7 @@
       "post": {
         "summary": "Mark the conversation manually unread",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "read",
             "content": {
@@ -4880,6 +6061,7 @@
       "get": {
         "summary": "Get or create the thread read cursor",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "read",
             "content": {
@@ -4941,6 +6123,7 @@
       "post": {
         "summary": "Update the thread read cursor",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "read",
             "content": {
@@ -5030,6 +6213,7 @@
       "post": {
         "summary": "Mark the thread manually unread",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "read",
             "content": {
@@ -5109,6 +6293,7 @@
       "get": {
         "summary": "Conversation changes after a sequence",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "changes",
             "content": {
@@ -5196,6 +6381,7 @@
       "put": {
         "summary": "Save the caller's draft",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "updated",
             "content": {
@@ -5247,7 +6433,7 @@
             }
           },
           "409": {
-            "description": "draft_conflict: expectedVersion is older than the stored draft",
+            "description": "draft_conflict: expectedVersion is older than the stored draft (details: currentVersion, currentGeneration); or draft_closed: the input session is over or older than the stored one (details: currentGeneration)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5284,6 +6470,7 @@
       "get": {
         "summary": "Load the caller's draft",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "draft",
             "content": {
@@ -5352,12 +6539,32 @@
             "sessionCookie": []
           }
         ]
+      },
+      "delete": {
+        "summary": "End the input session of a compose box (the message was sent or the box was emptied)",
+        "operationId": "closeDraft",
+        "description": "Works whether or not a save of the session has arrived yet. Saves of this session, and of any older one, that arrive later change nothing. The box keeps one empty record as the memory of the session.",
+        "parameters": [
+          { "$ref": "#/components/parameters/Client" },
+          { "name": "contextKind", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "contextId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "generation", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "204": { "description": "The session is over" },
+          "400": { "description": "validation", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "401": { "description": "unauthenticated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "the conversation cannot be written by the caller", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        },
+        "security": [ { "sessionCookie": [] } ]
       }
     },
     "/v1/ws": {
       "get": {
         "summary": "WebSocket. Query conversationId. Cookie session. Client sends {v:1,type:hello,afterChangeSeq}. Server replays conversation changes or sends resync_required. Live frames omit the message body. Read receipts are not on this stream.",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "101": {
             "description": "switching protocols"
           }
@@ -5395,6 +6602,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Workflow and active states",
             "content": {
@@ -5464,6 +6672,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "Created state",
             "content": {
@@ -5556,6 +6765,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Updated state",
             "content": {
@@ -5614,6 +6824,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "New workflow version",
             "content": {
@@ -5649,14 +6860,12 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Board with active states, visible tickets in shared order, per-column ticketCount and wipLimit, and each Ticket's dependency summary, Sprint and Milestones",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
+                "schema": { "$ref": "#/components/schemas/ProjectBoard" }
               }
             }
           }
@@ -5679,6 +6888,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Visible active project tickets",
             "content": {
@@ -5792,14 +7002,12 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "Created Ticket",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
+                "schema": { "$ref": "#/components/schemas/Ticket" }
               }
             }
           },
@@ -5843,6 +7051,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Recent visible activity",
             "content": {
@@ -5875,14 +7084,12 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Ticket",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
+                "schema": { "$ref": "#/components/schemas/Ticket" }
               }
             }
           }
@@ -5965,14 +7172,12 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Updated Ticket",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
+                "schema": { "$ref": "#/components/schemas/Ticket" }
               }
             }
           },
@@ -6048,14 +7253,12 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Changed Ticket state",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
+                "schema": { "$ref": "#/components/schemas/Ticket" }
               }
             }
           },
@@ -6104,6 +7307,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "History: revision metadata and changed field names, newest first. `nextBefore` continues the list. Raw snapshots are never returned.",
             "content": {
@@ -6133,6 +7337,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Ticket comments; each carries its attachments (empty while the Ticket is not live) and what the requester may do with it (canEdit, canDelete)",
             "content": {
@@ -6190,6 +7395,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "Created comment",
             "content": {
@@ -6258,6 +7464,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Edited comment",
             "content": {
@@ -6316,6 +7523,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Deleted"
           },
@@ -6357,6 +7565,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "101": {
             "description": "Project ticket change WebSocket"
           }
@@ -6378,6 +7587,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Active project labels",
             "content": {
@@ -6432,6 +7642,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "Created project label",
             "content": {
@@ -6470,6 +7681,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "One revision compared with its previous revision and the current Ticket, with restorable fields",
             "content": {
@@ -6515,6 +7727,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Ticket Activity, newest first, with readable field changes. `nextCursor` continues the list.",
             "content": {
@@ -6544,6 +7757,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Direct children the caller can see",
             "content": {
@@ -6576,6 +7790,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Active workspace members who can be assigned",
             "content": {
@@ -6608,6 +7823,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Active ticket types of the project",
             "content": {
@@ -6687,14 +7903,12 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Current Ticket (unchanged when nothing differs)",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
+                "schema": { "$ref": "#/components/schemas/Ticket" }
               }
             }
           }
@@ -6733,6 +7947,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "{suggestion, prefix:{value,valid,available}}",
             "content": {
@@ -6770,14 +7985,12 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Ticket after the move; a pure reorder adds no revision",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
+                "schema": { "$ref": "#/components/schemas/Ticket" }
               }
             }
           },
@@ -6868,6 +8081,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Shared Views and the caller's personal Views",
             "content": {
@@ -6903,6 +8117,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "Created View",
             "content": {
@@ -7004,6 +8219,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Updated View",
             "content": {
@@ -7107,6 +8323,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Deleted"
           },
@@ -7139,6 +8356,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Predecessors and successors the viewer can see",
             "content": {
@@ -7174,6 +8392,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "Dependencies of the waiting Ticket",
             "content": {
@@ -7275,6 +8494,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Removed"
           },
@@ -7319,14 +8539,12 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Sprints and Milestones of the Project",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
+                "schema": { "$ref": "#/components/schemas/ProjectPlanning" }
               }
             }
           }
@@ -7356,14 +8574,12 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "Created Sprint",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
+                "schema": { "$ref": "#/components/schemas/Sprint" }
               }
             }
           },
@@ -7452,14 +8668,12 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Updated Sprint",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
+                "schema": { "$ref": "#/components/schemas/Sprint" }
               }
             }
           },
@@ -7571,14 +8785,12 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Sprint after the transition. start records the baseline once. complete records every Task's outcome (DONE, CANCELED, NOT_DONE) and moves the unfinished Tasks the caller can see to carryToSprintId or the backlog in one transaction; Tasks the caller cannot see are released and flagged for their editors. States never change.",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
+                "schema": { "$ref": "#/components/schemas/Sprint" }
               }
             }
           },
@@ -7631,6 +8843,16 @@
                     "type": "string",
                     "format": "uuid",
                     "description": "complete only: the PLANNED/ACTIVE Sprint of the Project that takes the unfinished Tasks. Omitted means the backlog."
+                  },
+                  "archive": {
+                    "type": "string",
+                    "enum": ["NONE", "IMMEDIATE", "AT"],
+                    "description": "complete only: archive the Tasks that ended DONE or CANCELED in this Sprint (and their finished Subtasks) with the completion (IMMEDIATE) or at archiveAt (AT). Unfinished work is carried over as before and never archived."
+                  },
+                  "archiveAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "With archive AT: a future instant, shown in the Sprint's time zone. The finished work is judged again then: reopened, already archived or trashed Tickets, and parents with open children, are skipped."
                   }
                 },
                 "required": [
@@ -7665,14 +8887,12 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Ticket with its current Sprint",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
+                "schema": { "$ref": "#/components/schemas/Ticket" }
               }
             }
           },
@@ -7733,14 +8953,12 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "Created Milestone",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
+                "schema": { "$ref": "#/components/schemas/Milestone" }
               }
             }
           },
@@ -7800,14 +9018,12 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Updated Milestone; reaching or canceling changes no Ticket or Sprint",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
+                "schema": { "$ref": "#/components/schemas/Milestone" }
               }
             }
           },
@@ -7898,14 +9114,12 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Ticket with its Milestones",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
+                "schema": { "$ref": "#/components/schemas/Ticket" }
               }
             }
           },
@@ -7968,6 +9182,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "TicketDependencies after the waiver",
             "content": {
@@ -8057,6 +9272,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "TicketDependencies after the waiver is lifted",
             "content": {
@@ -8148,6 +9364,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The caller's own Views for a Team or the Workspace",
             "content": {
@@ -8186,6 +9403,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "Created View (always personal)",
             "content": {
@@ -8332,6 +9550,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The Tickets of the scope the caller can see, each with its Project, Channel and State (ScopeDataset). At most 1000; truncated says so",
             "content": {
@@ -8391,6 +9610,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "BulkResult: every Ticket with ok/code/message. A failure on one never hides or undoes another",
             "content": {
@@ -8442,7 +9662,7 @@
                   },
                   "change": {
                     "type": "object",
-                    "description": "{type: STATUS|ASSIGNEE|PRIORITY|ADD_LABELS|REMOVE_LABELS|SPRINT|ADD_MILESTONES|REMOVE_MILESTONES, ...}. Each Ticket goes through the single-Ticket command.",
+                    "description": "{type: STATUS|ASSIGNEE|PRIORITY|ADD_LABELS|REMOVE_LABELS|SPRINT|ADD_MILESTONES|REMOVE_MILESTONES|ARCHIVE|TRASH, ...}. Each Ticket goes through the single-Ticket command; ARCHIVE and TRASH are Project admin only and report each Ticket on its own (open_children, forbidden...).",
                     "additionalProperties": true
                   }
                 },
@@ -8471,6 +9691,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "What closing would do: done, canceled, unfinished (only Tickets the caller can see), targets and the default target",
             "content": {
@@ -8522,6 +9743,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Recorded participation: each Task with outcome, carriedTo/carriedFrom, inBaseline, needsNextAssignment. Works for open and closed Sprints",
             "content": {
@@ -8562,6 +9784,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The caller's Favorites; targets the caller can no longer open are omitted",
             "content": {
@@ -8592,6 +9815,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The Favorite (saving again keeps its place)",
             "content": {
@@ -8673,6 +9897,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Favorites in the new order",
             "content": {
@@ -8748,6 +9973,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The caller's Later cards",
             "content": {
@@ -8778,6 +10004,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The card (the same object keeps one active card)",
             "content": {
@@ -8861,6 +10088,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Updated card. DONE or ARCHIVED never completes the object",
             "content": {
@@ -8932,6 +10160,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Removed"
           },
@@ -8964,6 +10193,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Shared Pins the caller may see (ProjectPins)",
             "content": {
@@ -8991,6 +10221,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "Pins after adding",
             "content": {
@@ -9077,6 +10308,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Removed"
           },
@@ -9109,6 +10341,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Removed"
           },
@@ -9141,6 +10374,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The caller's unsent messages in the Workspace, newest first (DraftItem[]). Drafts of conversations the caller can no longer write to are left out",
             "content": {
@@ -9204,6 +10438,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Designation after the change. Only a direct EDITOR can hold one; it does not widen visibility",
             "content": {
@@ -9377,29 +10612,44 @@
             "name": "filter",
             "in": "query",
             "required": false,
+            "description": "One or more types, comma separated (e.g. `mentions,replies`). Several types are a union of their kinds (OR); none, or `all`, is every kind, including kinds that belong to no type (dependency.released, dm.message, ticket.commented, ticket.status_changed, ticket.field_changed, sprint.started, sprint.closed). mentions=mention.user; replies=reply.direct+thread.reply; assignments=ticket.assigned; reminders=reminder.due; invitations=channel.invited. `watching` is not a user-facing type; it is kept for old links and means ticket.commented, ticket.status_changed, ticket.field_changed, sprint.started, sprint.closed.",
             "schema": {
-              "type": "string",
-              "enum": [
-                "all",
-                "mentions",
-                "replies",
-                "watching",
-                "reminders",
-                "invitations",
-                "assignments"
-              ]
+              "type": "string"
             }
           },
           {
             "name": "state",
             "in": "query",
             "required": false,
+            "description": "The only read axis. `unread` lists UNREAD items only. Ignored for view=archived.",
             "schema": {
               "type": "string",
               "enum": [
                 "all",
                 "unread"
               ]
+            }
+          },
+          {
+            "name": "view",
+            "in": "query",
+            "required": false,
+            "description": "`inbox` (default) lists items that are not archived; `archived` lists archived items, newest archived first (archivedAt; creation time for items archived before it was recorded).",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "inbox",
+                "archived"
+              ]
+            }
+          },
+          {
+            "name": "includeSnoozed",
+            "in": "query",
+            "required": false,
+            "description": "When true, items snoozed into the future are listed too (with snoozedUntil). Default false. Ignored for view=archived.",
+            "schema": {
+              "type": "boolean"
             }
           },
           {
@@ -9420,8 +10670,9 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
-            "description": "Items, nextCursor, unreadCount (the count stops at 100) and unreadCapped",
+            "description": "Items (state, snoozedUntil, archivedAt), nextCursor, unreadCount (the count stops at 100; archived and snoozed items are not counted) and unreadCapped",
             "content": {
               "application/json": {
                 "schema": {
@@ -9458,6 +10709,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The item's new state and version",
             "content": {
@@ -9531,6 +10783,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "How many items changed",
             "content": {
@@ -9577,6 +10830,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "mode AUTO, EXPLICIT, OPT_OUT or NONE, and watching",
             "content": {
@@ -9605,6 +10859,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The subscription",
             "content": {
@@ -9643,6 +10898,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The subscription",
             "content": {
@@ -9683,6 +10939,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "mode AUTO, EXPLICIT, OPT_OUT or NONE, and watching",
             "content": {
@@ -9711,6 +10968,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The subscription",
             "content": {
@@ -9749,6 +11007,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The subscription",
             "content": {
@@ -9789,6 +11048,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "mode AUTO, EXPLICIT, OPT_OUT or NONE, and watching",
             "content": {
@@ -9817,6 +11077,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The subscription",
             "content": {
@@ -9855,6 +11116,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The subscription",
             "content": {
@@ -9908,6 +11170,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "items",
             "content": {
@@ -9928,6 +11191,7 @@
         "summary": "Level, Do Not Disturb and the reserved external settings; dndActive says whether quiet hours apply now",
         "parameters": [],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Preferences and version",
             "content": {
@@ -9946,6 +11210,7 @@
         "summary": "Save preferences (expectedVersion 0 for the first save)",
         "parameters": [],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Saved preferences",
             "content": {
@@ -10011,6 +11276,7 @@
         "summary": "Channels the caller muted",
         "parameters": [],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "channelIds",
             "content": {
@@ -10025,11 +11291,128 @@
         }
       }
     },
+    "/v1/push/vapid-public-key": {
+      "get": {
+        "operationId": "getPushPublicKey",
+        "summary": "The key a browser subscribes with (applicationServerKey, base64url). configured is false while the server has no VAPID key; Web Push is then off",
+        "parameters": [],
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": {
+            "description": "configured and publicKey",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/me/push-subscriptions": {
+      "get": {
+        "operationId": "listPushSubscriptions",
+        "summary": "The caller's own browsers/devices that receive Web Push. Keys are never returned",
+        "parameters": [],
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": {
+            "description": "items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "subscribePush",
+        "summary": "Register this browser for Web Push (the body is PushSubscription.toJSON(): endpoint, keys.p256dh, keys.auth; optional userAgent and label). The same endpoint again updates the row. It belongs to the caller, not to the session; signing out keeps it. 503 push_not_configured while the server has no VAPID key",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["endpoint", "keys"],
+                "properties": {
+                  "endpoint": { "type": "string" },
+                  "keys": {
+                    "type": "object",
+                    "required": ["p256dh", "auth"],
+                    "properties": {
+                      "p256dh": { "type": "string" },
+                      "auth": { "type": "string" }
+                    }
+                  },
+                  "userAgent": { "type": "string" },
+                  "label": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": {
+            "description": "the subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/me/push-subscriptions/{id}": {
+      "delete": {
+        "operationId": "unsubscribePush",
+        "summary": "Turn off Web Push for one of the caller's devices. Someone else's subscription is 404",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "204": { "description": "removed" },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/channels/{id}/members": {
       "get": {
         "operationId": "listChannelMembers",
-        "summary": "The people of a channel, managers first. Anyone who can read the channel may ask",
+        "summary": "The people of a channel, managers first. Anyone who can read the channel may ask, and the admin of its Project for a private channel they cannot read (names and roles, never messages)",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "members",
             "content": {
@@ -10093,8 +11476,9 @@
     "/v1/channels/{id}/members/{user_id}": {
       "put": {
         "operationId": "addChannelMember",
-        "summary": "Put a person into a channel as a MEMBER (repeatable). The channel's MANAGER, the admin of its Project, or any member when the channel allows member invitations. In a Project's channel the person must take part in the Project",
+        "summary": "Put a person into a channel as a MEMBER (repeatable). The channel's MANAGER, the admin of its Project (who need not be able to read the channel, but cannot put themself in that way), or any member when the channel allows member invitations. In a Project's channel the person must take part in the Project. Recorded in the audit log",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "the person in the channel",
             "content": {
@@ -10187,7 +11571,7 @@
       },
       "patch": {
         "operationId": "setChannelMemberRole",
-        "summary": "Make a member of a private channel its MANAGER or a MEMBER. The channel's MANAGER or the admin of its Project. The last MANAGER cannot be made a member. The same role again changes nothing. The person's channel list updates at once.",
+        "summary": "Make a member of a private channel its MANAGER or a MEMBER. The channel's MANAGER or the admin of its Project (who need not be able to read the channel, but cannot make themself a manager). The last MANAGER cannot be made a member. The same role again changes nothing. The person's channel list updates at once. Recorded in the audit log.",
         "requestBody": {
           "required": true,
           "content": {
@@ -10199,6 +11583,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "the person in the channel with their role",
             "content": {
@@ -10291,10 +11676,11 @@
       },
       "delete": {
         "operationId": "leaveChannel",
-        "summary": "Leave a private channel. Only a person can remove themselves; {user_id} must be the caller. The last MANAGER cannot leave. Public channels are not left here. The caller's channel list and open channel sockets update at once.",
+        "summary": "Leave a private channel ({user_id} is the caller), or take someone out of it: the channel's MANAGER or the admin of its Project, whether or not they can read it. The last MANAGER cannot leave or be removed (409 last_manager). Public channels are not left here. The person's channel list and open channel sockets update at once. Removing another person is recorded in the audit log.",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
-            "description": "the caller is no longer in the channel (repeatable only until access ends: a second call is 404)"
+            "description": "the person is no longer in the channel (repeatable only until access ends: a second call is 404)"
           },
           "400": {
             "description": "validation: the channel is not private",
@@ -10393,6 +11779,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "muted",
             "content": {
@@ -10431,6 +11818,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "muted",
             "content": {
@@ -10461,6 +11849,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The Reminder",
             "content": {
@@ -10543,6 +11932,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Canceled"
           },
@@ -10575,6 +11965,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "members, viaGroups, viaTeams, capabilities, recentChanges",
             "content": {
@@ -10625,6 +12016,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "items",
             "content": {
@@ -10653,6 +12045,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "The folder",
             "content": {
@@ -10722,6 +12115,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Ordered"
           }
@@ -10767,6 +12161,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The folder",
             "content": {
@@ -10824,6 +12219,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "movedToTopLevel",
             "content": {
@@ -10871,6 +12267,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Moved"
           },
@@ -10943,6 +12340,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Removed"
           }
@@ -10974,6 +12372,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "File bytes. Only a type recognised from the file's own bytes and on the server's inline list (PNG, JPEG, GIF, WebP, MP4, WebM, MP3, Ogg, WAV, M4A) is shown inline; anything else is a download"
           },
@@ -11018,6 +12417,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The finished file",
             "content": {
@@ -11058,6 +12458,7 @@
         "summary": "WebSocket for the signed-in session. It sends {type:'inbox.changed'} when the caller's Inbox changes and {type:'space.changed'} when the channels the caller can see change (they were put into a private channel or left one); it sends nothing else. The client then reads the Inbox or the Space through the API.",
         "parameters": [],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "101": {
             "description": "Switching protocols"
           },
@@ -11090,6 +12491,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Deleted"
           },
@@ -11141,6 +12543,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "File bytes. Only a type recognised from the file's own bytes and on the server's inline list (PNG, JPEG, GIF, WebP, MP4, WebM, MP3, Ogg, WAV, M4A) is shown inline; anything else is a download"
           },
@@ -11185,6 +12588,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The organization and its members",
             "content": {
@@ -11212,7 +12616,7 @@
     "/v1/channels/{id}": {
       "patch": {
         "operationId": "updateChannel",
-        "summary": "Change a channel's visibility or description",
+        "summary": "Change a channel's visibility, description or member-invitation switch. The channel's MANAGER or the admin of its Project (a Workspace owner or admin for a public Workspace-wide channel). Private to public: only the channel's MANAGER. A change of visibility makes or removes no membership; people who read it only through its public rule are told. Recorded in the audit log.",
         "parameters": [
           {
             "name": "id",
@@ -11240,6 +12644,9 @@
                   },
                   "description": {
                     "type": "string"
+                  },
+                  "allowMemberInvites": {
+                    "type": "boolean"
                   }
                 },
                 "additionalProperties": false
@@ -11248,6 +12655,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The channel",
             "content": {
@@ -11321,6 +12729,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "The upload",
             "content": {
@@ -11370,6 +12779,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "ok",
             "content": {
@@ -11400,6 +12810,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "The page",
             "content": {
@@ -11534,6 +12945,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "ok",
             "content": {
@@ -11572,6 +12984,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "ok",
             "content": {
@@ -11633,6 +13046,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Deleted"
           },
@@ -11665,6 +13079,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "ok",
             "content": {
@@ -11742,6 +13157,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "ok",
             "content": {
@@ -11831,6 +13247,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "ok",
             "content": {
@@ -11869,6 +13286,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "ok",
             "content": {
@@ -11976,6 +13394,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "ok",
             "content": {
@@ -12014,6 +13433,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "The comment",
             "content": {
@@ -12091,6 +13511,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "ok",
             "content": {
@@ -12158,6 +13579,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Deleted"
           },
@@ -12190,6 +13612,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "ok",
             "content": {
@@ -12292,6 +13715,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "ok",
             "content": {
@@ -12320,6 +13744,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "The template",
             "content": {
@@ -12393,6 +13818,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Deleted"
           },
@@ -12425,6 +13851,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "ok",
             "content": {
@@ -12513,6 +13940,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "ok",
             "content": {
@@ -12559,6 +13987,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "ok",
             "content": {
@@ -12622,6 +14051,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The Project",
             "content": {
@@ -12662,6 +14092,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Calendar view",
             "content": {
@@ -12716,6 +14147,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Replaced",
             "content": {
@@ -12766,6 +14198,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The report",
             "content": {
@@ -12815,6 +14248,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The Velocity",
             "content": {
@@ -12854,6 +14288,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "The summary",
             "content": {
@@ -12920,6 +14355,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "A page",
             "content": {
@@ -12959,6 +14395,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "ok",
             "content": {
@@ -13074,6 +14511,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "ok",
             "content": {
@@ -13112,6 +14550,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "Created",
             "content": {
@@ -13210,6 +14649,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "ok",
             "content": {
@@ -13256,6 +14696,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "done"
           },
@@ -13316,6 +14757,7 @@
       "get": {
         "summary": "The caller's live sessions",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "sessions",
             "content": {
@@ -13433,6 +14875,7 @@
       "delete": {
         "summary": "Revoke every other session (needs recent authentication)",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "count",
             "content": {
@@ -13516,6 +14959,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "done"
           },
@@ -13576,6 +15020,7 @@
       "get": {
         "summary": "Sign-in providers this instance offers",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "providers",
             "content": {
@@ -13650,6 +15095,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "provider URL",
             "content": {
@@ -13764,6 +15210,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "303": {
             "description": "redirect"
           }
@@ -13800,6 +15247,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "provider URL",
             "content": {
@@ -13882,6 +15330,7 @@
       "get": {
         "summary": "Linked sign-in identities of the caller",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "identities",
             "content": {
@@ -14019,6 +15468,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "done"
           },
@@ -14089,6 +15539,7 @@
       "delete": {
         "summary": "Remove the password (recent authentication; refused when it is the last sign-in method)",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "done"
           },
@@ -14171,6 +15622,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "consent view",
             "content": {
@@ -14289,6 +15741,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "where to send the person back to the client (code, state, iss; or error=access_denied)",
             "content": {
@@ -14351,6 +15804,7 @@
       "get": {
         "summary": "Connected apps (MCP clients) of the caller",
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "grants",
             "content": {
@@ -14416,6 +15870,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "done"
           },
@@ -14460,6 +15915,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "done"
           },
@@ -14501,6 +15957,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "policy",
             "content": {
@@ -14606,6 +16063,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "policy",
             "content": {
@@ -15128,6 +16586,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "members",
             "content": {
@@ -15215,6 +16674,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Done"
           },
@@ -15316,6 +16776,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Done"
           },
@@ -15395,6 +16856,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Done"
           },
@@ -15493,6 +16955,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Done"
           },
@@ -15544,6 +17007,93 @@
         ]
       }
     },
+    "/v1/workspaces/{id}/invitations/{invitation_id}/reissue": {
+      "post": {
+        "operationId": "reissueWorkspaceInvitation",
+        "summary": "Send an open invitation again (also one that has expired): a new link and a new expiry, and the previous link stops working. The link is mailed again when the server sends e-mail. The token is never stored, so the same link cannot be shown twice. An owner re-issues any; an admin only invitations for plain members.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "invitation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": {
+            "description": "re-issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invitation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no such invitation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "invitation_not_open (accepted or revoked) or already_member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
     "/v1/workspaces/{id}/teams/{team_id}/members": {
       "get": {
         "operationId": "listTeamMembers",
@@ -15569,6 +17119,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "members",
             "content": {
@@ -15665,6 +17216,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Done"
           },
@@ -15771,6 +17323,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Done"
           },
@@ -15806,6 +17359,457 @@
           },
           "409": {
             "description": "last_team_manager: a Team keeps at least one manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/workspaces/{id}/members/{user_id}/offboarding-impact": {
+      "get": {
+        "operationId": "getMemberOffboardingImpact",
+        "summary": "What removing the member, or disabling their account, would leave without an admin or manager: the Projects of which they are the last active direct admin (`NO_DIRECT_ADMIN` when an admin through a Team or Group remains, `NO_ADMIN` when nobody who can act would). Also `channels`: the private channels of which they are the last active manager (a public channel without a manager is an ordinary state and is not named). It only informs; removing and disabling are never refused for it. Workspace owner or admin only.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": {
+            "description": "impact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OffboardingImpact"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not owner or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not a member of this Workspace, or the person is not an active member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/workspaces/{id}/projects-without-admin": {
+      "get": {
+        "operationId": "listProjectsWithoutAdmin",
+        "summary": "Projects (not archived) that have no active admin by any source: nobody who is an active member with an enabled account holds the admin role directly, through a Team or through a Group. Names only, never content. Workspace owner or admin only.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": {
+            "description": "Projects without an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ProjectWithoutAdmin"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not owner or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{id}/admin-recovery": {
+      "post": {
+        "operationId": "recoverProjectAdmin",
+        "summary": "A Workspace owner or admin names a direct admin for a Project that has no active admin. Only that: it gives the caller no power in the Project, and the named person (who may be the caller) becomes its admin and so can read its content (`newAccess` says whether they could not before). A Project that has an active admin is refused (409 `project_has_admin`). Needs a recent sign-in. Audited as `project.admin_recovered`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "userId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": {
+            "description": "recovered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminRecovery"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "the person is not an active member of the Workspace, or their account is disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not owner or admin, or reauth_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no such Project or not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "project_has_admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{id}/private-channels": {
+      "get": {
+        "operationId": "listProjectPrivateChannels",
+        "summary": "The private channels of a Project for its admin, whether or not the admin can read them: name, description, counts, the member-invitation switch, archived, and whether the admin is in it. Never messages or files. Project admin only.",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": { "description": "Private channels", "content": { "application/json": { "schema": { "type": "object", "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/ManagedChannel" } } }, "required": ["items"] } } } },
+          "401": { "description": "unauthenticated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "403": { "description": "Project admin required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        },
+        "security": [{ "sessionCookie": [] }]
+      }
+    },
+    "/v1/workspaces/{id}/channels-without-manager": {
+      "get": {
+        "operationId": "listChannelsWithoutManager",
+        "summary": "Private channels (not archived) that have no active manager, whatever the cause: no manager row, only removed or disabled managers, or a public channel made private. A manager is active when they are an active member of the Workspace with an enabled account. A public channel without a manager is an ordinary state and is not listed. Names and counts only, never messages. Workspace owner or admin only.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": {
+            "description": "Channels without a manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ChannelWithoutManager"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not owner or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/channels/{id}/manager-recovery": {
+      "post": {
+        "operationId": "recoverChannelManager",
+        "summary": "A Workspace owner or admin names a manager for a private channel that has no active manager. Only that: it gives the caller no access to the channel, and the named person (who may be the caller) becomes its manager and so can read it (`newAccess` says whether they could not before). A channel that has an active manager is refused (409 `channel_has_manager`), and so is a public channel (409 `channel_not_private`). In a Project's channel the person must be one of the Project's people. Needs a recent sign-in. Audited as `channel.manager_recovered`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "userId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": {
+            "description": "recovered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagerRecovery"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "the person is not an active member of the Workspace, their account is disabled, or they are not one of the Project's people",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not owner or admin, or reauth_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no such channel or not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "channel_has_manager, or channel_not_private",
             "content": {
               "application/json": {
                 "schema": {
@@ -15865,6 +17869,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "a page",
             "content": {
@@ -15923,6 +17928,481 @@
         ]
       }
     },
+    "/v1/tickets/{id}/commands/archive": {
+      "post": {
+        "operationId": "archiveTicket",
+        "summary": "Archive a Ticket: out of the default lists and search, still readable, read-only. Project admin only. Archiving an archived Ticket changes nothing.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "204": {
+            "description": "Done"
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a Project admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no such Ticket",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "open_children (a child is not DONE/CANCELED) or ticket_trashed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/tickets/{id}/commands/unarchive": {
+      "post": {
+        "operationId": "unarchiveTicket",
+        "summary": "Bring an archived Ticket back. Project admin only. A Ticket that is also trashed must be restored from the trash first.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "204": {
+            "description": "Done"
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a Project admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no such Ticket",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "not_archived or ticket_trashed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{id}/archive": {
+      "get": {
+        "operationId": "listProjectArchive",
+        "summary": "Archived Tickets of the Project, newest first, for anyone who can read the Project.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": {
+            "description": "archived tickets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ArchivedTicket"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no such Project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sprints/{id}/archive-schedule": {
+      "get": {
+        "operationId": "getSprintArchiveSchedule",
+        "summary": "When the finished work of this completed Sprint is archived, if that was scheduled. schedule is null when none was made.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": {
+            "description": "the schedule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "schedule": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/SprintArchiveSchedule"
+                        }
+                      ],
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "schedule"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no such Sprint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "put": {
+        "operationId": "rescheduleSprintArchive",
+        "summary": "Move a scheduled archive to another future time. Project admin only; only while SCHEDULED.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "archiveAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                },
+                "required": [
+                  "expectedVersion",
+                  "archiveAt"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": {
+            "description": "the updated schedule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SprintArchiveSchedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "the time is not in the future",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a Project admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no schedule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "version_conflict or archive_schedule_finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "cancelSprintArchive",
+        "summary": "Cancel a scheduled archive: nothing is archived. Project admin only; only while SCHEDULED.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "format": "int64"
+                  }
+                },
+                "required": [
+                  "expectedVersion"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": {
+            "description": "the canceled schedule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SprintArchiveSchedule"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a Project admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no schedule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "version_conflict or archive_schedule_finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
     "/v1/projects/{id}/trash": {
       "get": {
         "operationId": "listProjectTrash",
@@ -15939,6 +18419,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "trashed tickets",
             "content": {
@@ -16017,6 +18498,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Done"
           },
@@ -16087,6 +18569,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Done"
           },
@@ -16157,6 +18640,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Done"
           },
@@ -16224,6 +18708,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Attachments, oldest first",
             "content": {
@@ -16283,6 +18768,7 @@
           }
         },
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "201": {
             "description": "The attachment",
             "content": {
@@ -16351,6 +18837,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Removed"
           },
@@ -16390,7 +18877,7 @@
     "/v1/projects/{id}/grants/{user_id}": {
       "put": {
         "operationId": "setProjectGrant",
-        "summary": "Give an active Workspace member a direct role in the Project, or change it. Project admin only. The Project keeps at least one direct admin.",
+        "summary": "Give an active Workspace member a direct role in the Project, or change it. Project admin only. The Project keeps an active direct admin: the last one (an active member with an enabled account) cannot be demoted or have the grant taken away, by anyone.",
         "parameters": [
           {
             "$ref": "#/components/parameters/Client"
@@ -16415,6 +18902,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Done"
           },
@@ -16487,7 +18975,7 @@
       },
       "delete": {
         "operationId": "removeProjectGrant",
-        "summary": "Take a direct role away; what the person reaches through a Team stays. Project admin only. The Project keeps at least one direct admin.",
+        "summary": "Take a direct role away; what the person reaches through a Team stays. Project admin only. The Project keeps an active direct admin: the last one (an active member with an enabled account) cannot be demoted or have the grant taken away, by anyone.",
         "parameters": [
           {
             "$ref": "#/components/parameters/Client"
@@ -16512,6 +19000,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Done"
           },
@@ -16591,6 +19080,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Done"
           },
@@ -16658,6 +19148,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Done"
           },
@@ -16727,6 +19218,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "204": {
             "description": "Done"
           },
@@ -16816,6 +19308,7 @@
           }
         ],
         "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
           "200": {
             "description": "Active workspace members who can be assigned",
             "content": {
@@ -16866,6 +19359,75 @@
             "sessionCookie": []
           }
         ]
+      }
+    },
+    "/v1/channels/{id}/webhooks": {
+      "get": {
+        "operationId": "listChannelWebhooks",
+        "summary": "List incoming webhooks on a channel. In a private channel its MANAGER or the admin of its Project (readable or not); metadata only",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": { "description": "Webhooks, without secrets", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WebhookList" } } } },
+          "403": { "description": "Channel manager required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      },
+      "post": {
+        "operationId": "createChannelWebhook",
+        "summary": "Create an incoming webhook. In a private channel its MANAGER, or an admin of its Project who can read it: a credential that posts is for someone who may post",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateWebhookRequest" } } } },
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "201": { "description": "The webhook and its secret, shown once", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WebhookCreated" } } } },
+          "403": { "description": "Channel manager required, or recent authentication required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "409": { "description": "Signature webhooks need PENFII_WEBHOOK_KEK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/v1/webhooks/{id}/rotate": {
+      "post": {
+        "operationId": "rotateWebhook",
+        "summary": "Replace a webhook credential immediately. Same people as creating one",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": { "description": "The webhook and its new secret", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WebhookCreated" } } } },
+          "403": { "description": "Channel manager required, or recent authentication required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "409": { "description": "Revoked, or the signature key is not configured", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/v1/webhooks/{id}/revoke": {
+      "post": {
+        "operationId": "revokeWebhook",
+        "summary": "Revoke a webhook. In a private channel its MANAGER or the admin of its Project, readable or not: ending a credential gives no access to the content. Recorded in the audit log",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": { "description": "The revoked webhook", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Webhook" } } } },
+          "403": { "description": "Channel manager required, or recent authentication required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/v1/hooks/{token}": {
+      "post": {
+        "operationId": "postWebhook",
+        "summary": "Post a plain-text message through an incoming webhook",
+        "parameters": [{ "name": "token", "in": "path", "required": true, "description": "URL secret token, or the webhook id when the body is signed.", "schema": { "type": "string" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"], "additionalProperties": false } } } },
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "201": { "description": "The message", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Message" } } } },
+          "400": { "description": "The body is not plain text, or it is too large", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "401": { "description": "Unknown credential, bad signature, revoked webhook, or disabled actor", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "409": { "description": "Idempotency conflict, or the channel is read-only", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "429": { "description": "Too many authentication failures or posts", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
       }
     }
   }

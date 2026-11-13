@@ -5,7 +5,7 @@ import { api } from '../../api'
 import { Button, Select } from '../../design/ui'
 import { formatStamp } from '../../format'
 import { useI18n } from '../../i18n/I18nProvider'
-import { messages, type MessageKey } from '../../i18n/messages'
+import type { MessageKey } from '../../i18n/messages'
 import { queryKeys } from '../../queryKeys'
 
 function roleName(value: unknown, t: ReturnType<typeof useI18n>['t']): string {
@@ -24,8 +24,7 @@ function targetText(entry: AuditRecord, t: ReturnType<typeof useI18n>['t']): str
 const GROUPS = ['member.', 'invitation.', 'team.', 'user.', 'ticket.'] as const
 
 export function AuditSection({ workspaceId }: { workspaceId: string }) {
-  const { t, locale } = useI18n()
-  const known = messages[locale]
+  const { t, locale, has } = useI18n()
   const [group, setGroup] = useState('')
   const audit = useInfiniteQuery({
     queryKey: queryKeys.adminAudit(workspaceId, group),
@@ -65,7 +64,7 @@ export function AuditSection({ workspaceId }: { workspaceId: string }) {
                 <tr key={entry.id}>
                   <td data-label={t('admin.audit.when')}>{formatStamp(entry.occurredAt, locale)}</td>
                   <td data-label={t('admin.audit.who')}>{entry.actorName ?? t('admin.audit.system')}</td>
-                  <td data-label={t('admin.audit.what')}>{key in known ? t(key) : <code>{entry.action}</code>}</td>
+                  <td data-label={t('admin.audit.what')}>{has(key) ? t(key) : <code>{entry.action}</code>}</td>
                   <td data-label={t('admin.audit.target')}>{targetText(entry, t)}</td>
                 </tr>
               )

@@ -13,7 +13,7 @@ vi.mock('../../api', () => ({ api }))
 import { MessageRow } from './MessageRow'
 
 const message = {
-  id: 'm1', conversationId: 'c1', streamSeq: 2, authorId: 'u1', authorDisplayName: 'Alice', threadRootId: null, replyToId: null, version: 1,
+  id: 'm1', conversationId: 'c1', streamSeq: 2, authorId: 'u1', authorDisplayName: 'Alice', authorKind: 'HUMAN', threadRootId: null, replyToId: null, version: 1,
   bodySchemaVersion: 1, body: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'hello' }] }] }, deleted: false,
   createdAt: '2026-11-05T02:00:00Z', editedAt: null, replyCount: 0, reactions: [], attachments: [],
 } as unknown as Message

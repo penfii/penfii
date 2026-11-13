@@ -84,6 +84,8 @@ function kindsOf(node: ts.TypeNode, depth = 0): Kinds {
       else add('boolean')
       return
     }
+    // Only a few of the hundreds of syntax kinds mean a JSON kind here; the rest fall through to the checks below.
+    // eslint-disable-next-line @typescript-eslint/switch-exhaustiveness-check
     switch (type.kind) {
       case ts.SyntaxKind.StringKeyword:
         return add('string')
@@ -101,6 +103,8 @@ function kindsOf(node: ts.TypeNode, depth = 0): Kinds {
       case ts.SyntaxKind.AnyKeyword:
         out.any = true
         return
+      default:
+        break
     }
     if (ts.isArrayTypeNode(type) || ts.isTupleTypeNode(type)) return add('array')
     if (ts.isTypeLiteralNode(type) || ts.isMappedTypeNode(type)) return add('object')

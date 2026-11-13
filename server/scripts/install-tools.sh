@@ -6,6 +6,7 @@ set -euo pipefail
 
 DENY_VERSION=0.20.2
 SHEAR_VERSION=1.14.0
+SQLX_VERSION=0.8.6
 BIN="${CARGO_HOME:-$HOME/.cargo}/bin"
 
 has() { command -v "$1" >/dev/null && "$1" --version 2>/dev/null | grep -qwF "$2"; }
@@ -47,5 +48,11 @@ if ! has cargo-shear "$SHEAR_VERSION"; then
     cargo install --locked "cargo-shear@$SHEAR_VERSION"
   fi
 fi
+# sqlx-cli is the same 0.8 line as the sqlx crate. --locked builds the published lockfile.
+# There is no upstream release binary with a checksum; the version pin is the contract.
+if ! has sqlx "$SQLX_VERSION"; then
+  cargo install --locked sqlx-cli --version "$SQLX_VERSION" --no-default-features --features postgres,rustls
+fi
 cargo-deny --version
 cargo-shear --version
+sqlx --version

@@ -42,18 +42,22 @@ struct LiveTicket {
     project_id: Uuid,
 }
 
-/// The Ticket when it is live (not archived, trashed or purged) and the person may open it.
+/// The Ticket when the person may open it: live, or (`allow_archived`, for reading only) archived.
+/// A trashed or purged Ticket never opens. Attaching and detaching pass `false`, so an archived Ticket
+/// keeps its files and cannot change them.
 async fn readable_ticket(
     conn: &mut PgConnection,
     actor: Uuid,
     ticket_id: Uuid,
+    allow_archived: bool,
 ) -> Result<LiveTicket, CoreError> {
     let row = sqlx::query(
         "SELECT workspace_id, project_id, channel_id FROM penfii.tickets
-         WHERE id = $1 AND archived_at IS NULL AND trashed_at IS NULL AND purged_at IS NULL
+         WHERE id = $1 AND ($2 OR archived_at IS NULL) AND trashed_at IS NULL AND purged_at IS NULL
          FOR SHARE",
     )
     .bind(ticket_id)
+    .bind(allow_archived)
     .fetch_optional(&mut *conn)
     .await?
     .ok_or(CoreError::NotFound)?;
@@ -75,7 +79,7 @@ pub async fn list_body(
     ticket_id: Uuid,
 ) -> Result<Vec<TicketAttachment>, CoreError> {
     let mut tx = pool.begin().await?;
-    readable_ticket(&mut tx, actor, ticket_id).await?;
+    readable_ticket(&mut tx, actor, ticket_id, true).await?;
     let rows = sqlx::query(&format!(
         "SELECT {COLUMNS} {FROM}
          WHERE a.ticket_id = $1 AND a.comment_id IS NULL AND f.deleted_at IS NULL
@@ -97,7 +101,7 @@ pub async fn attach_body(
     file_id: Uuid,
 ) -> Result<(TicketAttachment, Option<ChangeNotice>), CoreError> {
     let mut tx = pool.begin().await?;
-    let ticket = readable_ticket(&mut tx, actor, ticket_id).await?;
+    let ticket = readable_ticket(&mut tx, actor, ticket_id, false).await?;
     project_role::require_project_role(&mut tx, ticket.project_id, actor, true).await?;
     let existing = sqlx::query(&format!(
         "SELECT {COLUMNS} {FROM}
@@ -147,7 +151,7 @@ pub async fn detach_body(
     attachment_id: Uuid,
 ) -> Result<ChangeNotice, CoreError> {
     let mut tx = pool.begin().await?;
-    let ticket = readable_ticket(&mut tx, actor, ticket_id).await?;
+    let ticket = readable_ticket(&mut tx, actor, ticket_id, false).await?;
     let (_, role) =
         project_role::require_project_role(&mut tx, ticket.project_id, actor, true).await?;
     let row = sqlx::query(
@@ -175,7 +179,7 @@ pub async fn detach_body(
         .bind(attachment_id)
         .execute(&mut *tx)
         .await?;
-    let keys = files::retire(&mut tx, &[file_id]).await?;
+    let _keys = files::retire(&mut tx, &[file_id]).await?;
     events::emit_simple(
         &mut tx,
         ticket.workspace_id,
@@ -186,7 +190,7 @@ pub async fn detach_body(
         serde_json::json!({"ticketId": ticket_id}),
     )
     .await?;
-    files::delete_objects(store, &keys).await?;
+    let _ = store;
     let change = work::comment_change(
         &mut tx,
         ticket.project_id,
@@ -271,7 +275,7 @@ async fn bind(
     Ok(())
 }
 
-/// Attachments of the given comments, grouped by comment. Nothing while the Ticket is not live.
+/// Attachments of the given comments, grouped by comment. Nothing while the Ticket is trashed or purged; an archived Ticket keeps them readable.
 pub(crate) async fn for_comments(
     conn: &mut PgConnection,
     ticket_id: Uuid,
@@ -285,7 +289,7 @@ pub(crate) async fn for_comments(
         "SELECT {COLUMNS} FROM penfii.ticket_attachments a
          JOIN penfii.files f ON f.id = a.file_id AND f.deleted_at IS NULL
          JOIN penfii.tickets t ON t.id = a.ticket_id
-              AND t.archived_at IS NULL AND t.trashed_at IS NULL AND t.purged_at IS NULL
+              AND t.trashed_at IS NULL AND t.purged_at IS NULL
          WHERE a.ticket_id = $1 AND a.comment_id = ANY($2)
          ORDER BY a.attached_at, a.id"
     ))
@@ -327,7 +331,7 @@ pub(crate) async fn locate(
     else {
         return Ok(None);
     };
-    readable_ticket(conn, actor, row.try_get("ticket_id")?).await?;
+    readable_ticket(conn, actor, row.try_get("ticket_id")?, true).await?;
     if row
         .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("deleted_at")?
         .is_some()
@@ -354,7 +358,7 @@ pub(crate) async fn retire_all(
     conn: &mut PgConnection,
     ticket_id: Uuid,
     workspace_id: Uuid,
-    actor: Uuid,
+    actor: Option<Uuid>,
 ) -> Result<Vec<String>, CoreError> {
     let file_ids: Vec<Uuid> = sqlx::query_scalar(
         "DELETE FROM penfii.ticket_attachments WHERE ticket_id = $1 RETURNING file_id",
@@ -378,13 +382,13 @@ pub(crate) async fn retire_comment(
     .bind(comment_id)
     .fetch_all(&mut *conn)
     .await?;
-    retire_files(conn, workspace_id, actor, &file_ids).await
+    retire_files(conn, workspace_id, Some(actor), &file_ids).await
 }
 
 async fn retire_files(
     conn: &mut PgConnection,
     workspace_id: Uuid,
-    actor: Uuid,
+    actor: Option<Uuid>,
     file_ids: &[Uuid],
 ) -> Result<Vec<String>, CoreError> {
     let keys = files::retire(conn, file_ids).await?;
@@ -395,7 +399,7 @@ async fn retire_files(
             "FILE",
             *file_id,
             "file.deleted",
-            Some(actor),
+            actor,
             serde_json::json!({}),
         )
         .await?;

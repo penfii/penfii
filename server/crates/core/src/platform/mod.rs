@@ -25,6 +25,9 @@ pub enum ChangeNotice {
     /// The channels a person can see changed (they were put into one, or left one): the user
     /// socket tells their client to read its Space again.
     Space { user_id: Uuid },
+    /// Many Tickets of a Project changed at once (a Sprint's finished work was archived): the board
+    /// of that Project looks again. It carries nobody's data, so it is checked like a Project change.
+    Project { project_id: Uuid },
     Ticket {
         project_id: Uuid,
         change_seq: i64,

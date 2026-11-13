@@ -12,7 +12,7 @@ import { activeArea, type NavArea } from '../shell/navAreas'
  */
 const ROOTS: Record<NavArea, { path: string; /** Query keys whose presence means "show this content". */ content: readonly string[] }> = {
   home: { path: '', content: [] },
-  inbox: { path: '/inbox', content: ['box'] },
+  inbox: { path: '/inbox', content: ['view', 'type', 'unread', 'box'] },
   chat: { path: '/chat', content: [] },
   projects: { path: '/projects', content: [] },
   docs: { path: '/docs', content: ['doc', 'draft'] },
@@ -53,7 +53,13 @@ const SETTINGS_TITLES: Record<string, MessageKey> = {
   '/settings/notifications': 'settings.notifications',
   '/settings/appearance': 'settings.appearance',
   '/settings/apps': 'settings.apps',
-  '/settings/admin': 'settings.workspace',
+  '/settings/admin': 'admin.section.general',
+  '/settings/admin/members': 'admin.section.members',
+  '/settings/admin/teams': 'admin.section.teams',
+  '/settings/admin/invitations': 'admin.section.invitations',
+  '/settings/admin/recovery': 'admin.section.recovery',
+  '/settings/admin/integrations': 'admin.section.integrations',
+  '/settings/admin/audit': 'admin.section.audit',
 }
 
 export function resolveScreen(workspaceId: string, section: string, pathname: string, search: string): Screen {

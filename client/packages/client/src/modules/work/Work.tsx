@@ -9,6 +9,7 @@ import { queryKeys } from '../../queryKeys'
 import { queries } from '../../queries'
 import { BoardLayout } from './Board'
 import { BoardSettings } from './BoardSettings'
+import { ArchivedTickets } from './ArchivedTickets'
 import { BulkBar } from './BulkBar'
 import { PhoneBulk } from './PhoneBulk'
 import { ListLayout, type ListReorder } from './ListLayout'
@@ -96,6 +97,7 @@ function ProjectWork({ target, view, message, setMessage }: { target: Extract<Wo
   )
   const [selection, setSelection] = useState<Set<string>>(() => new Set())
   const [bulkResult, setBulkResult] = useState<BulkResult | null>(null)
+  const [showArchive, setShowArchive] = useState(false)
   const [selecting, setSelecting] = useState(false)
   const [busy, setBusy] = useState<Set<string>>(() => new Set())
   useEffect(() => {
@@ -225,8 +227,10 @@ function ProjectWork({ target, view, message, setMessage }: { target: Extract<Wo
         {!data.canEdit ? <p className="board-note" role="note">{t('work.board.readOnly')}</p> : <span />}
         {shown !== total ? <small className="field-hint">{t('view.filter.result', { shown: String(shown), total: String(total) })}</small> : null}
         {data.canEdit && layout !== 'BOARD' ? <Button type="button" variant="secondary" onClick={() => openCreate({ projectId })}>{t('work.addTicket')}</Button> : null}
+        <Button type="button" variant="ghost" aria-pressed={showArchive} onClick={() => setShowArchive((on) => !on)}>{t('archive.open')}</Button>
         {mobile && layout === 'LIST' && data.canEdit && total > 0 ? <Button type="button" variant="secondary" aria-pressed={selecting} onClick={() => { setSelecting((on) => !on); setSelection(new Set()); setBulkResult(null) }}>{t('bulk.select')}</Button> : null}
       </div>
+      {showArchive ? <ArchivedTickets projectId={projectId} onOpen={(id) => open(id)} onClose={() => setShowArchive(false)} /> : null}
       {layout === 'BOARD' ? (
         <BoardLayout projectId={projectId} data={data} definition={definition} planning={planning.data} members={members.data ?? []} message={message} onMessage={setMessage} />
       ) : (

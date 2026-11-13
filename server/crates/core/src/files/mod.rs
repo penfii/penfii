@@ -2,6 +2,7 @@
 //! A late intake result cannot revive a deleted or superseded generation.
 
 mod binding;
+mod cleanup;
 mod store;
 
 use penfii_contracts::MessageAttachment;
@@ -13,10 +14,61 @@ use crate::access;
 use crate::error::CoreError;
 use crate::limits::Limits;
 
-pub(crate) use binding::{
-    bound_anywhere, bound_outside_docs, claim_unbound, delete_objects, retire,
-};
+pub(crate) use binding::{bound_anywhere, bound_outside_docs, claim_unbound, retire};
+pub use cleanup::consumer as storage_consumer;
 pub use store::ObjectStore;
+
+/// The content of an upload, as the chunks it arrived in. It is kept as they are (no one contiguous copy of a
+/// file that may be 100 MB): the store writes the chunks, and the type of the file is read from its first
+/// bytes.
+#[derive(Clone, Default)]
+pub struct UploadBody {
+    chunks: Vec<bytes::Bytes>,
+    len: usize,
+}
+
+impl UploadBody {
+    pub fn from_chunks(chunks: Vec<bytes::Bytes>) -> Self {
+        let len = chunks.iter().map(bytes::Bytes::len).sum();
+        Self { chunks, len }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The first `max` bytes (fewer for a shorter body), copied: a small buffer for reading the type.
+    pub fn prefix(&self, max: usize) -> Vec<u8> {
+        let mut out = Vec::with_capacity(max.min(self.len));
+        for chunk in &self.chunks {
+            let room = max - out.len();
+            if room == 0 {
+                break;
+            }
+            out.extend_from_slice(&chunk[..chunk.len().min(room)]);
+        }
+        out
+    }
+
+    pub fn contains_byte(&self, byte: u8) -> bool {
+        self.chunks.iter().any(|chunk| chunk.contains(&byte))
+    }
+
+    /// What the store writes: the same chunks, shared, not copied.
+    pub fn payload(&self) -> object_store::PutPayload {
+        object_store::PutPayload::from_iter(self.chunks.iter().cloned())
+    }
+}
+
+impl From<bytes::Bytes> for UploadBody {
+    fn from(bytes: bytes::Bytes) -> Self {
+        Self::from_chunks(vec![bytes])
+    }
+}
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct StoredFile {
@@ -77,10 +129,10 @@ pub async fn finish_upload(
     limits: &Limits,
     actor_id: Uuid,
     file_id: Uuid,
-    bytes: &[u8],
+    body: &UploadBody,
 ) -> Result<StoredFile, CoreError> {
     let max = file_limit(limits)?;
-    let len = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
+    let len = i64::try_from(body.len()).unwrap_or(i64::MAX);
     if len <= 0 || len > max {
         return Err(CoreError::validation(
             "file size is outside the configured limit",
@@ -104,10 +156,16 @@ pub async fn finish_upload(
     let filename = file.filename.clone();
     tx.commit().await?;
 
-    store.put(&key, bytes).await.map_err(CoreError::Internal)?;
+    store
+        .put(&key, body.payload())
+        .await
+        .map_err(CoreError::Internal)?;
 
     let mut tx = pool.begin().await?;
     let Some(current) = load_file_for_update(&mut tx, file_id).await? else {
+        drop(tx);
+        // The row is gone. The object this request just wrote is nobody's; drop it after the
+        // transaction, so a slow store does not hold a connection.
         let _ = store.delete(&key).await;
         return Err(CoreError::NotFound);
     };
@@ -119,10 +177,13 @@ pub async fn finish_upload(
         // The object key is per file and generation. When another request of the same upload
         // finished it while this one was writing, that request owns the object now: deleting it
         // would leave a finished file without its bytes. Only an upload that was deleted or
-        // replaced leaves an object nobody refers to.
+        // replaced leaves an object nobody refers to. A retired file's object is also removed by
+        // the storage consumer; deleting this request's own write here covers the race where the
+        // bytes landed after that consumer already ran.
         let finished_by_another = current.created_by == actor_id
             && !current.deleted_at_present()
             && current.generation == generation;
+        drop(tx);
         if !finished_by_another {
             let _ = store.delete(&key).await;
         }
@@ -131,7 +192,7 @@ pub async fn finish_upload(
             "upload was deleted or replaced",
         ));
     }
-    let mime = accept_bytes(&filename, bytes);
+    let mime = accept_body(&filename, body);
     let next = if mime.accepted {
         "QUARANTINED"
     } else {
@@ -177,9 +238,12 @@ pub async fn delete_upload(
             "attached files stay with their message, page or ticket",
         ));
     }
-    let keys = retire(&mut tx, &[file_id]).await?;
+    let _keys = retire(&mut tx, &[file_id]).await?;
     tx.commit().await?;
-    delete_objects(store, &keys).await
+    // The object goes when the storage consumer handles `storage.file_delete`. A failure there
+    // retries; it is not this request's error.
+    let _ = store;
+    Ok(())
 }
 
 /// Removes uploads nobody ever attached: a form closed before sending, a tab that died mid-upload.
@@ -211,28 +275,33 @@ pub async fn sweep_unbound(
     if ids.is_empty() {
         return Ok(0);
     }
-    let keys = retire(&mut tx, &ids).await?;
-    delete_objects(store, &keys).await?;
+    let _keys = retire(&mut tx, &ids).await?;
     tx.commit().await?;
+    let _ = store;
     Ok(ids.len())
 }
 
 /// Runs [`sweep_unbound`] every ten minutes. `PENFII_UNBOUND_UPLOAD_GRACE_SECONDS` (default one
 /// day) is how long an unattached upload may wait for its form to be sent.
 pub fn spawn_sweeper(pool: PgPool, store: Option<ObjectStore>) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
+    crate::lifecycle::spawn_worker("unattached upload sweeper", async move {
         let grace = std::env::var("PENFII_UNBOUND_UPLOAD_GRACE_SECONDS")
             .ok()
             .and_then(|raw| raw.trim().parse::<i64>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(24 * 3600);
-        loop {
-            match sweep_unbound(&pool, store.as_ref(), grace).await {
+        while !crate::lifecycle::stopping() {
+            match crate::lifecycle::guarded(
+                "unattached upload sweeper",
+                sweep_unbound(&pool, store.as_ref(), grace),
+            )
+            .await
+            {
                 Ok(0) => {}
                 Ok(count) => tracing::info!(count, "unattached uploads removed"),
                 Err(error) => tracing::warn!(?error, "unattached upload sweep failed"),
             }
-            tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+            crate::lifecycle::pause(std::time::Duration::from_secs(600)).await;
         }
     })
 }
@@ -512,14 +581,31 @@ struct MimeDecision {
     detected: Option<String>,
 }
 
+/// How much of the start of a file is read to tell its type (a CSV is checked for UTF-8 over this much).
+const SNIFF_BYTES: usize = 64 * 1024;
+
+#[cfg(test)]
 fn accept_bytes(filename: &str, bytes: &[u8]) -> MimeDecision {
+    accept_parts(filename, bytes, &|| bytes.contains(&0))
+}
+
+fn accept_body(filename: &str, body: &UploadBody) -> MimeDecision {
+    accept_parts(filename, &body.prefix(SNIFF_BYTES), &|| {
+        body.contains_byte(0)
+    })
+}
+
+/// The decision from the first bytes of a file and, for a type that needs it, whether the whole file has a
+/// NUL byte.
+fn accept_parts(filename: &str, prefix: &[u8], has_nul: &dyn Fn() -> bool) -> MimeDecision {
+    let bytes = prefix;
     let extension = filename
         .rsplit('.')
         .next()
         .unwrap_or("")
         .to_ascii_lowercase();
     let image_ext = matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif");
-    let detected = detect_mime(&extension, bytes);
+    let detected = detect_mime_parts(&extension, bytes, has_nul);
     if image_ext
         && detected
             .as_deref()
@@ -539,7 +625,12 @@ fn accept_bytes(filename: &str, bytes: &[u8]) -> MimeDecision {
 /// The type of a file, decided by what its bytes are (the name only separates formats whose bytes
 /// do not tell, like Ogg audio from Ogg video, and CSV, which has no signature). What the browser
 /// sent is never used. `None` is an unknown type, served as a download.
+#[cfg(test)]
 fn detect_mime(extension: &str, bytes: &[u8]) -> Option<String> {
+    detect_mime_parts(extension, bytes, &|| bytes.contains(&0))
+}
+
+fn detect_mime_parts(extension: &str, bytes: &[u8], has_nul: &dyn Fn() -> bool) -> Option<String> {
     if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
         return Some("image/png".into());
     }
@@ -587,8 +678,7 @@ fn detect_mime(extension: &str, bytes: &[u8]) -> Option<String> {
         return Some("application/pdf".into());
     }
     if extension == "csv"
-        && std::str::from_utf8(&bytes[..bytes.len().min(64 * 1024)])
-            .is_ok_and(|_| !bytes.contains(&0))
+        && std::str::from_utf8(&bytes[..bytes.len().min(SNIFF_BYTES)]).is_ok_and(|_| !has_nul())
     {
         return Some("text/csv".into());
     }
@@ -716,7 +806,8 @@ struct AttachmentRow {
 
 #[cfg(test)]
 mod tests {
-    use super::{accept_bytes, clean_filename, detect_mime};
+    use super::{UploadBody, accept_body, accept_bytes, clean_filename, detect_mime};
+    use bytes::Bytes;
 
     #[test]
     fn image_magic_and_blocked_names() {
@@ -767,5 +858,58 @@ mod tests {
         );
         // A video that claims to be a picture is refused.
         assert!(!accept_bytes("clip.png", b"\0\0\0\x18ftypisom\0\0").accepted);
+    }
+
+    /// The same decision whether the bytes arrive as one buffer or as the chunks they came in.
+    #[test]
+    fn the_type_is_read_across_chunk_boundaries_and_the_whole_body_is_scanned_for_a_csv() {
+        let png: &[u8] = b"\x89PNG\r\n\x1a\nrest of the image";
+        for split in 1..png.len() {
+            let body = UploadBody::from_chunks(vec![
+                Bytes::copy_from_slice(&png[..split]),
+                Bytes::copy_from_slice(&png[split..]),
+            ]);
+            assert_eq!(body.len(), png.len());
+            assert!(accept_body("photo.png", &body).accepted, "split at {split}");
+            assert_eq!(
+                accept_body("photo.png", &body).detected.as_deref(),
+                accept_bytes("photo.png", png).detected.as_deref()
+            );
+        }
+        let not_png = UploadBody::from_chunks(vec![
+            Bytes::from_static(b"not "),
+            Bytes::from_static(b"an image"),
+        ]);
+        assert!(!accept_body("photo.png", &not_png).accepted);
+
+        // A CSV is text without a NUL byte anywhere, also past the part that is read for UTF-8.
+        let mut text = vec![b'a'; 70_000];
+        let clean = UploadBody::from_chunks(vec![Bytes::from(text.clone())]);
+        assert_eq!(
+            accept_body("data.csv", &clean).detected.as_deref(),
+            Some("text/csv")
+        );
+        text.push(0);
+        let late_nul = UploadBody::from_chunks(vec![
+            Bytes::from(text[..65_000].to_vec()),
+            Bytes::from(text[65_000..].to_vec()),
+        ]);
+        assert_eq!(
+            accept_body("data.csv", &late_nul).detected.as_deref(),
+            accept_bytes("data.csv", &text).detected.as_deref()
+        );
+        assert_ne!(
+            accept_body("data.csv", &late_nul).detected.as_deref(),
+            Some("text/csv")
+        );
+
+        // The prefix is the first bytes, however the body is cut.
+        let body = UploadBody::from_chunks(vec![
+            Bytes::from_static(b"abc"),
+            Bytes::from_static(b"defgh"),
+        ]);
+        assert_eq!(body.prefix(5), b"abcde");
+        assert_eq!(body.prefix(100), b"abcdefgh");
+        assert!(body.contains_byte(b'g') && !body.contains_byte(0));
     }
 }

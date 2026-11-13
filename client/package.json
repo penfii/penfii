@@ -16,7 +16,11 @@
     "lint": "eslint .",
     "knip": "knip && knip --production",
     "contract:sync": "node scripts/sync-openapi.mjs",
-    "contract:check": "node scripts/sync-openapi.mjs --check"
+    "contract:check": "node scripts/sync-openapi.mjs --check",
+    "budget": "node scripts/check-bundle-size.mjs",
+    "contract:types": "node scripts/generate-types.mjs",
+    "contract:types:check": "node scripts/generate-types.mjs --check",
+    "e2e": "npm test -w @penfii/e2e"
   },
   "overrides": {
     "@tiptap/core": "3.31.3",
@@ -29,8 +33,9 @@
     "@vitejs/plugin-react": "6.1.1",
     "eslint": "10.12.0",
     "eslint-plugin-react-hooks": "7.1.1",
-    "jsdom": "^28.0.0",
+    "jsdom": "28.0.0",
     "knip": "6.41.0",
+    "openapi-typescript": "7.13.0",
     "typescript": "5.9.3",
     "typescript-eslint": "8.71.2",
     "vite": "8.3.1",

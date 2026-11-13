@@ -1,5 +1,5 @@
-import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
-import { Link } from 'react-router'
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { Link, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const api = vi.hoisted(() => ({
@@ -32,14 +32,14 @@ vi.mock('../modules/attention/useUserSocket', () => ({ useUserSocket: () => unde
 vi.mock('../modules/attention/CommandPalette', () => ({ CommandPalette: () => null }))
 vi.mock('../modules/help/ShortcutHelp', () => ({ ShortcutHelpProvider: ({ children }: { children: unknown }) => children }))
 
-import { MobileShell } from './MobileShell'
+import { ResponsiveShell } from '../shell/ResponsiveShell'
 import { renderWithProviders } from '../test/renderWithProviders'
 import { PHONE, setViewport } from '../test/viewport'
 
 type Section = 'inbox' | 'chat' | 'projects' | 'docs' | 'teams' | 'settings' | 'search'
 
 function mount(path: string, section: Section, route = '/w/:workspaceId/*') {
-  return renderWithProviders(<MobileShell section={section}><p>content</p></MobileShell>, { route: path, path: route })
+  return renderWithProviders(<ResponsiveShell section={section}><p>content</p></ResponsiveShell>, { route: path, path: route })
 }
 
 beforeEach(() => {
@@ -65,7 +65,7 @@ describe('MobileShell roots and pushes', () => {
     mount('/w/w/projects', 'projects')
     expect(await screen.findByText(/context list: projects/)).toBeTruthy()
     const tabs = screen.getByRole('navigation', { name: 'Main menu' })
-    expect(tabs.querySelectorAll('a')).toHaveLength(8)
+    expect(tabs.querySelectorAll('a')).toHaveLength(6)
     expect(screen.queryByText('content')).toBeNull()
   })
 
@@ -159,13 +159,21 @@ describe('MobileShell workspace and account', () => {
   })
 
   it('lists the workspaces in a sheet and logs out', async () => {
-    mount('/w/w/settings', 'settings')
+    // Signing out goes to the sign-in page, which the app has as a route.
+    renderWithProviders(
+      <Routes>
+        <Route path="/w/:workspaceId/*" element={<ResponsiveShell section="settings"><p>content</p></ResponsiveShell>} />
+        <Route path="/login" element={<p>sign-in page</p>} />
+      </Routes>,
+      { route: '/w/w/settings' },
+    )
     fireEvent.click(await screen.findByRole('button', { name: /Switch workspace/ }))
     const sheet = await screen.findByRole('dialog', { name: 'Switch workspace' })
     expect(sheet.textContent).toContain('Beta')
     fireEvent.click(screen.getByText('Close', { selector: '.m-sheet-close' }))
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     await waitFor(() => expect(api.logout).toHaveBeenCalled())
+    expect(await screen.findByText('sign-in page')).toBeTruthy()
   })
 })
 
@@ -179,18 +187,27 @@ describe('MobileShell accessibility', () => {
     expect(tab.querySelector('.visually-hidden')?.textContent).toMatch(/4/)
   })
 
-  it('brings the active tab into view when the area changes', async () => {
-    const scroll = vi.fn()
-    Element.prototype.scrollIntoView = scroll
+  it('has six equal tabs, and Search and the account in the app bar of a root', async () => {
     mount('/w/w/directory', 'teams')
-    await screen.findByText(/context list/)
-    await waitFor(() => expect(scroll).toHaveBeenCalled())
-    expect((scroll.mock.contexts[0] as HTMLElement).getAttribute('aria-current')).toBe('page')
-    Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+    const nav = await screen.findByRole('navigation', { name: 'Main menu' })
+    expect(within(nav).getAllByRole('link').map((link) => link.textContent)).toEqual(['Home', 'Inbox', 'Chat', 'Projects', 'Docs', 'Teams'])
+    expect(within(nav).getByRole('link', { name: 'Teams' }).getAttribute('aria-current')).toBe('page')
+    expect(within(nav).queryByRole('link', { name: 'Search' })).toBeNull()
+    expect(within(nav).queryByRole('link', { name: 'Settings' })).toBeNull()
+    const bar = document.querySelector('.mobile-bar.is-root') as HTMLElement
+    expect(within(bar).getByRole('link', { name: 'Search' }).getAttribute('href')).toBe('/w/w/search')
+    expect(within(bar).getByRole('link', { name: 'Account' }).getAttribute('href')).toBe('/w/w/settings')
+  })
+
+  it('lights no tab on the Search and Settings roots and keeps the tabs', async () => {
+    mount('/w/w/search', 'search')
+    const nav = await screen.findByRole('navigation', { name: 'Main menu' })
+    expect(nav.querySelector('[aria-current]')).toBeNull()
+    expect(screen.getByRole('link', { name: 'Search' }).getAttribute('aria-current')).toBe('page')
   })
 
   it('keeps exactly one level-1 heading: the push bar title on a push, a hidden one on a root', async () => {
-    renderWithProviders(<MobileShell section="projects"><h1>Page title</h1></MobileShell>, { route: '/w/w/projects/p1/work', path: '/w/:workspaceId/projects/:projectId/*' })
+    renderWithProviders(<ResponsiveShell section="projects"><h1>Page title</h1></ResponsiveShell>, { route: '/w/w/projects/p1/work', path: '/w/:workspaceId/projects/:projectId/*' })
     await screen.findByText('Page title')
     await waitFor(() => expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1))
     expect(await screen.findByRole('heading', { level: 1, name: 'Penfii App' })).toBeTruthy()

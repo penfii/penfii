@@ -327,6 +327,52 @@ async fn favorites_later_and_pins_keep_personal_and_shared_apart_and_hide_lost_t
     assert!(mine.as_array().unwrap().iter().all(|f| f["kind"] != "PIN"));
 }
 
+/// Input sessions are time-ordered; a number stands for one in these tests.
+fn session(n: u128) -> Uuid {
+    Uuid::from_u128(n)
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_draft_that_holds_only_a_mention_is_stored_and_previewed_by_name(pool: PgPool) {
+    let world = &World::new(pool).await;
+    let workspace_id = world.workspace_id;
+    let owner = world.owner_cookie.clone();
+    let channel_id = channel(world, workspace_id, "mention only", "PUBLIC").await;
+    let mention = json!({"type":"doc","content":[{"type":"paragraph","content":[
+        {"type":"mention","attrs":{"occurrenceId":Uuid::new_v4(),"kind":"USER","userId":world.owner_id}},
+        {"type":"text","text":" "}
+    ]}]});
+    let (s, saved, _) = call(
+        &world.app,
+        "PUT",
+        "/v1/drafts",
+        Some(&owner),
+        None,
+        Some(json!({"contextKind":"CHANNEL_COMPOSE","contextId":channel_id,"generation":session(1),"payload":{"schemaVersion":1,"body":mention}})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "a mention is content: {saved}");
+    let (_, list) = get_as(
+        world,
+        &owner,
+        &format!("/v1/workspaces/{workspace_id}/drafts"),
+    )
+    .await;
+    let preview = list[0]["preview"].as_str().unwrap();
+    assert!(preview.starts_with('@') && preview.len() > 1, "{preview}");
+    // A box with nothing at all in it is still not a draft.
+    let (s, blank, _) = call(
+        &world.app,
+        "PUT",
+        "/v1/drafts",
+        Some(&owner),
+        None,
+        Some(json!({"contextKind":"CHANNEL_COMPOSE","contextId":channel_id,"generation":session(1),"expectedVersion":1,"payload":{"schemaVersion":1,"body":{"type":"doc","content":[{"type":"paragraph"}]}}})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{blank}");
+}
+
 #[sqlx::test(migrator = "crate::common::GUARD")]
 async fn drafts_follow_the_person_and_stay_private(pool: PgPool) {
     let world = &World::new(pool).await;
@@ -340,18 +386,18 @@ async fn drafts_follow_the_person_and_stay_private(pool: PgPool) {
         async move { call(&app, "PUT", "/v1/drafts", Some(&cookie), None, Some(body)).await }
     };
 
-    let (s, created, _) = put(owner.clone(), json!({"contextKind":"CHANNEL_COMPOSE","contextId":channel_id,"payload":{"schemaVersion":1,"body":doc("half written")}})).await;
+    let (s, created, _) = put(owner.clone(), json!({"contextKind":"CHANNEL_COMPOSE","contextId":channel_id,"generation":session(1),"payload":{"schemaVersion":1,"body":doc("half written")}})).await;
     assert_eq!(s, StatusCode::CREATED, "{created}");
     assert_eq!(created["version"], 1);
-    let (s, updated, _) = put(owner.clone(), json!({"contextKind":"CHANNEL_COMPOSE","contextId":channel_id,"expectedVersion":1,"payload":{"schemaVersion":1,"body":doc("more written")}})).await;
+    let (s, updated, _) = put(owner.clone(), json!({"contextKind":"CHANNEL_COMPOSE","contextId":channel_id,"generation":session(1),"expectedVersion":1,"payload":{"schemaVersion":1,"body":doc("more written")}})).await;
     assert_eq!(s, StatusCode::OK, "{updated}");
     assert_eq!(updated["version"], 2);
-    let (s, stale, _) = put(owner.clone(), json!({"contextKind":"CHANNEL_COMPOSE","contextId":channel_id,"expectedVersion":1,"payload":{"schemaVersion":1,"body":doc("from an old tab")}})).await;
+    let (s, stale, _) = put(owner.clone(), json!({"contextKind":"CHANNEL_COMPOSE","contextId":channel_id,"generation":session(1),"expectedVersion":1,"payload":{"schemaVersion":1,"body":doc("from an old tab")}})).await;
     assert_eq!(s, StatusCode::CONFLICT, "{stale}");
     assert_eq!(stale["code"], "draft_conflict");
-    let (s, blank, _) = put(owner.clone(), json!({"contextKind":"CHANNEL_COMPOSE","contextId":channel_id,"payload":{"schemaVersion":1,"body":{"type":"doc","content":[]}}})).await;
+    let (s, blank, _) = put(owner.clone(), json!({"contextKind":"CHANNEL_COMPOSE","contextId":channel_id,"generation":session(1),"payload":{"schemaVersion":1,"body":{"type":"doc","content":[]}}})).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "{blank}");
-    let (s, kind, _) = put(owner.clone(), json!({"contextKind":"DM_COMPOSE","contextId":channel_id,"payload":{"schemaVersion":1,"body":doc("x")}})).await;
+    let (s, kind, _) = put(owner.clone(), json!({"contextKind":"DM_COMPOSE","contextId":channel_id,"generation":session(1),"payload":{"schemaVersion":1,"body":doc("x")}})).await;
     assert_eq!(
         s,
         StatusCode::OK,
@@ -403,7 +449,7 @@ async fn drafts_follow_the_person_and_stay_private(pool: PgPool) {
     )
     .await;
     assert_eq!(s, StatusCode::NOT_FOUND, "no draft of their own there");
-    let (s, v, _) = put(other.clone(), json!({"contextKind":"CHANNEL_COMPOSE","contextId":private_id,"payload":{"schemaVersion":1,"body":doc("sneak")}})).await;
+    let (s, v, _) = put(other.clone(), json!({"contextKind":"CHANNEL_COMPOSE","contextId":private_id,"generation":session(1),"payload":{"schemaVersion":1,"body":doc("sneak")}})).await;
     assert_eq!(
         s,
         StatusCode::NOT_FOUND,
@@ -1014,4 +1060,165 @@ async fn favorite_folders_organize_without_ever_deleting_a_favorite(pool: PgPool
     )
     .await;
     assert_eq!(s, StatusCode::CONFLICT);
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_save_of_a_finished_input_session_never_brings_the_draft_back(pool: PgPool) {
+    let world = &World::new(pool).await;
+    let workspace_id = world.workspace_id;
+    let owner = world.owner_cookie.clone();
+    let channel_id = channel(world, workspace_id, "drafts order", "PUBLIC").await;
+    let put = |generation: Uuid, version: Option<i64>, text: &str| {
+        let app = world.app.clone();
+        let cookie = owner.clone();
+        let mut body = json!({"contextKind":"CHANNEL_COMPOSE","contextId":channel_id,"generation":generation,"payload":{"schemaVersion":1,"body":doc(text)}});
+        if let Some(version) = version {
+            body["expectedVersion"] = json!(version);
+        }
+        async move { call(&app, "PUT", "/v1/drafts", Some(&cookie), None, Some(body)).await }
+    };
+    let close = |generation: Uuid| {
+        let app = world.app.clone();
+        let cookie = owner.clone();
+        async move {
+            call(&app, "DELETE", &format!("/v1/drafts?contextKind=CHANNEL_COMPOSE&contextId={channel_id}&generation={generation}"), Some(&cookie), None, None).await
+        }
+    };
+    let loaded = || async {
+        get_as(
+            world,
+            &owner,
+            &format!("/v1/drafts?contextKind=CHANNEL_COMPOSE&contextId={channel_id}"),
+        )
+        .await
+    };
+
+    // The first save of a session is still on its way (no version, no id yet) when the message is sent: the session is
+    // ended first, and the first save that comes after it makes nothing.
+    let (s, _, _) = close(session(10)).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (s, late, _) = put(session(10), None, "already sent").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{late}");
+    assert_eq!(late["code"], "draft_closed");
+    assert_eq!(
+        loaded().await.0,
+        StatusCode::NO_CONTENT,
+        "no draft came back"
+    );
+
+    // The next input session starts a draft, and a save of the earlier one still changes nothing.
+    let (s, created, _) = put(session(20), None, "second message").await;
+    assert_eq!(s, StatusCode::CREATED, "{created}");
+    // The record of the earlier session is reused, so versions keep counting up.
+    let version = created["version"].as_i64().unwrap();
+    let (s, late, _) = put(session(10), None, "already sent").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{late}");
+    assert_eq!(late["code"], "draft_closed");
+    let (_, now) = loaded().await;
+    assert_eq!(
+        now["payload"]["body"]["content"][0]["content"][0]["text"],
+        "second message"
+    );
+
+    // Ended with a save in flight that carries a version: refused as well.
+    let (s, saved, _) = put(session(20), Some(version), "second message, more").await;
+    assert_eq!(s, StatusCode::OK, "{saved}");
+    let (s, _, _) = close(session(20)).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (s, late, _) = put(session(20), Some(version + 1), "second message, even more").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{late}");
+    assert_eq!(late["code"], "draft_closed");
+    assert_eq!(loaded().await.0, StatusCode::NO_CONTENT);
+    // Ending an older session after a newer one ended changes nothing; a newer session still works.
+    let (s, _, _) = close(session(10)).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (s, third, _) = put(session(30), None, "third").await;
+    assert_eq!(s, StatusCode::CREATED, "{third}");
+
+    // Within one session, a save that does not know the stored version is a conflict, as before.
+    let (s, stale, _) = put(session(30), Some(99), "from an old tab").await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    assert_eq!(stale["code"], "draft_conflict");
+    assert_eq!(stale["currentGeneration"], json!(session(30)));
+
+    // Another tab that started a newer session takes over the draft; what the older session sends later is refused.
+    let (s, takeover, _) = put(session(40), None, "typed in the other tab").await;
+    assert_eq!(s, StatusCode::OK, "{takeover}");
+    let (s, late, _) = put(session(30), Some(1), "late from the first tab").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{late}");
+    assert_eq!(late["code"], "draft_closed");
+    let (_, now) = loaded().await;
+    assert_eq!(
+        now["payload"]["body"]["content"][0]["content"][0]["text"],
+        "typed in the other tab"
+    );
+
+    // A draft discarded from the Drafts list stays discarded against a save that was on its way.
+    let id = now["id"].as_str().unwrap().to_owned();
+    let (s, _, _) = call(
+        &world.app,
+        "DELETE",
+        &format!("/v1/drafts/{id}"),
+        Some(&owner),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (s, late, _) = put(session(40), Some(2), "on its way").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{late}");
+    assert_eq!(loaded().await.0, StatusCode::NO_CONTENT);
+    // Discarding what is already gone is not found, as before.
+    let (s, _, _) = call(
+        &world.app,
+        "DELETE",
+        &format!("/v1/drafts/{id}"),
+        Some(&owner),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    // A closed box has no draft in the list either.
+    let (_, list) = get_as(
+        world,
+        &owner,
+        &format!("/v1/workspaces/{workspace_id}/drafts"),
+    )
+    .await;
+    assert!(
+        list.as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["contextId"] != json!(channel_id))
+    );
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn two_first_saves_of_one_box_at_once_leave_one_draft(pool: PgPool) {
+    let world = &World::new(pool).await;
+    let channel_id = channel(world, world.workspace_id, "drafts race", "PUBLIC").await;
+    let owner = world.owner_cookie.clone();
+    let send = |generation: Uuid, text: &'static str| {
+        let app = world.app.clone();
+        let cookie = owner.clone();
+        async move {
+            call(&app, "PUT", "/v1/drafts", Some(&cookie), None, Some(json!({"contextKind":"CHANNEL_COMPOSE","contextId":channel_id,"generation":generation,"payload":{"schemaVersion":1,"body":doc(text)}}))).await
+        }
+    };
+    let ((first, a, _), (second, b, _)) =
+        tokio::join!(send(session(50), "one"), send(session(60), "two"));
+    assert!(matches!(first, StatusCode::CREATED | StatusCode::OK), "{a}");
+    assert!(
+        matches!(second, StatusCode::CREATED | StatusCode::OK),
+        "{b}"
+    );
+    let (_, now) = get_as(
+        world,
+        &owner,
+        &format!("/v1/drafts?contextKind=CHANNEL_COMPOSE&contextId={channel_id}"),
+    )
+    .await;
+    // The newer session wins whichever arrived first.
+    assert_eq!(now["generation"], json!(session(60)));
 }

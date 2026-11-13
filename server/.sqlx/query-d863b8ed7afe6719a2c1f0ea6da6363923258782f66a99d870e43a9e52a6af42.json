@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM penfii.password_reset_tokens\n         WHERE user_id = $1 OR expires_at < now() - interval '1 day'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d863b8ed7afe6719a2c1f0ea6da6363923258782f66a99d870e43a9e52a6af42"
+}

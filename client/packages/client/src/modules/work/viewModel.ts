@@ -330,6 +330,7 @@ export function sortTickets(tickets: Ticket[], sort: ViewDefinition['sort']): Ti
         return ticket.title
       case 'ESTIMATE':
         return estimateSortValue(ticket)
+      case 'RANK':
       default:
         return null
     }
@@ -616,8 +617,9 @@ export function buildSections(
       const people = [...named.entries()].sort((a, b) => a[1].localeCompare(b[1])).map(([id, name]) => make(`assignee:${id}`, name, visible.filter((ticket) => ticket.assigneeId === id)))
       return keep([...people, make('assignee:none', context.labels.unassigned, visible.filter((ticket) => ticket.assigneeId === null))])
     }
+    case 'SPRINT':
     default: {
-      // SPRINT: the backlog first, then each Sprint that has a Ticket here.
+      // The backlog first, then each Sprint that has a Ticket here.
       const sprints = new Map<string, { name: string; projectName: string }>()
       for (const ticket of visible) if (ticket.sprint) sprints.set(ticket.sprint.id, { name: ticket.sprint.name, projectName: ticket.projectName })
       const wide = new Set([...sprints.values()].map((item) => item.projectName)).size > 1

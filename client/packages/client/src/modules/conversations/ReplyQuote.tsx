@@ -1,6 +1,7 @@
 import type { RichTextDoc } from '@penfii/contracts'
 import { useI18n } from '../../i18n/I18nProvider'
 import { plainText } from '../../richtext'
+import { useMentionNameOf } from '../../richtext/env'
 
 export function MessageReference({
   name,
@@ -12,9 +13,10 @@ export function MessageReference({
   onOpen?: () => void
 }) {
   const { t } = useI18n()
+  const nameOf = useMentionNameOf()
   const doc = message?.body
   const missing = !message || message.deleted || doc == null
-  const text = doc == null || message?.deleted ? t('message.deleted') : plainText(doc).replace(/\s+/g, ' ').trim()
+  const text = doc == null || message?.deleted ? t('message.deleted') : plainText(doc, nameOf).replace(/\s+/g, ' ').trim()
   const short = text.length > 80 ? `${text.slice(0, 80)}…` : text
   const body = (
     <>

@@ -31,18 +31,17 @@ const DEV_ORIGINS: [&str; 2] = ["http://localhost:5173", "http://127.0.0.1:5173"
 /// `PENFII_ALLOWED_ORIGINS`: comma-separated origins (`https://penfii.example.com`) that may open the
 /// socket in addition to the server's own origin. Unset means the local dev server origins only.
 pub(crate) fn allowed_origins_from_env() -> Vec<String> {
-    match std::env::var("PENFII_ALLOWED_ORIGINS") {
-        Ok(value) => parse_origins(&value),
-        Err(_) => DEV_ORIGINS.iter().map(|o| (*o).to_owned()).collect(),
+    let lookup = &penfii_core::config::process_env;
+    // Not set, or empty: the dev server origins. A list that cannot be read was refused when the process
+    // started (`config::startup_checks`); if it gets here anyway, no origin is allowed beyond the server's own.
+    match penfii_core::config::origins(lookup, "PENFII_ALLOWED_ORIGINS") {
+        Ok(list) if penfii_core::config::get(lookup, "PENFII_ALLOWED_ORIGINS").is_some() => list,
+        Ok(_) => DEV_ORIGINS.iter().map(|o| (*o).to_owned()).collect(),
+        Err(error) => {
+            tracing::error!(%error, "no extra origin is allowed");
+            Vec::new()
+        }
     }
-}
-
-fn parse_origins(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(normalize)
-        .filter(|o| !o.is_empty())
-        .collect()
 }
 
 /// The `Origin` of a request.
@@ -144,7 +143,11 @@ mod tests {
             "the dev server is listed by default"
         );
         assert!(!origin_allowed(&h, &[]), "and only because it is listed");
-        let listed = parse_origins(" https://a.example.com/ , https://B.example.com ,");
+        let listed = penfii_core::config::origins(
+            &|_| Some(" https://a.example.com/ , https://B.example.com ,".to_owned()),
+            "PENFII_ALLOWED_ORIGINS",
+        )
+        .unwrap();
         let h = headers(Some("https://b.example.com"), "core.internal:8080");
         assert!(origin_allowed(&h, &listed));
     }

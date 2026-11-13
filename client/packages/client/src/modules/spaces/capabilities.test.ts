@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canChangeChannel, canCreateChannel, canDeleteMessage, canDetachAttachment, canInviteToChannel, canLeaveChannel, canSetChannelRoles, isWorkspaceManager } from './capabilities'
+import { canChangeChannel, canChangeVisibility, canRunChannelPeople, canCreateChannel, canDeleteMessage, canDetachAttachment, canInviteToChannel, canLeaveChannel, canSetChannelRoles, isWorkspaceManager } from './capabilities'
 
 describe('capabilities', () => {
   it('offers a Workspace-wide channel to the Workspace owner or admin only', () => {
@@ -63,5 +63,23 @@ describe('capabilities', () => {
 
   it('does not offer it for a public channel, which people join themselves', () => {
     expect(canInviteToChannel({ visibility: 'PUBLIC', role: 'MANAGER' })).toBe(false)
+  })
+
+  it('lets only the manager make a private channel public, and everyone who runs a public one make it private', () => {
+    // Private -> public shows the past to people who could not read it: the manager alone, not the Project's admin.
+    expect(canChangeVisibility({ role: 'MANAGER', projectId: 'p', visibility: 'PRIVATE' }, 'MEMBER', { canManage: false })).toBe(true)
+    expect(canChangeVisibility({ role: 'MEMBER', projectId: 'p', visibility: 'PRIVATE' }, 'MEMBER', { canManage: true })).toBe(false)
+    expect(canChangeVisibility({ role: null, projectId: 'p', visibility: 'PRIVATE' }, 'OWNER', { canManage: true })).toBe(false)
+    // Public -> private: the same people as for the other settings.
+    expect(canChangeVisibility({ projectId: 'p', visibility: 'PUBLIC' }, 'MEMBER', { canManage: true })).toBe(true)
+    expect(canChangeVisibility({ visibility: 'PUBLIC' }, 'ADMIN')).toBe(true)
+    expect(canChangeVisibility({ visibility: 'PUBLIC' }, 'MEMBER')).toBe(false)
+  })
+
+  it('lets the manager and the Project admin take people out of a private channel', () => {
+    expect(canRunChannelPeople({ role: 'MANAGER', visibility: 'PRIVATE' })).toBe(true)
+    expect(canRunChannelPeople({ role: null, projectId: 'p', visibility: 'PRIVATE' }, { canManage: true })).toBe(true)
+    expect(canRunChannelPeople({ role: 'MEMBER', projectId: 'p', visibility: 'PRIVATE' }, { canManage: false })).toBe(false)
+    expect(canRunChannelPeople({ role: 'MANAGER', visibility: 'PUBLIC' })).toBe(false)
   })
 })

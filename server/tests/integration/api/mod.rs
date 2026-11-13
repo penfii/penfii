@@ -2,6 +2,7 @@
 //! OpenSearch for search).
 
 mod access;
+mod board_realtime;
 mod collab;
 mod docs;
 mod estimates;
@@ -11,10 +12,15 @@ mod messages;
 mod openapi;
 mod personal;
 mod planning;
+mod push;
 mod realtime;
 mod reports;
+mod request_bodies;
+mod runtime_role;
 mod search;
+mod ticket_archive;
 mod tickets;
+mod worker_failures;
 
 use search::SearchWorld;
 
@@ -46,6 +52,21 @@ impl World {
             owner_cookie,
             owner_id: boot.user_id,
             workspace_id: boot.workspace_id,
+            search: Default::default(),
+        }
+    }
+}
+
+impl World {
+    /// The same database and the same signed-in owner (the session is a row, so the cookie holds),
+    /// served by a router over another pool: the pool of a different database role.
+    pub(crate) fn over(&self, pool: PgPool) -> World {
+        World {
+            app: penfii_http_api::router(pool.clone(), common::limits(), false, None),
+            pool,
+            owner_cookie: self.owner_cookie.clone(),
+            owner_id: self.owner_id,
+            workspace_id: self.workspace_id,
             search: Default::default(),
         }
     }

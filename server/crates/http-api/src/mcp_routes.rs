@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
-use crate::extract::{self, Actor, Q, RawJson, RecentActor, Session};
+use crate::extract::{Actor, Body, Q, RawJson, RecentActor, Session};
 use crate::origin::{self, RequestOrigin};
 
 use axum::Router;
@@ -97,11 +97,11 @@ fn public_metadata(value: Value) -> Response {
     response
 }
 
-pub async fn protected_resource_metadata(Mcp(ctx): Mcp) -> Response {
+async fn protected_resource_metadata(Mcp(ctx): Mcp) -> Response {
     public_metadata(ctx.oauth.protected_resource_metadata())
 }
 
-pub async fn authorization_server_metadata(Mcp(ctx): Mcp) -> Response {
+async fn authorization_server_metadata(Mcp(ctx): Mcp) -> Response {
     public_metadata(ctx.oauth.authorization_server_metadata())
 }
 
@@ -159,7 +159,7 @@ pub struct AuthorizeQuery {
     resource: Option<String>,
 }
 
-pub async fn authorize(
+async fn authorize(
     State(state): State<AppState>,
     Mcp(ctx): Mcp,
     Q(query): Q<AuthorizeQuery>,
@@ -185,7 +185,7 @@ pub async fn authorize(
     }
 }
 
-pub async fn consent_request(
+async fn consent_request(
     State(state): State<AppState>,
     _: Mcp,
     Path(id): Path<Uuid>,
@@ -203,14 +203,13 @@ struct DecisionBody {
     scopes: Vec<String>,
 }
 
-pub async fn consent_decision(
+async fn consent_decision(
     State(state): State<AppState>,
     Mcp(ctx): Mcp,
     Path(id): Path<Uuid>,
     Session(session): Session,
-    RawJson(raw): RawJson,
+    Body(body): Body<DecisionBody>,
 ) -> Result<Response, ApiError> {
-    let body: DecisionBody = extract::parse(raw)?;
     let decision = if body.approve {
         Decision::Approve {
             scopes: body.scopes,
@@ -237,7 +236,7 @@ pub struct TokenForm {
     resource: Option<String>,
 }
 
-pub async fn token(
+async fn token(
     State(state): State<AppState>,
     Mcp(ctx): Mcp,
     Form(form): Form<TokenForm>,
@@ -263,11 +262,7 @@ pub struct RevokeForm {
     token: Option<String>,
 }
 
-pub async fn revoke(
-    State(state): State<AppState>,
-    _: Mcp,
-    Form(form): Form<RevokeForm>,
-) -> Response {
+async fn revoke(State(state): State<AppState>, _: Mcp, Form(form): Form<RevokeForm>) -> Response {
     if let Some(token) = form.token.as_deref() {
         // RFC 7009: the answer never says whether the token existed.
         let _ = oauth::server::revoke_token(&state.pool, token).await;
@@ -275,7 +270,7 @@ pub async fn revoke(
     no_store(StatusCode::OK.into_response())
 }
 
-pub async fn register(
+async fn register(
     State(state): State<AppState>,
     Mcp(ctx): Mcp,
     RawJson(body): RawJson,
@@ -288,7 +283,7 @@ pub async fn register(
 
 // ---- connected apps -------------------------------------------------------------------------
 
-pub async fn list_grants(
+async fn list_grants(
     State(state): State<AppState>,
     _: Mcp,
     Actor(user_id): Actor,
@@ -297,7 +292,7 @@ pub async fn list_grants(
     Ok(Json(json!({"items": items})).into_response())
 }
 
-pub async fn revoke_grant(
+async fn revoke_grant(
     State(state): State<AppState>,
     _: Mcp,
     Path(id): Path<Uuid>,
@@ -307,7 +302,7 @@ pub async fn revoke_grant(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-pub async fn revoke_all_grants(
+async fn revoke_all_grants(
     State(state): State<AppState>,
     _: Mcp,
     RecentActor(user_id): RecentActor,
@@ -318,7 +313,7 @@ pub async fn revoke_all_grants(
 
 // ---- Workspace MCP Policy -------------------------------------------------------------------
 
-pub async fn get_policy(
+async fn get_policy(
     State(state): State<AppState>,
     Mcp(ctx): Mcp,
     Path(id): Path<Uuid>,
@@ -328,14 +323,13 @@ pub async fn get_policy(
     Ok(Json(found).into_response())
 }
 
-pub async fn put_policy(
+async fn put_policy(
     State(state): State<AppState>,
     Mcp(ctx): Mcp,
     Path(id): Path<Uuid>,
     Session(session): Session,
-    RawJson(raw): RawJson,
+    Body(input): Body<oauth::PolicyInput>,
 ) -> Result<Response, ApiError> {
-    let input: oauth::PolicyInput = extract::parse(raw)?;
     let updated =
         oauth::policy::set(&state.pool, ctx.oauth.policy_defaults, &session, id, input).await?;
     Ok(Json(updated).into_response())
@@ -406,7 +400,7 @@ fn unauthorized(ctx: &McpContext, error: Option<&str>) -> Response {
     no_store(response)
 }
 
-pub async fn mcp_post(
+async fn mcp_post(
     State(state): State<AppState>,
     Mcp(ctx): Mcp,
     headers: HeaderMap,
@@ -482,7 +476,7 @@ fn header_text(headers: &HeaderMap, name: &str) -> Option<String> {
 }
 
 /// `GET`/`DELETE /mcp`: there is no GET stream and no session in this server (405).
-pub async fn mcp_other(_: Mcp) -> Response {
+async fn mcp_other(_: Mcp) -> Response {
     let mut response = StatusCode::METHOD_NOT_ALLOWED.into_response();
     response
         .headers_mut()

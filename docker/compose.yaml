@@ -5,11 +5,13 @@
 #   cd docker
 #   cp .env.example .env     # then edit it
 #   docker compose up -d --build
-#   docker compose run --rm admin-cli bootstrap --email ... --password ... --display-name ... \
-#       --workspace-name ... --time-zone ...
+#   docker compose run --rm admin-cli bootstrap --email ... --display-name ... \
+#       --workspace-name ... --time-zone ...   # asks for the password (--password-stdin in a script)
 #
-# The database schema is database/migrations; core-api applies it on start. Build contexts are the
-# repository root (..), so the images contain server/, client/ and database/ as checked out.
+# The database schema is database/migrations; the one-shot `db-setup` service applies it (with the
+# schema owner's credential) before core-api starts, and core-api itself only holds a runtime role that
+# cannot change the schema. Build contexts are the repository root (..), so the images contain server/,
+# client/ and database/ as checked out.
 name: penfii
 
 services:
@@ -20,6 +22,8 @@ services:
       POSTGRES_USER: penfii
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: penfii
+    ports:
+      - "127.0.0.1:5432:5432"
     volumes:
       - penfii-pg:/var/lib/postgresql/data
     healthcheck:
@@ -27,6 +31,29 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+
+  # One-shot database setup, run on every `docker compose up` before core-api starts. It makes the two
+  # database roles (this needs the PostgreSQL superuser: POSTGRES_USER) and applies the schema
+  # migrations with the schema owner's credential. core-api and admin-cli only get the runtime role.
+  # Safe to run again. An installation from before the roles existed keeps its objects owned by
+  # `penfii`: set PENFII_DB_OWNER_USER=penfii and PENFII_DB_OWNER_PASSWORD to POSTGRES_PASSWORD (see
+  # docs/self-hosting.md, "Upgrading to separate database roles").
+  db-setup:
+    build:
+      context: ..
+      dockerfile: docker/server/Dockerfile
+    image: penfii-core-api:local
+    restart: "no"
+    entrypoint: ["sh", "-c", 'admin-cli db-provision --owner-role "$$PENFII_DB_OWNER_USER" --runtime-role "$$PENFII_DB_RUNTIME_USER" && admin-cli migrate']
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      PENFII_PROVISION_DATABASE_URL: postgres://penfii:${POSTGRES_PASSWORD}@postgres:5432/penfii
+      PENFII_MIGRATION_DATABASE_URL: postgres://${PENFII_DB_OWNER_USER:-penfii_owner}:${PENFII_DB_OWNER_PASSWORD:?set PENFII_DB_OWNER_PASSWORD in .env}@postgres:5432/penfii
+      PENFII_DB_OWNER_USER: ${PENFII_DB_OWNER_USER:-penfii_owner}
+      PENFII_DB_OWNER_PASSWORD: ${PENFII_DB_OWNER_PASSWORD}
+      PENFII_DB_RUNTIME_USER: ${PENFII_DB_RUNTIME_USER:-penfii_app}
+      PENFII_DB_RUNTIME_PASSWORD: ${PENFII_DB_RUNTIME_PASSWORD:?set PENFII_DB_RUNTIME_PASSWORD in .env}
 
   # Derived data: rebuildable from PostgreSQL with `admin-cli search-reindex`.
   opensearch:
@@ -73,11 +100,12 @@ services:
     image: penfii-core-api:local
     restart: unless-stopped
     depends_on:
-      postgres: {condition: service_healthy}
+      db-setup: {condition: service_completed_successfully}
       opensearch: {condition: service_healthy}
       minio: {condition: service_healthy}
     environment:
-      DATABASE_URL: postgres://penfii:${POSTGRES_PASSWORD}@postgres:5432/penfii
+      # The runtime role: row access only, no schema changes. core-api does not migrate.
+      DATABASE_URL: postgres://${PENFII_DB_RUNTIME_USER:-penfii_app}:${PENFII_DB_RUNTIME_PASSWORD:?set PENFII_DB_RUNTIME_PASSWORD in .env}@postgres:5432/penfii
       PENFII_BIND: 0.0.0.0:8080
       PENFII_PUBLIC_URL: ${PENFII_PUBLIC_URL:?set PENFII_PUBLIC_URL in .env}
       PENFII_ALLOWED_ORIGINS: ${PENFII_PUBLIC_URL}
@@ -103,6 +131,18 @@ services:
       PENFII_MCP_ENABLED: ${PENFII_MCP_ENABLED:-0}
       PENFII_MCP_DEFAULT_POLICY: ${PENFII_MCP_DEFAULT_POLICY:-standard}
       PENFII_MCP_DCR_ENABLED: ${PENFII_MCP_DCR_ENABLED:-0}
+      # Web Push: off while PENFII_VAPID_PRIVATE_KEY is empty (make a pair with `admin-cli vapid-keys`).
+      PENFII_VAPID_PRIVATE_KEY: ${PENFII_VAPID_PRIVATE_KEY:-}
+      PENFII_VAPID_SUBJECT: ${PENFII_VAPID_SUBJECT:-}
+      # E-mail (optional): off while PENFII_SMTP_HOST is empty; invitations are then shared as links.
+      PENFII_SMTP_HOST: ${PENFII_SMTP_HOST:-}
+      PENFII_SMTP_PORT: ${PENFII_SMTP_PORT:-}
+      PENFII_SMTP_SECURITY: ${PENFII_SMTP_SECURITY:-}
+      PENFII_SMTP_USER: ${PENFII_SMTP_USER:-}
+      PENFII_SMTP_PASSWORD: ${PENFII_SMTP_PASSWORD:-}
+      PENFII_SMTP_FROM: ${PENFII_SMTP_FROM:-}
+      # Incoming webhooks: Signature mode needs this key (`openssl rand -hex 32`); URL-secret mode does not.
+      PENFII_WEBHOOK_KEK: ${PENFII_WEBHOOK_KEK:-}
     # /readyz answers 200 while PostgreSQL answers. The image has no curl, so bash opens the socket.
     healthcheck:
       test:
@@ -136,8 +176,8 @@ services:
       retries: 5
       start_period: 10s
 
-  # Operator commands: `docker compose run --rm admin-cli <command>` (bootstrap, user-set-password,
-  # search-status, search-reindex, ...). Not started by `up`.
+  # Operator commands: `docker compose run --rm admin-cli <command>` (bootstrap, create-user, workspace-list,
+  # user-set-password, search-status, search-reindex, ...). Not started by `up`.
   admin-cli:
     profiles: ["cli"]
     build:
@@ -146,9 +186,11 @@ services:
     image: penfii-core-api:local
     entrypoint: ["admin-cli"]
     depends_on:
-      postgres: {condition: service_healthy}
+      db-setup: {condition: service_completed_successfully}
     environment:
-      DATABASE_URL: postgres://penfii:${POSTGRES_PASSWORD}@postgres:5432/penfii
+      # Commands run as the runtime role; only `admin-cli migrate` uses the owner's credential.
+      DATABASE_URL: postgres://${PENFII_DB_RUNTIME_USER:-penfii_app}:${PENFII_DB_RUNTIME_PASSWORD:?set PENFII_DB_RUNTIME_PASSWORD in .env}@postgres:5432/penfii
+      PENFII_MIGRATION_DATABASE_URL: postgres://${PENFII_DB_OWNER_USER:-penfii_owner}:${PENFII_DB_OWNER_PASSWORD:?set PENFII_DB_OWNER_PASSWORD in .env}@postgres:5432/penfii
       PENFII_OPENSEARCH_URL: http://opensearch:9200
       PENFII_OPENSEARCH_INDEX_PREFIX: ${PENFII_OPENSEARCH_INDEX_PREFIX:-penfii}
 

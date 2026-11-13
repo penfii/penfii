@@ -26,21 +26,32 @@ pub struct Retention {
 }
 
 impl Retention {
-    pub fn from_env() -> Self {
+    /// The days kept: not set or `0` is the default, a positive number is taken, anything else is an error.
+    pub fn from_env() -> Result<Self, String> {
+        Self::from_lookup(&crate::config::process_env)
+    }
+
+    pub fn from_lookup(lookup: crate::config::Lookup<'_>) -> Result<Self, String> {
+        let days = |name: &str, default: i64| -> Result<i64, String> {
+            Ok(crate::config::integer(lookup, name, 0)?
+                .filter(|value| *value > 0)
+                .unwrap_or(default))
+        };
+        Ok(Self {
+            read_log_days: days("PENFII_MCP_LOG_RETENTION_DAYS", 30)?,
+            change_log_days: days("PENFII_MCP_AUDIT_LOG_RETENTION_DAYS", 365)?,
+            grant_days: days("PENFII_MCP_GRANT_RETENTION_DAYS", 365)?,
+        })
+    }
+
+    /// The days kept when nothing is set.
+    pub fn defaults() -> Self {
         Self {
-            read_log_days: days("PENFII_MCP_LOG_RETENTION_DAYS", 30),
-            change_log_days: days("PENFII_MCP_AUDIT_LOG_RETENTION_DAYS", 365),
-            grant_days: days("PENFII_MCP_GRANT_RETENTION_DAYS", 365),
+            read_log_days: 30,
+            change_log_days: 365,
+            grant_days: 365,
         }
     }
-}
-
-fn days(name: &str, default: i64) -> i64 {
-    std::env::var(name)
-        .ok()
-        .and_then(|raw| raw.trim().parse::<i64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(default)
 }
 
 #[derive(Debug, Default, Clone, Serialize, PartialEq, Eq)]
@@ -128,17 +139,21 @@ pub async fn purge(pool: &PgPool, retention: Retention) -> Result<PurgeReport, C
 
 /// Hourly background pass. A failure is logged and retried on the next tick.
 pub fn spawn(pool: PgPool) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let retention = Retention::from_env();
-        loop {
-            match purge(&pool, retention).await {
+    crate::lifecycle::spawn_worker("mcp retention", async move {
+        // Checked when the process started (`config::startup_checks`), so this reads what was accepted there.
+        let retention = Retention::from_env().unwrap_or_else(|error| {
+            tracing::error!(%error, "mcp retention settings: using the defaults");
+            Retention::defaults()
+        });
+        while !crate::lifecycle::stopping() {
+            match crate::lifecycle::guarded("mcp retention", purge(&pool, retention)).await {
                 Ok(report) if report.total() > 0 => {
                     tracing::info!(?report, "mcp retention purge");
                 }
                 Ok(_) => {}
                 Err(error) => tracing::warn!(?error, "mcp retention purge failed"),
             }
-            tokio::time::sleep(Duration::from_secs(3600)).await;
+            crate::lifecycle::pause(Duration::from_secs(3600)).await;
         }
     })
 }

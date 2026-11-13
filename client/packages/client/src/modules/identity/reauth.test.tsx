@@ -75,4 +75,22 @@ describe('reauthentication dialog', () => {
     await waitFor(() => expect(onDone).toHaveBeenCalledWith(undefined))
     expect(action).toHaveBeenCalledTimes(1)
   })
+
+  it('is a modal dialog: it takes the focus, Escape cancels it, and the focus goes back to what opened it', async () => {
+    const action = vi.fn<() => Promise<string>>().mockRejectedValue(new ApiError(403, 'reauth_required', 'x', { methods: ['password'] }))
+    const done = vi.fn()
+    mount(action, done)
+    const opener = screen.getByRole('button', { name: 'go' })
+    opener.focus()
+    fireEvent.click(opener)
+    const dialog = await screen.findByRole('dialog')
+    // A native modal <dialog>: the browser keeps Tab inside it and makes the rest of the page inert.
+    expect(dialog.tagName).toBe('DIALOG')
+    expect(dialog.hasAttribute('open')).toBe(true)
+    expect(document.activeElement === document.body || dialog.contains(document.activeElement)).toBe(true)
+    // Escape asks the dialog to cancel; it resolves the action as cancelled.
+    fireEvent(dialog, new Event('cancel', { cancelable: true }))
+    await waitFor(() => expect(done).toHaveBeenCalledWith(undefined))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
 })

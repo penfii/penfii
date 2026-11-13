@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u.email\n         FROM penfii.password_reset_tokens t\n         JOIN penfii.users u ON u.id = t.user_id\n         WHERE t.token_hash = $1\n           AND t.closed_at IS NULL\n           AND t.expires_at > now()\n           AND u.kind = 'HUMAN' AND u.disabled_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "email",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b4730658051b86dee42178c6e681bc41f5ebfb952fd40baa5c5b8ac7669080e6"
+}

@@ -11,14 +11,17 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
-use crate::extract::{self, Actor, RawJson};
+use crate::extract::{self, Actor, Body};
 
 use axum::Router;
 use axum::routing::{delete, get, patch, put};
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
-        .route("/v1/drafts", put(save_draft).get(load_draft))
+        .route(
+            "/v1/drafts",
+            put(save_draft).get(load_draft).delete(close_draft),
+        )
         .route("/v1/drafts/{id}", delete(delete_draft))
         .route("/v1/workspaces/{id}/drafts", get(list_drafts))
         .route(
@@ -90,9 +93,8 @@ async fn add_favorite(
     State(state): State<AppState>,
     Path(workspace_id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<SavedTargetBody>,
 ) -> Result<Response, ApiError> {
-    let body: SavedTargetBody = extract::parse(raw)?;
     let item = personal::add_favorite(
         &state.pool,
         user_id,
@@ -117,9 +119,8 @@ async fn order_favorites(
     State(state): State<AppState>,
     Path(workspace_id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<FavoriteOrderBody>,
 ) -> Result<Response, ApiError> {
-    let body: FavoriteOrderBody = extract::parse(raw)?;
     personal::order_favorites(
         &state.pool,
         user_id,
@@ -157,9 +158,8 @@ async fn add_later(
     State(state): State<AppState>,
     Path(workspace_id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<SavedTargetBody>,
 ) -> Result<Response, ApiError> {
-    let body: SavedTargetBody = extract::parse(raw)?;
     let item = personal::add_later(
         &state.pool,
         user_id,
@@ -195,9 +195,8 @@ async fn update_later(
     State(state): State<AppState>,
     Path(later_id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<UpdateLaterBody>,
 ) -> Result<Response, ApiError> {
-    let body: UpdateLaterBody = extract::parse(raw)?;
     let item = personal::update_later(
         &state.pool,
         user_id,
@@ -226,9 +225,8 @@ async fn remove_later(
 struct SaveDraftBody {
     context_kind: String,
     context_id: Uuid,
-    #[serde(default)]
-    #[allow(dead_code)]
-    generation: Option<Uuid>,
+    /// The input session (see `drafts::save_draft`).
+    generation: Uuid,
     #[serde(default)]
     expected_version: Option<i64>,
     payload: SaveDraftPayload,
@@ -251,9 +249,8 @@ struct DraftContextQuery {
 async fn save_draft(
     State(state): State<AppState>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<SaveDraftBody>,
 ) -> Result<Response, ApiError> {
-    let body: SaveDraftBody = extract::parse(raw)?;
     if body.payload.schema_version != 1 {
         return Err(ApiError::validation("unsupported draft schema version"));
     }
@@ -262,6 +259,7 @@ async fn save_draft(
         user_id,
         &body.context_kind,
         body.context_id,
+        body.generation,
         body.expected_version,
         body.payload.body,
     )
@@ -287,6 +285,31 @@ async fn load_draft(
             None => StatusCode::NO_CONTENT.into_response(),
         },
     )
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CloseDraftQuery {
+    context_kind: String,
+    context_id: Uuid,
+    generation: Uuid,
+}
+
+/// Ends the input session of a compose box (the message was sent, or the box was emptied).
+async fn close_draft(
+    State(state): State<AppState>,
+    extract::Q(query): extract::Q<CloseDraftQuery>,
+    Actor(user_id): Actor,
+) -> Result<Response, ApiError> {
+    drafts::close_draft(
+        &state.pool,
+        user_id,
+        &query.context_kind,
+        query.context_id,
+        query.generation,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 async fn delete_draft(
@@ -317,9 +340,8 @@ async fn set_reminder(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<ReminderBody>,
 ) -> Result<Response, ApiError> {
-    let body: ReminderBody = extract::parse(raw)?;
     let reminder =
         penfii_core::reminders::set(&state.pool, user_id, id, body.due_at, &body.time_zone).await?;
     Ok(Json(reminder).into_response())
@@ -367,9 +389,8 @@ async fn create_favorite_folder(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<FolderBody>,
 ) -> Result<Response, ApiError> {
-    let body: FolderBody = extract::parse(raw)?;
     let folder = personal::create_folder(&state.pool, user_id, id, &body.name).await?;
     Ok((StatusCode::CREATED, Json(folder)).into_response())
 }
@@ -378,9 +399,8 @@ async fn order_favorite_folders(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<FolderOrderBody>,
 ) -> Result<Response, ApiError> {
-    let body: FolderOrderBody = extract::parse(raw)?;
     personal::order_folders(&state.pool, user_id, id, body.ids).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
@@ -389,9 +409,8 @@ async fn rename_favorite_folder(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<FolderBody>,
 ) -> Result<Response, ApiError> {
-    let body: FolderBody = extract::parse(raw)?;
     Ok(Json(personal::rename_folder(&state.pool, user_id, id, &body.name).await?).into_response())
 }
 
@@ -408,9 +427,8 @@ async fn move_favorite(
     State(state): State<AppState>,
     Path((id, kind, target)): Path<(Uuid, String, Uuid)>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<MoveFavoriteBody>,
 ) -> Result<Response, ApiError> {
-    let body: MoveFavoriteBody = extract::parse(raw)?;
     personal::move_favorite(&state.pool, user_id, id, &kind, target, body.folder_id).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }

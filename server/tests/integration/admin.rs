@@ -1500,6 +1500,18 @@ async fn archiving_a_team_keeps_everything_and_makes_its_channels_read_only_unti
             .0,
         StatusCode::NO_CONTENT
     );
+    // The owner creates the Team's channel below, so they take part through the Team too.
+    assert_eq!(
+        env.send(
+            &env.owner,
+            "PUT",
+            &env.url(&format!("teams/{team_id}/members/{}", env.owner.id)),
+            Some(json!({"role": "MEMBER"}))
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
     // A Project the Team participates in, and a channel the Team narrows.
     let (status, project, _) = call(
         &env.app,
@@ -1579,7 +1591,7 @@ async fn archiving_a_team_keeps_everything_and_makes_its_channels_read_only_unti
         .get(&member, &env.url(&format!("teams/{team_id}/members")))
         .await;
     assert_eq!(status, StatusCode::OK, "{roster}");
-    assert_eq!(roster["items"].as_array().unwrap().len(), 2);
+    assert_eq!(roster["items"].as_array().unwrap().len(), 3); // lead, member and the owner
     let (status, projects) = env
         .get(&member, &env.url(&format!("teams/{team_id}/projects")))
         .await;

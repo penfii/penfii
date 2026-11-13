@@ -1,7 +1,7 @@
 import { useCallback, useState, type FormEvent, type ReactNode } from 'react'
 import { isApiError } from '@penfii/api-client'
 import { api } from '../../api'
-import { useSheetBack } from '../../design/sheetHistory'
+import { Dialog } from '../../design/ui'
 import { useI18n } from '../../i18n/I18nProvider'
 
 /**
@@ -14,7 +14,6 @@ export function useReauth(): { run: <T>(action: () => Promise<T>) => Promise<T |
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  useSheetBack(pending !== null, () => pending?.cancel())
 
   const run = useCallback(
     async <T,>(action: () => Promise<T>): Promise<T | undefined> => {
@@ -67,12 +66,11 @@ export function useReauth(): { run: <T>(action: () => Promise<T>) => Promise<T |
     }
   }
 
-  const dialog = pending ? (
-    <div className="reauth-overlay">
-    <div className="card reauth-dialog" role="dialog" aria-modal="true" aria-label={t('reauth.title')}>
-      <h2>{t('reauth.title')}</h2>
+  // A real modal dialog: focus stays inside it, Escape cancels, and focus goes back to what opened it.
+  const dialog = (
+    <Dialog open={pending !== null} title={t('reauth.title')} onClose={() => pending?.cancel()}>
       <p>{t('reauth.lead')}</p>
-      {pending.methods.includes('password') ? (
+      {pending?.methods.includes('password') ? (
         <form onSubmit={(event) => void submit(event)}>
           <label>
             {t('login.password')}
@@ -81,19 +79,18 @@ export function useReauth(): { run: <T>(action: () => Promise<T>) => Promise<T |
           <button type="submit" disabled={busy}>{t('reauth.confirm')}</button>
         </form>
       ) : null}
-      {pending.methods
+      {(pending?.methods ?? [])
         .filter((method) => method.startsWith('provider:'))
         .map((method) => (
           <button key={method} type="button" className="secondary" onClick={() => void provider(method.slice('provider:'.length))}>
             {t('auth.continueWith', { provider: method.slice('provider:'.length) })}
           </button>
         ))}
-      {pending.methods.length === 0 ? <p className="form-error">{t('reauth.noMethod')}</p> : null}
+      {pending?.methods.length === 0 ? <p className="form-error">{t('reauth.noMethod')}</p> : null}
       {error ? <p className="form-error">{error}</p> : null}
-      <button type="button" className="secondary" onClick={pending.cancel}>{t('reauth.cancel')}</button>
-    </div>
-    </div>
-  ) : null
+      <button type="button" className="secondary" onClick={() => pending?.cancel()}>{t('reauth.cancel')}</button>
+    </Dialog>
+  )
 
   return { run, dialog }
 }

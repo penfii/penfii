@@ -9,6 +9,7 @@ use penfii_core::CoreError;
 use penfii_core::planning::{
     self, MilestoneInput, MilestoneUpdate, Placement, SprintCommand, SprintInput, SprintUpdate,
 };
+use penfii_core::platform::ChangeNotice;
 use penfii_core::work::{self};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -16,7 +17,7 @@ use uuid::Uuid;
 use super::key;
 use crate::AppState;
 use crate::error::ApiError;
-use crate::extract::{self, Actor, RawJson, present_or_null};
+use crate::extract::{self, Actor, Body, present_or_null};
 
 use axum::Router;
 use axum::routing::{delete, get, patch, post};
@@ -60,6 +61,12 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/sprints/{id}/close-preview", get(sprint_close_preview))
         .route("/v1/sprints/{id}/results", get(sprint_results))
         .route("/v1/sprints/{id}/commands/{command}", post(sprint_command))
+        .route(
+            "/v1/sprints/{id}/archive-schedule",
+            get(archive_schedule)
+                .put(reschedule_archive)
+                .delete(cancel_archive),
+        )
         .route("/v1/projects/{id}/milestones", post(create_milestone))
         .route("/v1/milestones/{id}", patch(update_milestone))
 }
@@ -81,9 +88,8 @@ async fn move_ticket(
     Path(ticket_id): Path<Uuid>,
     headers: HeaderMap,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<MoveTicketBody>,
 ) -> Result<Response, ApiError> {
-    let body: MoveTicketBody = extract::parse(raw)?;
     let placement = match (body.after_id, body.before_id, body.position.as_deref()) {
         (None, None, None) => Placement::Keep,
         (Some(id), None, None) => Placement::After(id),
@@ -217,9 +223,8 @@ async fn create_wide_view(
     Path(workspace_id): Path<Uuid>,
     headers: HeaderMap,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<CreateWideViewBody>,
 ) -> Result<Response, ApiError> {
-    let body: CreateWideViewBody = extract::parse(raw)?;
     let target = wide_target(workspace_id, &body.target_kind, body.team_id)?;
     let definition = if body.definition.is_null() {
         json!({"group":"CATEGORY"})
@@ -245,9 +250,8 @@ async fn create_view(
     Path(project_id): Path<Uuid>,
     headers: HeaderMap,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<CreateViewBody>,
 ) -> Result<Response, ApiError> {
-    let body: CreateViewBody = extract::parse(raw)?;
     let definition = if body.definition.is_null() {
         json!({})
     } else {
@@ -271,9 +275,8 @@ async fn update_view(
     State(state): State<AppState>,
     Path(view_id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<UpdateViewBody>,
 ) -> Result<Response, ApiError> {
-    let body: UpdateViewBody = extract::parse(raw)?;
     let view = planning::update_view(
         &state.pool,
         user_id,
@@ -328,9 +331,8 @@ async fn add_dependency(
     Path(ticket_id): Path<Uuid>,
     headers: HeaderMap,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<AddDependencyBody>,
 ) -> Result<Response, ApiError> {
-    let body: AddDependencyBody = extract::parse(raw)?;
     let (value, change) = planning::add_dependency(
         &state.pool,
         user_id,
@@ -349,9 +351,8 @@ async fn waive_dependency(
     Path(dependency_id): Path<Uuid>,
     headers: HeaderMap,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<WaiverBody>,
 ) -> Result<Response, ApiError> {
-    let body: WaiverBody = extract::parse(raw)?;
     let (value, change) = planning::set_waiver(
         &state.pool,
         user_id,
@@ -370,9 +371,8 @@ async fn restore_dependency(
     Path(dependency_id): Path<Uuid>,
     headers: HeaderMap,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<WaiverBody>,
 ) -> Result<Response, ApiError> {
-    let body: WaiverBody = extract::parse(raw)?;
     let (value, change) = planning::set_waiver(
         &state.pool,
         user_id,
@@ -420,9 +420,8 @@ async fn create_sprint(
     Path(project_id): Path<Uuid>,
     headers: HeaderMap,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<CreateSprintBody>,
 ) -> Result<Response, ApiError> {
-    let body: CreateSprintBody = extract::parse(raw)?;
     let sprint = planning::create_sprint(
         &state.pool,
         user_id,
@@ -438,6 +437,10 @@ async fn create_sprint(
         &key(&headers)?,
     )
     .await?;
+    // A Sprint is not a Ticket, so no change record carries it: open boards of the Project read everything again.
+    state.publish([ChangeNotice::Project {
+        project_id: sprint.project_id,
+    }]);
     Ok((StatusCode::CREATED, Json(sprint)).into_response())
 }
 
@@ -458,9 +461,8 @@ async fn update_sprint(
     State(state): State<AppState>,
     Path(sprint_id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<UpdateSprintBody>,
 ) -> Result<Response, ApiError> {
-    let body: UpdateSprintBody = extract::parse(raw)?;
     let sprint = planning::update_sprint(
         &state.pool,
         user_id,
@@ -476,6 +478,9 @@ async fn update_sprint(
         },
     )
     .await?;
+    state.publish([ChangeNotice::Project {
+        project_id: sprint.project_id,
+    }]);
     Ok(Json(sprint).into_response())
 }
 
@@ -486,6 +491,11 @@ struct VersionBody {
     /// Closing only: the PLANNED/ACTIVE Sprint that takes the unfinished Tasks; none means backlog.
     #[serde(default)]
     carry_to_sprint_id: Option<Uuid>,
+    /// Closing only: archive the Sprint's finished work `IMMEDIATE`ly or at `archiveAt` (a future instant).
+    #[serde(default)]
+    archive: Option<String>,
+    #[serde(default)]
+    archive_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 async fn sprint_command(
@@ -493,14 +503,23 @@ async fn sprint_command(
     Path((sprint_id, command)): Path<(Uuid, String)>,
     headers: HeaderMap,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<VersionBody>,
 ) -> Result<Response, ApiError> {
-    let body: VersionBody = extract::parse(raw)?;
     let command = match command.as_str() {
         "start" => SprintCommand::Start,
         "complete" => SprintCommand::Complete,
         "cancel" => SprintCommand::Cancel,
         _ => return Err(ApiError::validation("unknown Sprint command")),
+    };
+    let archive = match (body.archive.as_deref(), body.archive_at) {
+        (None | Some("NONE"), None) => None,
+        (Some("IMMEDIATE"), None) => Some(planning::SprintArchive::Immediate),
+        (Some("AT"), Some(at)) => Some(planning::SprintArchive::At(at)),
+        _ => {
+            return Err(ApiError::validation(
+                "archive must be NONE, IMMEDIATE, or AT with archiveAt",
+            ));
+        }
     };
     let (sprint, changes) = planning::sprint_command(
         &state.pool,
@@ -508,11 +527,18 @@ async fn sprint_command(
         sprint_id,
         body.expected_version,
         command,
-        body.carry_to_sprint_id,
+        planning::CloseChoice {
+            carry_to: body.carry_to_sprint_id,
+            archive,
+        },
         &key(&headers)?,
     )
     .await?;
     state.publish(changes);
+    // Start, cancel and complete change the Sprint itself, which no Ticket record says.
+    state.publish([ChangeNotice::Project {
+        project_id: sprint.project_id,
+    }]);
     Ok(Json(sprint).into_response())
 }
 
@@ -527,9 +553,8 @@ async fn assign_sprint(
     Path(ticket_id): Path<Uuid>,
     headers: HeaderMap,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<AssignSprintBody>,
 ) -> Result<Response, ApiError> {
-    let body: AssignSprintBody = extract::parse(raw)?;
     let (ticket, change) = planning::assign_sprint(
         &state.pool,
         user_id,
@@ -555,9 +580,8 @@ async fn create_milestone(
     Path(project_id): Path<Uuid>,
     headers: HeaderMap,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<CreateMilestoneBody>,
 ) -> Result<Response, ApiError> {
-    let body: CreateMilestoneBody = extract::parse(raw)?;
     let milestone = planning::create_milestone(
         &state.pool,
         user_id,
@@ -570,6 +594,9 @@ async fn create_milestone(
         &key(&headers)?,
     )
     .await?;
+    state.publish([ChangeNotice::Project {
+        project_id: milestone.project_id,
+    }]);
     Ok((StatusCode::CREATED, Json(milestone)).into_response())
 }
 
@@ -589,9 +616,8 @@ async fn update_milestone(
     State(state): State<AppState>,
     Path(milestone_id): Path<Uuid>,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<UpdateMilestoneBody>,
 ) -> Result<Response, ApiError> {
-    let body: UpdateMilestoneBody = extract::parse(raw)?;
     let milestone = planning::update_milestone(
         &state.pool,
         user_id,
@@ -605,6 +631,9 @@ async fn update_milestone(
         },
     )
     .await?;
+    state.publish([ChangeNotice::Project {
+        project_id: milestone.project_id,
+    }]);
     Ok(Json(milestone).into_response())
 }
 
@@ -619,9 +648,8 @@ async fn set_milestones(
     Path(ticket_id): Path<Uuid>,
     headers: HeaderMap,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<SetMilestonesBody>,
 ) -> Result<Response, ApiError> {
-    let body: SetMilestonesBody = extract::parse(raw)?;
     let (ticket, change) = planning::set_milestones(
         &state.pool,
         user_id,
@@ -651,4 +679,63 @@ async fn sprint_results(
     Actor(user_id): Actor,
 ) -> Result<Response, ApiError> {
     Ok(Json(planning::sprint_results(&state.pool, user_id, sprint_id).await?).into_response())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RescheduleBody {
+    expected_version: i64,
+    archive_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CancelArchiveBody {
+    expected_version: i64,
+}
+
+async fn archive_schedule(
+    State(state): State<AppState>,
+    Path(sprint_id): Path<Uuid>,
+    Actor(user_id): Actor,
+) -> Result<Response, ApiError> {
+    let schedule = planning::archive_schedule(&state.pool, user_id, sprint_id).await?;
+    Ok(Json(json!({ "schedule": schedule })).into_response())
+}
+
+async fn reschedule_archive(
+    State(state): State<AppState>,
+    Path(sprint_id): Path<Uuid>,
+    Actor(user_id): Actor,
+    Body(body): Body<RescheduleBody>,
+) -> Result<Response, ApiError> {
+    let schedule = planning::reschedule_archive(
+        &state.pool,
+        user_id,
+        sprint_id,
+        body.expected_version,
+        body.archive_at,
+    )
+    .await?;
+    publish_sprint_project(&state, sprint_id).await;
+    Ok(Json(schedule).into_response())
+}
+
+async fn cancel_archive(
+    State(state): State<AppState>,
+    Path(sprint_id): Path<Uuid>,
+    Actor(user_id): Actor,
+    Body(body): Body<CancelArchiveBody>,
+) -> Result<Response, ApiError> {
+    let schedule =
+        planning::cancel_archive(&state.pool, user_id, sprint_id, body.expected_version).await?;
+    publish_sprint_project(&state, sprint_id).await;
+    Ok(Json(schedule).into_response())
+}
+
+/// An archive schedule belongs to a Sprint and carries no Ticket record: tell the Project's open boards to read again.
+async fn publish_sprint_project(state: &AppState, sprint_id: Uuid) {
+    if let Ok(project_id) = planning::sprint_project_id(&state.pool, sprint_id).await {
+        state.publish([ChangeNotice::Project { project_id }]);
+    }
 }

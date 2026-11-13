@@ -3,7 +3,10 @@ WORKDIR /src/server
 COPY server/Cargo.toml server/Cargo.lock server/rust-toolchain.toml ./
 COPY server/apps ./apps
 COPY server/crates ./crates
+COPY server/vendor ./vendor
+COPY server/.sqlx ./.sqlx
 COPY database/migrations /src/database/migrations
+ENV SQLX_OFFLINE=true
 RUN cargo build --release -p core-api -p admin-cli
 
 FROM debian:bookworm-slim

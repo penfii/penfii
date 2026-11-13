@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ProjectView, WorkflowState } from '@penfii/contracts'
 import { fixtureBoard, fixtureStates, fixtureTicket as ticket } from './testFixtures'
@@ -6,26 +6,29 @@ import { defaultDefinition, emptyFilter } from './viewModel'
 
 const api = vi.hoisted(() => ({
   getProjectBoard: vi.fn(), getSprintResults: vi.fn(), getSprintClosePreview: vi.fn(), getFavorites: vi.fn(), getLater: vi.fn(), getProjectPins: vi.fn(), getProjectWorkflow: vi.fn(), getSpace: vi.fn(), getTicket: vi.fn(), getTicketChildren: vi.fn(), getProjectLabels: vi.fn(),
-  getProjectMembers: vi.fn(), getProjectTicketTypes: vi.fn(), getTicketComments: vi.fn(), getTicketActivity: vi.fn(),
+  restoreTicketFromTrash: vi.fn(), getProjectMembers: vi.fn(), getProjectTicketTypes: vi.fn(), getTicketComments: vi.fn(), getTicketActivity: vi.fn(),
   getTicketRevisions: vi.fn(), getTicketRevision: vi.fn(), changeTicketStatus: vi.fn(), updateTicket: vi.fn(),
   moveTicket: vi.fn(), getProjectViews: vi.fn(), createProjectView: vi.fn(), updateProjectView: vi.fn(), deleteProjectView: vi.fn(),
   getProjectPlanning: vi.fn(), getTicketDependencies: vi.fn(), addTicketDependency: vi.fn(), removeDependency: vi.fn(), waiveDependency: vi.fn(), restoreDependency: vi.fn(),
   assignSprint: vi.fn(), setTicketMilestones: vi.fn(), updateWorkflowState: vi.fn(), createSprint: vi.fn(), sprintCommand: vi.fn(),
   createMilestone: vi.fn(), updateMilestone: vi.fn(), createWorkflowState: vi.fn(), deleteWorkflowState: vi.fn(),
+  getSprintArchiveSchedule: vi.fn(), getProjectVelocity: vi.fn(), getSprintReport: vi.fn(), bulkTickets: vi.fn(), listProjectArchive: vi.fn(), archiveTicket: vi.fn(), unarchiveTicket: vi.fn(), rescheduleSprintArchive: vi.fn(), cancelSprintArchive: vi.fn(),
 }))
 vi.mock('../../api', () => ({ api }))
 
 import { PlanningPage } from './PlanningPage'
 import { Work } from './Work'
+import { NoticeHost, dismissNotice } from '../../design/notices'
 import { DetailPanelHost } from './testHost'
 import { renderWithProviders } from '../../test/renderWithProviders'
+import { PHONE, setViewport } from '../../test/viewport'
 
 const BOARD_PATH = '/w/w/projects/p/work'
 const backend = { id: 'l-be', name: 'backend', color: null }
 
 function mount(path: string) {
   return renderWithProviders(
-    <><Work target={{ kind: 'PROJECT', workspaceId: 'w', projectId: 'p' }} /><DetailPanelHost /></>,
+    <><Work target={{ kind: 'PROJECT', workspaceId: 'w', projectId: 'p' }} /><DetailPanelHost /><NoticeHost /></>,
     { route: path, path: '/w/:workspaceId/projects/:projectId/work' },
   )
 }
@@ -46,6 +49,9 @@ beforeEach(() => {
   api.getProjectMembers.mockResolvedValue([{ userId: 'u1', displayName: 'John Park' }])
   api.getProjectTicketTypes.mockResolvedValue([])
   api.getTicketChildren.mockResolvedValue([])
+  api.getSprintArchiveSchedule.mockResolvedValue(null)
+  api.getProjectVelocity.mockResolvedValue({ unit: null, generatedAt: '2026-11-01T00:00:00Z', scope: 'VISIBLE_TICKETS', sprints: [] })
+  api.getSprintReport.mockResolvedValue({ sprint: { id: 's1' }, availability: { available: false, reason: 'NOT_STARTED' }, provisional: false, generatedAt: '2026-11-01T00:00:00Z', scope: 'VISIBLE_TICKETS', startPlan: null, completed: null, remaining: null, adherence: null, burndown: [], changes: [], tickets: [] })
   api.getTicketComments.mockResolvedValue([])
   api.getTicketActivity.mockResolvedValue({ items: [], nextCursor: null })
   api.getTicketRevisions.mockResolvedValue({ items: [], nextBefore: null })
@@ -130,6 +136,123 @@ describe('Views on the Board', () => {
     expect(columns.map((column) => column.getAttribute('aria-label'))).toEqual(['John Park', 'Unassigned'])
     expect(screen.getByText(/Cards cannot be dragged in this grouping/)).toBeTruthy()
     expect(document.querySelectorAll('.ticket-card[draggable="true"]').length).toBe(0)
+  })
+})
+
+describe('bulk archive and trash on the Board', () => {
+  const finished = (id: string, key: string, title: string) => ticket({ id, key, title, statusId: 's-done' })
+  const adminBoard = (tickets: ReturnType<typeof ticket>[], manage = true) => ({ ...fixtureBoard(tickets), canManageWorkflow: manage })
+
+  it('lets a Project admin choose only Completed and Canceled cards', async () => {
+    api.getProjectBoard.mockResolvedValue(adminBoard([finished('a', 'PFI-001', 'Shipped'), ticket({ id: 'b', key: 'PFI-002', title: 'Open work' })]))
+    mount(BOARD_PATH)
+    await screen.findByText('Shipped')
+    expect(screen.getByRole('checkbox', { name: 'Select PFI-001' })).toBeTruthy()
+    expect(screen.queryByRole('checkbox', { name: 'Select PFI-002' })).toBeNull()
+  })
+
+  it('offers no choosing to anyone else', async () => {
+    api.getProjectBoard.mockResolvedValue(adminBoard([finished('a', 'PFI-001', 'Shipped')], false))
+    mount(BOARD_PATH)
+    await screen.findByText('Shipped')
+    expect(screen.queryByRole('checkbox')).toBeNull()
+  })
+
+  it('archives the chosen cards in one operation', async () => {
+    api.getProjectBoard.mockResolvedValue(adminBoard([finished('a', 'PFI-001', 'Shipped'), finished('b', 'PFI-002', 'Fixed')]))
+    api.bulkTickets.mockResolvedValue({ total: 2, succeeded: 2, failed: 0, items: [{ ticketId: 'a', key: 'PFI-001', ok: true, code: null, message: null }, { ticketId: 'b', key: 'PFI-002', ok: true, code: null, message: null }] })
+    mount(BOARD_PATH)
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select PFI-001' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select PFI-002' }))
+    expect(screen.getByText('2 completed/canceled selected')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }))
+    await waitFor(() => expect(api.bulkTickets).toHaveBeenCalledWith('w', ['a', 'b'], { type: 'ARCHIVE' }, expect.any(String)))
+    expect((await screen.findAllByText(/2 archived/)).length).toBeGreaterThan(0)
+  })
+
+  const trashTwo = async () => {
+    api.getProjectBoard.mockResolvedValue(adminBoard([finished('a', 'PFI-001', 'Shipped'), finished('b', 'PFI-002', 'Parent')]))
+    mount(BOARD_PATH)
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select PFI-001' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select PFI-002' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Move to trash' }))
+  }
+
+  it('asks before moving to the trash, and sends nothing when declined', async () => {
+    await trashTwo()
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText(/Move the 2 selected tickets to the trash\?/)).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(api.bulkTickets).not.toHaveBeenCalled()
+    expect(screen.getByText('2 completed/canceled selected')).toBeTruthy()
+  })
+
+  it('on a phone moves to the trash without a blocking question: the result carries Undo', async () => {
+    setViewport(PHONE)
+    api.getProjectBoard.mockResolvedValue(adminBoard([finished('a', 'PFI-001', 'Shipped'), finished('b', 'PFI-002', 'Parent')]))
+    api.bulkTickets.mockResolvedValue({ total: 2, succeeded: 2, failed: 0, items: [{ ticketId: 'a', key: 'PFI-001', ok: true, code: null, message: null }, { ticketId: 'b', key: 'PFI-002', ok: true, code: null, message: null }] })
+    mount(BOARD_PATH)
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select PFI-001' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select PFI-002' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Move to trash' }))
+    await waitFor(() => expect(api.bulkTickets).toHaveBeenCalledWith('w', ['a', 'b'], { type: 'TRASH' }, expect.any(String)))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(await screen.findByRole('button', { name: 'Undo' })).toBeTruthy()
+    dismissNotice()
+  })
+
+  it('keeps the trash result in the bar and offers Undo, which restores what was moved', async () => {
+    api.bulkTickets.mockResolvedValue({ total: 2, succeeded: 2, failed: 0, items: [{ ticketId: 'a', key: 'PFI-001', ok: true, code: null, message: null }, { ticketId: 'b', key: 'PFI-002', ok: true, code: null, message: null }] })
+    api.restoreTicketFromTrash.mockResolvedValue(undefined)
+    await trashTwo()
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Move to trash' }))
+    await waitFor(() => expect(api.bulkTickets).toHaveBeenCalledWith('w', ['a', 'b'], { type: 'TRASH' }, expect.any(String)))
+    expect(await screen.findAllByText(/2 moved to the trash/)).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(api.restoreTicketFromTrash).toHaveBeenCalledTimes(2))
+    expect(api.restoreTicketFromTrash).toHaveBeenCalledWith('a')
+    expect(await screen.findByText('2 restored from the trash')).toBeTruthy()
+    dismissNotice()
+  })
+
+  it('does not report success for a partial run: the refused card is named, stays chosen, and the failure stays on screen', async () => {
+    api.bulkTickets.mockResolvedValue({ total: 2, succeeded: 1, failed: 1, items: [{ ticketId: 'a', key: 'PFI-001', ok: true, code: null, message: null }, { ticketId: 'b', key: null, ok: false, code: 'open_children', message: 'x' }] })
+    await trashTwo()
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Move to trash' }))
+    await waitFor(() => expect(api.bulkTickets).toHaveBeenCalledWith('w', ['a', 'b'], { type: 'TRASH' }, expect.any(String)))
+    expect((await screen.findAllByRole('alert'))[0]?.textContent).toContain('1 of 2 moved to the trash')
+    expect(screen.getByText(/It has unfinished child tickets/)).toBeTruthy()
+    expect(screen.getByText('1 completed/canceled selected')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Retry the failed ones' })).toBeTruthy()
+    // The same words reach the notice, which has no timer: it stays until dismissed.
+    expect(screen.getByRole('button', { name: 'Dismiss', hidden: false })).toBeTruthy()
+    dismissNotice()
+  })
+})
+
+describe('archived tickets', () => {
+  it('lists them for reading and opens one', async () => {
+    api.getProjectBoard.mockResolvedValue(fixtureBoard([]))
+    api.listProjectArchive.mockResolvedValue([{ id: 'x', key: 'PFI-009', title: 'Old release', hierarchyKind: 'TASK', archivedAt: '2026-11-01T00:00:00Z', archivedBy: null, archivedByName: 'felix', trashed: false }])
+    mount(BOARD_PATH)
+    fireEvent.click(await screen.findByRole('button', { name: 'Archived tickets' }))
+    expect(await screen.findByText('Old release')).toBeTruthy()
+    expect(screen.getByText(/felix/)).toBeTruthy()
+  })
+
+  it('opens an archived ticket read-only, with Unarchive for the admin', async () => {
+    const archived = ticket({ id: 'x', key: 'PFI-009', title: 'Old release', archivedAt: '2026-11-01T00:00:00Z' })
+    api.getProjectBoard.mockResolvedValue({ ...fixtureBoard([]), canManageWorkflow: true })
+    api.getTicket.mockResolvedValue(archived)
+    api.unarchiveTicket.mockResolvedValue(undefined)
+    mount(`${BOARD_PATH}?panel=ticket:x`)
+    expect(await screen.findByText(/This ticket is archived/)).toBeTruthy()
+    expect(screen.queryByLabelText('Title')).toBeNull()
+    expect((document.querySelector('select.ticket-status') as HTMLSelectElement).disabled).toBe(true)
+    // Nothing can be added either: no comment box.
+    expect(screen.queryByPlaceholderText(/Write a comment/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Unarchive' }))
+    await waitFor(() => expect(api.unarchiveTicket).toHaveBeenCalledWith('x'))
   })
 })
 
@@ -417,6 +540,25 @@ describe('Planning page', () => {
     )
   }
 
+  it('counts a Milestone\'s days left from the clock, and counts one fewer a day later', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'], now: new Date(2026, 10, 3, 9, 0, 0) })
+    try {
+      api.getProjectBoard.mockResolvedValue(fixtureBoard([ticket({ id: 'a', title: 'One' })]))
+      api.getProjectPlanning.mockResolvedValue({
+        canManage: false,
+        sprints: [],
+        milestones: [{ id: 'm1', projectId: 'p', name: 'Launch', description: null, targetOn: '2026-11-10', state: 'OPEN', reachedAt: null, version: 1 }],
+      })
+      mountPlanning()
+      fireEvent.click(await screen.findByRole('tab', { name: /Milestone/ }))
+      expect(await screen.findByText('7 days left')).toBeTruthy()
+      act(() => { vi.advanceTimersByTime(24 * 3_600_000) })
+      expect(screen.getByText('6 days left')).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('guides an admin to create the first Sprint and Milestone', async () => {
     api.getProjectBoard.mockResolvedValue(fixtureBoard([ticket({ id: 'a', title: 'One' })]))
     api.getProjectPlanning.mockResolvedValue({ canManage: true, sprints: [], milestones: [] })
@@ -454,6 +596,7 @@ describe('Planning page', () => {
     api.getProjectBoard.mockResolvedValue(fixtureBoard([ticket({ id: 'a', title: 'One' })]))
     const base = { projectId: 'p', goal: null, startsOn: '2026-11-02', endsOn: '2026-11-13', version: 1, startedAt: null, endedAt: null }
     api.getProjectPlanning.mockResolvedValue({ canManage: true, sprints: [{ ...base, id: 'a', name: 'Sprint A', state: 'ACTIVE' }, { ...base, id: 'b', name: 'Sprint B', state: 'PLANNED' }], milestones: [] })
+    api.getSprintResults.mockResolvedValue({ sprint: { ...base, id: 'a', name: 'Sprint A', state: 'ACTIVE' }, baselineCount: 0, baselineRecordedAt: null, results: [] })
     mountPlanning()
     expect((await screen.findByRole('button', { name: 'Start' })).hasAttribute('disabled')).toBe(true)
     expect(screen.getByText(/Sprint A is already active/)).toBeTruthy()
@@ -484,7 +627,7 @@ describe('Planning page', () => {
     expect(await screen.findByText('1 done · 0 canceled · 1 unfinished')).toBeTruthy()
     expect((screen.getByRole('radio', { name: /Sprint 2/ }) as HTMLInputElement).checked).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: 'Close Sprint' }))
-    await waitFor(() => expect(api.sprintCommand).toHaveBeenCalledWith('s1', 'complete', 2, expect.any(String), 's2'))
+    await waitFor(() => expect(api.sprintCommand).toHaveBeenCalledWith('s1', 'complete', 2, expect.any(String), 's2', { mode: 'NONE' }))
   })
 
   it('sends the backlog when the person picks it', async () => {
@@ -498,7 +641,55 @@ describe('Planning page', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Complete' }))
     expect((await screen.findByRole('radio', { name: 'Backlog' }) as HTMLInputElement).checked).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: 'Close Sprint' }))
-    await waitFor(() => expect(api.sprintCommand).toHaveBeenCalledWith('s1', 'complete', 2, expect.any(String), null))
+    await waitFor(() => expect(api.sprintCommand).toHaveBeenCalledWith('s1', 'complete', 2, expect.any(String), null, { mode: 'NONE' }))
+  })
+
+  it('archives the finished work now or at a chosen future time, and refuses a past time', async () => {
+    const active = { id: 's1', projectId: 'p', name: 'Sprint 1', goal: null, state: 'ACTIVE', startsOn: '2026-11-02', endsOn: '2026-11-13', version: 2, startedAt: null, endedAt: null, timeZone: 'Asia/Seoul' }
+    api.getProjectBoard.mockResolvedValue(fixtureBoard([]))
+    api.getProjectPlanning.mockResolvedValue({ canManage: true, sprints: [active], milestones: [] })
+    api.getSprintResults.mockResolvedValue({ sprint: active, baselineCount: 0, baselineRecordedAt: null, results: [] })
+    api.getSprintClosePreview.mockResolvedValue({ sprintId: 's1', sprintVersion: 2, done: [], canceled: [], unfinished: [], targets: [], defaultTargetId: null })
+    api.sprintCommand.mockResolvedValue({ ...active, state: 'COMPLETED' })
+    mountPlanning()
+    fireEvent.click(await screen.findByRole('button', { name: 'Complete' }))
+    fireEvent.click(await screen.findByRole('radio', { name: 'Archive at a chosen date and time' }))
+    const when = screen.getByLabelText(/Archive time \(Asia\/Seoul\)/) as HTMLInputElement
+    // A past time cannot be sent.
+    fireEvent.change(when, { target: { value: '2020-01-01T09:00' } })
+    expect(await screen.findByText('Pick a time in the future.')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Close Sprint' }) as HTMLButtonElement).disabled).toBe(true)
+    // A future wall-clock time of the Sprint's zone is sent as an instant.
+    fireEvent.change(when, { target: { value: '2099-03-04T09:30' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Close Sprint' }))
+    await waitFor(() => expect(api.sprintCommand).toHaveBeenCalledWith('s1', 'complete', 2, expect.any(String), null, { mode: 'AT', at: '2099-03-04T00:30:00Z' }))
+  })
+
+  it('sends an immediate archive when that is chosen', async () => {
+    const active = { id: 's1', projectId: 'p', name: 'Sprint 1', goal: null, state: 'ACTIVE', startsOn: '2026-11-02', endsOn: '2026-11-13', version: 2, startedAt: null, endedAt: null }
+    api.getProjectBoard.mockResolvedValue(fixtureBoard([]))
+    api.getProjectPlanning.mockResolvedValue({ canManage: true, sprints: [active], milestones: [] })
+    api.getSprintResults.mockResolvedValue({ sprint: active, baselineCount: 0, baselineRecordedAt: null, results: [] })
+    api.getSprintClosePreview.mockResolvedValue({ sprintId: 's1', sprintVersion: 2, done: [], canceled: [], unfinished: [], targets: [], defaultTargetId: null })
+    api.sprintCommand.mockResolvedValue({ ...active, state: 'COMPLETED' })
+    mountPlanning()
+    fireEvent.click(await screen.findByRole('button', { name: 'Complete' }))
+    fireEvent.click(await screen.findByRole('radio', { name: 'Archive now' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close Sprint' }))
+    await waitFor(() => expect(api.sprintCommand).toHaveBeenCalledWith('s1', 'complete', 2, expect.any(String), null, { mode: 'IMMEDIATE' }))
+  })
+
+  it('shows a scheduled archive on the completed Sprint and lets an admin cancel it', async () => {
+    const closed = { id: 's1', projectId: 'p', name: 'Sprint 1', goal: null, state: 'COMPLETED', startsOn: '2026-11-02', endsOn: '2026-11-13', version: 3, startedAt: null, endedAt: '2026-11-13T00:00:00Z', timeZone: 'Asia/Seoul' }
+    api.getProjectBoard.mockResolvedValue(fixtureBoard([]))
+    api.getProjectPlanning.mockResolvedValue({ canManage: true, sprints: [closed], milestones: [] })
+    api.getSprintResults.mockResolvedValue({ sprint: closed, baselineCount: 0, baselineRecordedAt: null, results: [] })
+    api.getSprintArchiveSchedule.mockResolvedValue({ sprintId: 's1', dueAt: '2099-03-04T00:30:00Z', timeZone: 'Asia/Seoul', state: 'SCHEDULED', version: 4 })
+    api.cancelSprintArchive.mockResolvedValue({ sprintId: 's1', dueAt: '2099-03-04T00:30:00Z', timeZone: 'Asia/Seoul', state: 'CANCELED', version: 5 })
+    mountPlanning()
+    expect(await screen.findByText(/Archives on/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel schedule' }))
+    await waitFor(() => expect(api.cancelSprintArchive).toHaveBeenCalledWith('s1', 4))
   })
 
   it('lists a closed Sprint from its recorded results, not from a filter', async () => {

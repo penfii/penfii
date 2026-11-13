@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest'
-import { clearAllNewDocDrafts, isBlankDraft, readNewDocDraft, writeNewDocDraft } from './newDocDraft'
+import { isBlankDraft, readNewDocDraft, writeNewDocDraft } from './newDocDraft'
 
 const content = { schema: 'penfii.doc' as const, version: 1 as const, blocks: [{ type: 'paragraph', content: [{ type: 'text', text: 'hello' }] }] }
 
@@ -16,7 +16,7 @@ describe('new document draft', () => {
     expect(saved?.content.blocks.some((block) => (block as { type?: string }).type === 'image')).toBe(false)
     expect(readNewDocDraft('u2', 'w')).toBeNull()
     writeNewDocDraft('u1', 'w2', { title: '다른 곳', content })
-    clearAllNewDocDrafts()
+    localStorage.clear()
     expect(readNewDocDraft('u1', 'w')).toBeNull()
     expect(readNewDocDraft('u1', 'w2')).toBeNull()
   })

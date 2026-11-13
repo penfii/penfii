@@ -60,6 +60,10 @@ impl From<CoreError> for Failure {
                 Self::new("reauth_required", "recent authentication is required")
             }
             CoreError::RateLimited { .. } => Self::new("rate_limited", "too many requests"),
+            CoreError::DbUnavailable(cause) => {
+                tracing::warn!(cause, "mcp tool: database unavailable");
+                Self::new("db_unavailable", "the database is temporarily unavailable")
+            }
             CoreError::Internal(message) => {
                 tracing::error!(%message, "mcp tool internal error");
                 Self::new("internal_error", "internal error")

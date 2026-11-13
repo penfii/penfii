@@ -22,6 +22,7 @@ import {
   type TimelineHandle,
 } from '../modules/conversations'
 import { useServerDraft } from '../modules/conversations/useServerDraft'
+import { useMentionSearch, type MentionScope } from '../modules/conversations/useMentionSearch'
 
 export function ConversationPane({
   workspaceId,
@@ -56,6 +57,9 @@ export function ConversationPane({
   const serverInfo = useQuery(queries.serverInfo())
   const space = useQuery({ ...queries.space(workspaceId), enabled: workspaceId.length > 0 })
   const channel = space.data?.channels.find((item) => item.conversationId === conversationId)
+  const dm = space.data?.dms.find((item) => item.conversationId === conversationId)
+  const mentionScope: MentionScope | null = channel ? { kind: 'channel', channelId: channel.id } : dm ? { kind: 'dm', peers: dm.peers } : null
+  const searchMentions = useMentionSearch(workspaceId, mentionScope, currentUserId)
   const mustJoin = channel ? shouldOfferJoin(channel) : false
   // A Team's channels are read-only while the Team is archived (derived by the server from the Team).
   const readOnly = Boolean(channel?.teamId && isArchivedTeam(space.data?.teams.find((item) => item.id === channel.teamId)))
@@ -186,6 +190,7 @@ export function ConversationPane({
               label={t('composer.placeholder')}
               placeholder={heading ? t('composer.placeholderIn', { name: heading }) : undefined}
               focusToken={threadRootId ? null : conversationId}
+              searchMentions={searchMentions}
             />
           )}
         </div>
@@ -220,6 +225,7 @@ export function ConversationPane({
                 placeholder={t('thread.compose')}
                 sendLabel={t('thread.send')}
                 focusToken={threadRootId}
+                searchMentions={searchMentions}
               />
             )}
           </div>

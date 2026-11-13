@@ -1,15 +1,16 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
-import type { InboxFilter, InboxItem, InboxLink } from '@penfii/contracts'
+import type { InboxItem, InboxLink } from '@penfii/contracts'
 import { isVersionConflict } from '@penfii/api-client'
 import { api } from '../../api'
 import { Button, EmptyState } from '../../design/ui'
 import { formatMessageTime } from '../../format'
 import { useI18n } from '../../i18n/I18nProvider'
 import { queryKeys } from '../../queryKeys'
-
-export const INBOX_FILTERS: InboxFilter[] = ['all', 'mentions', 'replies', 'watching', 'reminders', 'invitations', 'assignments']
+import { InboxChips, InboxRows, InboxViewOptionsMenu } from './InboxParts'
+import { DEFAULT_VIEW_OPTIONS, emptyKind, inboxSearch, parseInboxLocation, readState, type InboxLocation } from './inboxModel'
+import { useInboxViewOptions } from './useInboxViewOptions'
 
 /** Where an Inbox item leads. */
 export function inboxHref(workspaceId: string, link: InboxLink): string | null {
@@ -21,103 +22,156 @@ export function inboxHref(workspaceId: string, link: InboxLink): string | null {
   return link.threadRootId ? `${base}/c/${link.conversationId}/t/${link.threadRootId}` : `${base}/c/${link.conversationId}`
 }
 
-function tomorrowMorning(): string {
-  const next = new Date()
-  next.setDate(next.getDate() + 1)
-  next.setHours(9, 0, 0, 0)
-  return next.toISOString()
-}
-
-/** The Inbox: what happened that concerns me. Reading it never changes chat, Later or any Ticket. */
+/**
+ * The Inbox and the archive (one screen, two Views). What happened that concerns me. Reading it never
+ * changes chat, Later or any Ticket. The address holds the View, the types and the unread Filter; the
+ * View Options are a local preference.
+ */
 export function InboxPage() {
   const { t, locale } = useI18n()
   const { workspaceId = '' } = useParams()
-  const [params] = useSearchParams()
+  const [params, setParams] = useSearchParams()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const box = params.get('box') ?? 'all'
-  const unreadOnly = box === 'unread'
-  const filter: InboxFilter = INBOX_FILTERS.includes(box as InboxFilter) ? (box as InboxFilter) : 'all'
-  const state = unreadOnly ? 'unread' : 'all'
+  const [options, setOptions] = useInboxViewOptions()
+  const location = parseInboxLocation(params)
+  const archive = location.view === 'archived'
+  // The unread Filter wins over "show read"; the server has the one `state`.
+  const state = archive ? 'all' : readState(location.unread, options.showRead)
+  const includeSnoozed = !archive && options.showSnoozed
   const [notice, setNotice] = useState('')
+  const types = location.types
   const inbox = useInfiniteQuery({
-    queryKey: queryKeys.inbox(workspaceId, filter, state),
-    queryFn: ({ pageParam }) => api.getInbox(workspaceId, { filter, state, cursor: pageParam, limit: 30 }),
+    queryKey: [...queryKeys.inbox(workspaceId, location.view, `${state}:${includeSnoozed ? 'snoozed' : ''}`), types],
+    queryFn: ({ pageParam }) =>
+      api.getInbox(workspaceId, {
+        view: location.view,
+        filter: types.length > 0 ? types : undefined,
+        state,
+        includeSnoozed: includeSnoozed || undefined,
+        cursor: pageParam,
+        limit: 30,
+      }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.nextCursor ?? undefined,
     enabled: workspaceId.length > 0,
     refetchOnWindowFocus: true,
   })
   const items = inbox.data?.pages.flatMap((page) => page.items) ?? []
-  const heading = unreadOnly ? t('inbox.unreadOnly') : t(`inbox.filter.${filter}`)
+  const heading = t(archive ? 'inbox.view.archived' : 'inbox.view.inbox')
 
+  function go(next: InboxLocation) {
+    setParams(new URLSearchParams(inboxSearch(next)), { replace: false })
+  }
   async function refresh() {
     await queryClient.invalidateQueries({ queryKey: queryKeys.all.inbox })
     await queryClient.invalidateQueries({ queryKey: queryKeys.all.inboxUnread })
   }
-  async function run(item: InboxItem, command: 'read' | 'unread' | 'archive' | 'snooze', until?: string) {
+  type Command = 'read' | 'unread' | 'archive' | 'unarchive' | 'snooze'
+  // What can be taken back, for a few seconds. Only what makes a row leave the list (or hides it
+  // for a while) is offered: the read toggle stays on the row and flips back with its own button.
+  const [undo, setUndo] = useState<{ message: string; undo: () => Promise<void> } | null>(null)
+  useEffect(() => {
+    if (!undo) return
+    const timer = setTimeout(() => setUndo(null), 8000)
+    return () => clearTimeout(timer)
+  }, [undo])
+  async function send(item: InboxItem, command: Command, until?: string) {
+    return api.inboxCommand(item.id, command, { expectedVersion: item.version, until })
+  }
+  /** What taking `command` back looks like, or null when it is not worth offering. */
+  function undoFor(item: InboxItem, command: Command, until: string | undefined, done: { version: number }) {
+    const next = (command: Command, version: number) => api.inboxCommand(item.id, command, { expectedVersion: version })
+    if (command === 'archive') {
+      // Leaving the archive puts it back as read; it was unread when it went.
+      return { message: t('inbox.undo.archived'), undo: async () => { const back = await next('unarchive', done.version); if (item.state === 'UNREAD') await next('unread', back.version) } }
+    }
+    if (command === 'unarchive') return { message: t('inbox.undo.restored'), undo: async () => { await next('archive', done.version) } }
+    if (command === 'snooze' && until) {
+      // Waking it clears the snooze and leaves it unread; it may have been read before.
+      return { message: t('inbox.undo.snoozed', { time: formatMessageTime(until, locale) }), undo: async () => { const back = await next('unread', done.version); if (item.state === 'READ') await next('read', back.version) } }
+    }
+    if (command === 'read' && state === 'unread') return { message: t('inbox.undo.read'), undo: async () => { await next('unread', done.version) } }
+    return null
+  }
+  async function run(item: InboxItem, command: Command, until?: string, quiet = false) {
     setNotice('')
+    setUndo(null)
     try {
-      await api.inboxCommand(item.id, command, { expectedVersion: item.version, until })
+      const done = await send(item, command, until)
+      if (!quiet) setUndo(undoFor(item, command, until, done))
     } catch (error) {
       if (isVersionConflict(error)) setNotice(t('inbox.conflict'))
       else setNotice(t('inbox.error'))
     }
     await refresh()
   }
+  async function takeBack() {
+    const pending = undo
+    if (!pending) return
+    setUndo(null)
+    try {
+      await pending.undo()
+    } catch {
+      setNotice(t('inbox.conflict'))
+    }
+    await refresh()
+  }
   async function open(item: InboxItem) {
     const href = inboxHref(workspaceId, item.link)
-    if (item.state === 'UNREAD') await run(item, 'read')
+    if (!archive && item.state === 'UNREAD') await run(item, 'read', undefined, true)
     if (href) void navigate(href)
   }
   async function readAll() {
-    await api.inboxReadAll(workspaceId, filter === 'all' ? undefined : filter)
+    await api.inboxReadAll(workspaceId, location.types.length > 0 ? location.types : undefined)
     await refresh()
   }
+  function clearFilters() {
+    go({ ...location, types: [], unread: false })
+    setOptions({ showRead: DEFAULT_VIEW_OPTIONS.showRead, showSnoozed: DEFAULT_VIEW_OPTIONS.showSnoozed })
+  }
 
+  const empty = inbox.isSuccess && items.length === 0
+  const nothingAtAll = empty && emptyKind(location, options) === 'none'
   return (
     <div className="page-scroll">
-      <header className="page-intro">
-        <h1>{heading}</h1>
-        <p>{t('inbox.lead')}</p>
+      <header className="page-intro inbox-heading">
+        <div>
+          <h1>{heading}</h1>
+          <p>{t(archive ? 'inbox.archiveLead' : 'inbox.lead')}</p>
+        </div>
+        {archive || nothingAtAll ? null : <Button type="button" variant="secondary" onClick={() => void readAll()}>{t('inbox.markAllRead')}</Button>}
       </header>
-      <div className="inbox-tools">
-        <Button type="button" variant="secondary" onClick={() => void readAll()}>{t('inbox.markAllRead')}</Button>
-      </div>
+      {nothingAtAll ? null : (
+        <div className="inbox-toolbar">
+          <InboxChips location={location} onChange={go} showUnread={!archive} />
+          <InboxViewOptionsMenu options={options} onChange={setOptions} archive={archive} unreadFilter={location.unread} />
+        </div>
+      )}
       {notice ? <p className="board-note" role="status">{notice}</p> : null}
       {inbox.isPending ? <p className="hint" role="status">{t('loading')}</p> : null}
       {inbox.isError ? <p className="board-error" role="alert">{t('inbox.error')}</p> : null}
-      {inbox.isSuccess && items.length === 0 ? (
-        <EmptyState title={heading} body={filter === 'invitations' ? t('inbox.invitationsEmpty') : unreadOnly ? t('empty.inbox') : t('inbox.emptyFilter')} />
+      {nothingAtAll ? <EmptyState title={heading} body={archive ? t('inbox.archiveEmpty') : t('empty.inbox')} /> : null}
+      {empty && !nothingAtAll ? (
+        <EmptyState
+          title={t('inbox.noMatch')}
+          body={!archive && location.types.length === 1 && location.types[0] === 'invitations' ? t('inbox.invitationsEmpty') : t('inbox.emptyFilter')}
+        >
+          <Button type="button" variant="secondary" onClick={clearFilters}>{t('inbox.clearFilters')}</Button>
+        </EmptyState>
       ) : null}
-      <ul className="result-list inbox-list">
-        {items.map((item) => {
-          const late = typeof item.params.lateSeconds === 'number' ? Math.round(item.params.lateSeconds / 60) : 0
-          return (
-            <li key={item.id} className={item.state === 'UNREAD' ? 'result-hit inbox-row unread' : 'result-hit inbox-row'}>
-              <button type="button" className="inbox-open" onClick={() => void open(item)}>
-                <span className="inbox-text">
-                  {item.state === 'UNREAD' ? <span className="unread-dot" role="img" aria-label={t('inbox.unreadDot')} /> : null}
-                  {t(`inbox.kind.${item.kind}`, { actor: item.actor?.name ?? t('inbox.someone') })}
-                </span>
-                <strong className="inbox-subject">{item.subject.title}</strong>
-                <small className="hint">
-                  {formatMessageTime(item.createdAt, locale)}
-                  {late > 0 ? ` · ${t('inbox.late', { minutes: String(late) })}` : ''}
-                </small>
-              </button>
-              <span className="saved-actions">
-                <button type="button" className="icon-button" title={item.state === 'UNREAD' ? t('inbox.markRead') : t('inbox.markUnread')} aria-label={item.state === 'UNREAD' ? t('inbox.markRead') : t('inbox.markUnread')} onClick={() => void run(item, item.state === 'UNREAD' ? 'read' : 'unread')}>{item.state === 'UNREAD' ? '○' : '●'}</button>
-                <button type="button" className="icon-button" title={t('inbox.snooze1h')} aria-label={`${t('inbox.snooze')}: ${t('inbox.snooze1h')}`} onClick={() => void run(item, 'snooze', new Date(Date.now() + 3_600_000).toISOString())}>⏰</button>
-                <button type="button" className="icon-button" title={t('inbox.snoozeTomorrow')} aria-label={`${t('inbox.snooze')}: ${t('inbox.snoozeTomorrow')}`} onClick={() => void run(item, 'snooze', tomorrowMorning())}>☀</button>
-                <button type="button" className="icon-button" title={t('inbox.archive')} aria-label={t('inbox.archive')} onClick={() => void run(item, 'archive')}>▤</button>
-              </span>
-            </li>
-          )
-        })}
-      </ul>
+      <InboxRows items={items} archive={archive} groupByDay={options.groupByDay} actions={{ open: (item) => void open(item), run: (item, command, until) => void run(item, command, until) }} />
       {inbox.hasNextPage ? (
-        <Button type="button" variant="secondary" disabled={inbox.isFetchingNextPage} onClick={() => void inbox.fetchNextPage()}>{t('inbox.more')}</Button>
+        <div className="inbox-more">
+          <Button type="button" variant="secondary" disabled={inbox.isFetchingNextPage} onClick={() => void inbox.fetchNextPage()}>{t('inbox.more')}</Button>
+        </div>
+      ) : null}
+      {/* After the list, so showing it never moves the rows; it stays at the bottom edge while the list scrolls. */}
+      {undo ? (
+        <div className="inbox-undo" role="status">
+          <span>{undo.message}</span>
+          <button type="button" className="inbox-undo-action" onClick={() => void takeBack()}>{t('inbox.undo')}</button>
+        </div>
       ) : null}
     </div>
   )

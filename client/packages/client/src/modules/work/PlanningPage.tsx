@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router'
 import { useIsMobile } from '../../design/useIsMobile'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { newIdempotencyKey } from '@penfii/api-client'
-import type { EstimateUnit, Milestone, ProjectPlanning, Sprint, SprintOutcome, SprintResult } from '@penfii/contracts'
+import type { EstimateUnit, Milestone, ProjectPlanning, Sprint, SprintArchiveChoice, SprintOutcome, SprintResult } from '@penfii/contracts'
 import { api } from '../../api'
 import { Badge, Button, Dialog, Tabs } from '../../design/ui'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -15,7 +15,8 @@ import { useTicketPanel } from './panelParam'
 import { refreshTicket } from './refresh'
 import { SprintReportPanel, SprintSummaryStrip, VelocityPanel, velocityAverage } from './ReportPanels'
 import { errorCode } from './ticketModel'
-import { timeZones } from './zonedTime'
+import { useNow } from '../../ui/useNow'
+import { browserZone, formatZoned, instantToLocalInput, localInputToInstant, timeZones } from './zonedTime'
 import { buildSections, defaultDefinition, emptyFilter, workTicketsFromBoard, type WorkTicket } from './viewModel'
 
 type Mode = 'sprints' | 'milestones'
@@ -183,6 +184,7 @@ function SprintCard({ sprint, projectId, workspaceId, manage, run, activeSprint,
           <Button type="button" variant="ghost" onClick={onCancel}>{t('planning.sprint.cancel')}</Button>
         </div>
       ) : null}
+      {sprint.state === 'COMPLETED' ? <SprintArchiveNote sprint={sprint} manage={manage} /> : null}
       {expanded && sprint.state !== 'PLANNED' ? <SprintReportPanel sprint={sprint} /> : null}
       {expanded ? (isOpen ? <OpenSprintList sprint={sprint} projectId={projectId} workspaceId={workspaceId} manage={manage} run={run} /> : <ClosedSprintResults sprint={sprint} />) : null}
     </article>
@@ -307,7 +309,7 @@ const DURATIONS = [1, 2, 3, 4] as const
 /** Create a Sprint: the start follows the previous Sprint, the end follows the chosen length and can still be edited. */
 function SprintCreateDialog({ projectId, startsAfter, run, onDone }: { projectId: string; startsAfter: string; run: Run; onDone: () => void }) {
   const { t } = useI18n()
-  const now = new Date()
+  const now = new Date(useNow())
   const today = `${String(now.getFullYear())}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
   const firstStart = startsAfter ? addDays(startsAfter, 1) : today
   const [name, setName] = useState('')
@@ -412,6 +414,60 @@ function SprintStartDialog({ sprint, workspaceId, run, onDone }: { sprint: Sprin
   )
 }
 
+/** The archive scheduled when a Sprint was completed: when it runs, what it did, and (for an admin) change or cancel it. */
+function SprintArchiveNote({ sprint, manage }: { sprint: Sprint; manage: boolean }) {
+  const { t, locale } = useI18n()
+  const queryClient = useQueryClient()
+  const schedule = useQuery(queries.sprintArchiveSchedule(sprint.id))
+  const [editing, setEditing] = useState(false)
+  const [local, setLocal] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const zone = schedule.data?.timeZone ?? sprint.timeZone ?? browserZone()
+  const now = useNow()
+  const data = schedule.data
+  if (!data) return null
+  const instant = editing && local ? localInputToInstant(local, zone) : null
+  const future = instant !== null && Date.parse(instant) > now
+
+  async function change(action: () => Promise<unknown>) {
+    setBusy(true)
+    setFailed(false)
+    try {
+      await action()
+      setEditing(false)
+      await queryClient.invalidateQueries({ queryKey: queryKeys.sprintArchiveSchedule(sprint.id) })
+    } catch {
+      setFailed(true)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="sprint-archive-note" role="status">
+      {data.state === 'SCHEDULED' ? <span>{t('planning.archive.scheduled', { when: formatZoned(data.dueAt, zone, locale) })}</span> : null}
+      {data.state === 'DONE' ? <span>{t('planning.archive.done', { archived: String(data.archivedCount ?? 0), skipped: String(data.skippedCount ?? 0) })}</span> : null}
+      {data.state === 'CANCELED' ? <span>{t('planning.archive.canceled')}</span> : null}
+      {manage && data.state === 'SCHEDULED' ? (
+        editing ? (
+          <>
+            <input type="datetime-local" aria-label={t('planning.close.archive.when', { zone })} value={local} onChange={(event) => setLocal(event.target.value)} />
+            <Button type="button" disabled={busy || !future} onClick={() => void change(() => api.rescheduleSprintArchive(sprint.id, data.version, instant ?? ''))}>{t('planning.archive.save')}</Button>
+            <Button type="button" variant="ghost" onClick={() => setEditing(false)}>{t('view.cancel')}</Button>
+          </>
+        ) : (
+          <>
+            <Button type="button" variant="ghost" onClick={() => { setLocal(instantToLocalInput(data.dueAt, zone)); setEditing(true) }}>{t('planning.archive.change')}</Button>
+            <Button type="button" variant="ghost" disabled={busy} onClick={() => void change(() => api.cancelSprintArchive(sprint.id, data.version))}>{t('planning.archive.cancel')}</Button>
+          </>
+        )
+      ) : null}
+      {failed ? <small className="form-error" role="alert">{t('planning.archive.error')}</small> : null}
+    </div>
+  )
+}
+
 /** The one decision of closing: where the unfinished Tasks go. The preview is the place to turn back. */
 function CloseDialog({ sprint, run, onDone }: { sprint: Sprint; run: Run; onDone: () => void }) {
   const { t } = useI18n()
@@ -419,10 +475,18 @@ function CloseDialog({ sprint, run, onDone }: { sprint: Sprint; run: Run; onDone
   const [choice, setChoice] = useState<string | null | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const target = choice === undefined ? (preview.data?.defaultTargetId ?? null) : choice
+  const zone = sprint.timeZone ?? browserZone()
+  const [archiveMode, setArchiveMode] = useState<'NONE' | 'IMMEDIATE' | 'AT'>('NONE')
+  const [archiveLocal, setArchiveLocal] = useState('')
+  const now = useNow()
+  const archiveInstant = archiveMode === 'AT' && archiveLocal ? localInputToInstant(archiveLocal, zone) : null
+  const archivePast = archiveInstant !== null && Date.parse(archiveInstant) <= now
+  const archiveReady = archiveMode !== 'AT' || (archiveInstant !== null && !archivePast)
   async function confirm() {
-    if (!preview.data || busy) return
+    if (!preview.data || busy || !archiveReady) return
     setBusy(true)
-    const ok = await run(() => api.sprintCommand(sprint.id, 'complete', preview.data.sprintVersion, newIdempotencyKey(), target))
+    const archive: SprintArchiveChoice = archiveMode === 'AT' && archiveInstant ? { mode: 'AT', at: archiveInstant } : { mode: archiveMode === 'IMMEDIATE' ? 'IMMEDIATE' : 'NONE' }
+    const ok = await run(() => api.sprintCommand(sprint.id, 'complete', preview.data.sprintVersion, newIdempotencyKey(), target, archive))
     setBusy(false)
     if (ok) onDone()
   }
@@ -456,9 +520,26 @@ function CloseDialog({ sprint, run, onDone }: { sprint: Sprint; run: Run; onDone
             ))}
           </fieldset>
           <small className="field-hint">{t('planning.close.note')}</small>
+          <fieldset className="filter-group">
+            <legend>{t('planning.close.archive')}</legend>
+            {(['NONE', 'IMMEDIATE', 'AT'] as const).map((mode) => (
+              <label key={mode} className="filter-choice">
+                <input type="radio" name="archive" checked={archiveMode === mode} onChange={() => setArchiveMode(mode)} />
+                <span>{t(`planning.close.archive.${mode === 'AT' ? 'at' : mode === 'NONE' ? 'none' : 'immediate'}`)}</span>
+              </label>
+            ))}
+            {archiveMode === 'AT' ? (
+              <label className="field">
+                <span>{t('planning.close.archive.when', { zone })}</span>
+                <input type="datetime-local" value={archiveLocal} onChange={(event) => setArchiveLocal(event.target.value)} />
+              </label>
+            ) : null}
+            {archivePast ? <small className="form-error" role="alert">{t('planning.close.archive.past')}</small> : null}
+            <small className="field-hint">{t('planning.close.archive.note')}</small>
+          </fieldset>
           <div className="dialog-actions">
             <Button type="button" variant="secondary" onClick={onDone}>{t('view.cancel')}</Button>
-            <Button type="button" disabled={busy} onClick={() => void confirm()}>{t('planning.close.confirm')}</Button>
+            <Button type="button" disabled={busy || !archiveReady} onClick={() => void confirm()}>{t('planning.close.confirm')}</Button>
           </div>
         </div>
       ) : null}
@@ -518,12 +599,13 @@ function MilestoneCard({ milestone, projectId, workspaceId, manage, run }: { mil
   const { t } = useI18n()
   const queryClient = useQueryClient()
   const { tickets } = useProjectRows(projectId, workspaceId)
+  const now = useNow()
   const [expanded, setExpanded] = useState(false)
   const setState = (state: Milestone['state']) => void run(() => api.updateMilestone(milestone.id, { expectedVersion: milestone.version, state }))
   const linked = tickets.filter((ticket) => ticket.hierarchyKind !== 'EPIC' && ticket.milestones.some((item) => item.id === milestone.id) && ticket.stateCategory !== 'CANCELED')
   const done = linked.filter((ticket) => ticket.stateCategory === 'DONE').length
   const percent = linked.length === 0 ? 0 : Math.round((done / linked.length) * 100)
-  const today = localDay(new Date().toISOString())
+  const today = localDay(new Date(now).toISOString())
   const remaining = milestone.targetOn ? daySpan(today, milestone.targetOn) : null
   const reachedDay = milestone.reachedAt ? localDay(milestone.reachedAt) : null
   const reachedDelta = milestone.state === 'REACHED' && reachedDay && milestone.targetOn ? daySpan(reachedDay, milestone.targetOn) : null

@@ -19,8 +19,8 @@ export function canCreateChannel(workspaceRole: string | undefined, project?: { 
 }
 
 /**
- * Changing a channel's visibility or description: the channel's MANAGER, the admin of its Project, or a
- * Workspace owner/admin for a public Workspace-wide channel.
+ * Changing a channel's description (and a private channel's member-invitation switch): the channel's
+ * MANAGER, the admin of its Project, or a Workspace owner/admin for a public Workspace-wide channel.
  */
 export function canChangeChannel(
   channel: { role?: string | null; projectId?: string | null; visibility: string },
@@ -30,6 +30,28 @@ export function canChangeChannel(
   if (channel.role === 'MANAGER') return true
   if (channel.projectId) return project?.canManage === true
   return channel.visibility !== 'PRIVATE' && isWorkspaceManager(workspaceRole)
+}
+
+/**
+ * Changing a channel's visibility. Making a private channel public shows its past messages to people
+ * who could not read them, so only its MANAGER may; making a public one private is for everyone who
+ * runs the channel.
+ */
+export function canChangeVisibility(
+  channel: { role?: string | null; projectId?: string | null; visibility: string },
+  workspaceRole: string | undefined,
+  project?: { canManage?: boolean } | null,
+): boolean {
+  if (channel.visibility === 'PRIVATE') return channel.role === 'MANAGER'
+  return canChangeChannel(channel, workspaceRole, project)
+}
+
+/** Taking people out of a private channel and setting its invitation switch: who sets its roles. */
+export function canRunChannelPeople(
+  channel: { role?: string | null; projectId?: string | null; visibility: string },
+  project?: { canManage?: boolean } | null,
+): boolean {
+  return canSetChannelRoles(channel, project)
 }
 
 /**

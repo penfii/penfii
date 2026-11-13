@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { QueryError } from '../../ui/QueryError'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../api'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -35,7 +36,8 @@ export function ConnectedApps() {
       <p className="field-hint">{t('apps.lead')}</p>
       {dialog}
       {error ? <p className="form-error">{error}</p> : null}
-      {items.length === 0 ? <p>{t('apps.none')}</p> : null}
+      {grants.isError ? <QueryError query={grants} compact /> : null}
+      {grants.isSuccess && items.length === 0 ? <p>{t('apps.none')}</p> : null}
       <ul className="plain-list">
         {items.map((grant) => (
           <li key={grant.id}>

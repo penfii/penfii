@@ -18,24 +18,71 @@ use crate::paging;
 use crate::visibility;
 use crate::work_history::description_text;
 
-pub fn kinds_for_filter(filter: &str) -> Result<Option<Vec<&'static str>>, CoreError> {
-    Ok(match filter {
-        "" | "all" => None,
-        "mentions" => Some(vec!["mention.user"]),
-        "replies" => Some(vec!["reply.direct", "thread.reply"]),
-        "watching" => Some(vec![
-            "thread.reply",
+/// The kinds one Filter type stands for. `watching` is no longer shown as a type; it is kept so an
+/// old `?filter=watching` call still works, and `thread.reply` belongs to `replies` only.
+fn kinds_of_type(name: &str) -> Result<&'static [&'static str], CoreError> {
+    Ok(match name {
+        "mentions" => &["mention.user"],
+        "replies" => &["reply.direct", "thread.reply"],
+        "watching" => &[
             "ticket.commented",
             "ticket.status_changed",
             "ticket.field_changed",
             "sprint.started",
             "sprint.closed",
-        ]),
-        "reminders" => Some(vec!["reminder.due"]),
-        "invitations" => Some(vec!["channel.invited"]),
-        "assignments" => Some(vec!["ticket.assigned"]),
+        ],
+        "reminders" => &["reminder.due"],
+        "invitations" => &["channel.invited"],
+        "assignments" => &["ticket.assigned"],
         _ => return Err(CoreError::validation("unknown Inbox filter")),
     })
+}
+
+/// `filter` is one type or several separated by commas. Several types are a union of their kinds
+/// (OR; one notification has one kind, so it appears once). No type, or `all`, is every kind,
+/// including the kinds that belong to no type (`dependency.released`, ...).
+pub fn kinds_for_filter(filter: &str) -> Result<Option<Vec<&'static str>>, CoreError> {
+    let mut kinds: Vec<&'static str> = Vec::new();
+    let mut any_type = false;
+    for name in filter.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+        if name == "all" {
+            continue;
+        }
+        any_type = true;
+        for kind in kinds_of_type(name)? {
+            if !kinds.contains(kind) {
+                kinds.push(kind);
+            }
+        }
+    }
+    Ok(any_type.then_some(kinds))
+}
+
+/// Which list is read: the Inbox (not archived) or the archive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum View {
+    Inbox,
+    Archived,
+}
+
+impl View {
+    pub fn parse(value: Option<&str>) -> Result<Self, CoreError> {
+        match value {
+            None | Some("") | Some("inbox") => Ok(Self::Inbox),
+            Some("archived") => Ok(Self::Archived),
+            Some(_) => Err(CoreError::validation("unknown Inbox view")),
+        }
+    }
+}
+
+/// What `list` is asked for. The read axis is `unread_only` (the `state` parameter); the archive
+/// has no read or snooze axis, so both are ignored there.
+#[derive(Debug, Clone, Copy)]
+pub struct ListOptions<'a> {
+    pub view: View,
+    pub filter: &'a str,
+    pub unread_only: bool,
+    pub include_snoozed: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -45,6 +92,9 @@ pub struct InboxItem {
     pub kind: String,
     pub state: String,
     pub snoozed_until: Option<DateTime<Utc>>,
+    /// When it was archived; only archived items have it. Items archived before the column existed
+    /// report `created_at`.
+    pub archived_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub version: i64,
     pub actor: Option<Value>,
@@ -68,9 +118,20 @@ struct Row_ {
     kind: String,
     state: String,
     snoozed_until: Option<DateTime<Utc>>,
+    /// The position the list is ordered and paged by: `created_at`, or for the archive when it was
+    /// archived (`created_at` for rows archived before that was recorded).
+    sort_at: DateTime<Utc>,
+    archived_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
     version: i64,
     decision: Value,
+}
+
+impl Row_ {
+    /// When it was archived, falling back to creation for rows archived before it was recorded.
+    fn sort_at_or_archived(&self) -> DateTime<Utc> {
+        self.archived_at.unwrap_or(self.created_at)
+    }
 }
 
 fn subject_of(decision: &Value) -> Option<(String, Uuid)> {
@@ -107,35 +168,50 @@ async fn visible_subjects(
     Ok(visible)
 }
 
+struct RowQuery<'a> {
+    view: View,
+    kinds: Option<&'a [&'a str]>,
+    unread_only: bool,
+    include_snoozed: bool,
+    after: Option<(DateTime<Utc>, Uuid)>,
+    limit: i64,
+}
+
 async fn load_rows(
     conn: &mut PgConnection,
     actor: Uuid,
     workspace_id: Uuid,
-    kinds: Option<&[&str]>,
-    unread_only: bool,
-    after: Option<(DateTime<Utc>, Uuid)>,
-    limit: i64,
+    q: &RowQuery<'_>,
 ) -> Result<Vec<Row_>, CoreError> {
-    let kinds: Option<Vec<String>> = kinds.map(|k| k.iter().map(|s| (*s).to_owned()).collect());
+    let kinds: Option<Vec<String>> = q.kinds.map(|k| k.iter().map(|s| (*s).to_owned()).collect());
+    let archived = q.view == View::Archived;
+    // The archive is ordered by when it was archived. The inbox is ordered by creation, so its
+    // `sort_at` is `created_at`.
     let rows = sqlx::query(
-        "SELECT i.id, i.notification_kind, i.state, i.snoozed_until, i.created_at, i.version, r.decision
+        "SELECT i.id, i.notification_kind, i.state, i.snoozed_until, i.created_at, i.version, r.decision,
+                i.archived_at,
+                CASE WHEN $8 THEN COALESCE(i.archived_at, i.created_at) ELSE i.created_at END AS sort_at
          FROM penfii.inbox_items i
          JOIN penfii.event_recipients r ON r.event_id=i.event_id AND r.recipient_id=i.recipient_id AND r.notification_kind=i.notification_kind
-         WHERE i.recipient_id=$1 AND i.workspace_id=$2 AND i.state <> 'ARCHIVED'
-           AND (i.snoozed_until IS NULL OR i.snoozed_until <= now())
+         WHERE i.recipient_id=$1 AND i.workspace_id=$2
+           AND (CASE WHEN $8 THEN i.state = 'ARCHIVED' ELSE i.state <> 'ARCHIVED' END)
+           AND ($8 OR $9 OR i.snoozed_until IS NULL OR i.snoozed_until <= now())
            AND ($3::text[] IS NULL OR i.notification_kind = ANY($3))
-           AND (NOT $4 OR i.state = 'UNREAD')
-           AND ($5::timestamptz IS NULL OR (i.created_at, i.id) < ($5, $6))
-         ORDER BY i.created_at DESC, i.id DESC
+           AND ($8 OR NOT $4 OR i.state = 'UNREAD')
+           AND ($5::timestamptz IS NULL
+                OR (CASE WHEN $8 THEN COALESCE(i.archived_at, i.created_at) ELSE i.created_at END, i.id) < ($5, $6))
+         ORDER BY sort_at DESC, i.id DESC
          LIMIT $7",
     )
     .bind(actor)
     .bind(workspace_id)
     .bind(kinds)
-    .bind(unread_only)
-    .bind(after.map(|a| a.0))
-    .bind(after.map(|a| a.1).unwrap_or(Uuid::nil()))
-    .bind(limit)
+    .bind(q.unread_only)
+    .bind(q.after.map(|a| a.0))
+    .bind(q.after.map(|a| a.1).unwrap_or(Uuid::nil()))
+    .bind(q.limit)
+    .bind(archived)
+    .bind(q.include_snoozed)
     .fetch_all(&mut *conn)
     .await?;
     rows.iter()
@@ -145,6 +221,8 @@ async fn load_rows(
                 kind: row.try_get("notification_kind")?,
                 state: row.try_get("state")?,
                 snoozed_until: row.try_get("snoozed_until")?,
+                sort_at: row.try_get("sort_at")?,
+                archived_at: row.try_get("archived_at")?,
                 created_at: row.try_get("created_at")?,
                 version: row.try_get("version")?,
                 decision: row.try_get("decision")?,
@@ -157,13 +235,12 @@ pub async fn list(
     pool: &PgPool,
     actor: Uuid,
     workspace_id: Uuid,
-    filter: &str,
-    unread_only: bool,
+    options: ListOptions<'_>,
     cursor: Option<&str>,
     limit: Option<i64>,
 ) -> Result<InboxPage, CoreError> {
     let limit = paging::require_limit(limit, 30, 100, "limit is 1 to 100")?;
-    let kinds = kinds_for_filter(filter)?;
+    let kinds = kinds_for_filter(options.filter)?;
     let mut conn = pool.acquire().await?;
     access::require_member(&mut conn, workspace_id, actor).await?;
     let mut after = cursor.map(paging::decode_cursor_hex).transpose()?;
@@ -175,10 +252,14 @@ pub async fn list(
             &mut conn,
             actor,
             workspace_id,
-            kinds.as_deref(),
-            unread_only,
-            after,
-            limit * 2,
+            &RowQuery {
+                view: options.view,
+                kinds: kinds.as_deref(),
+                unread_only: options.unread_only,
+                include_snoozed: options.include_snoozed,
+                after,
+                limit: limit * 2,
+            },
         )
         .await?;
         if rows.is_empty() {
@@ -187,14 +268,14 @@ pub async fn list(
         }
         let full = rows.len() as i64 >= limit * 2;
         let visible = visible_subjects(&mut conn, actor, &rows).await?;
-        let last = rows.last().map(|r| (r.created_at, r.id));
+        let last = rows.last().map(|r| (r.sort_at, r.id));
         let mut stopped = false;
         for row in rows {
             let keep = subject_of(&row.decision).is_some_and(|s| visible.contains(&s));
             if !keep {
                 continue;
             }
-            let position = (row.created_at, row.id);
+            let position = (row.sort_at, row.id);
             collected.push(row);
             if collected.len() as i64 == limit {
                 next_cursor = Some(paging::encode_cursor_hex(position.0, position.1));
@@ -233,7 +314,20 @@ pub async fn unread(
     actor: Uuid,
     workspace_id: Uuid,
 ) -> Result<(i64, bool), CoreError> {
-    let rows = load_rows(conn, actor, workspace_id, None, true, None, 101).await?;
+    let rows = load_rows(
+        conn,
+        actor,
+        workspace_id,
+        &RowQuery {
+            view: View::Inbox,
+            kinds: None,
+            unread_only: true,
+            include_snoozed: false,
+            after: None,
+            limit: 101,
+        },
+    )
+    .await?;
     let capped = rows.len() > 100;
     let rows: Vec<Row_> = rows.into_iter().take(100).collect();
     let visible = visible_subjects(conn, actor, &rows).await?;
@@ -269,23 +363,29 @@ async fn decorate(
                 .bind(id)
                 .fetch_optional(&mut *conn)
                 .await?
-                .map(|r| {
-                    format!(
-                        "{} {}",
-                        r.get::<String, _>("public_key"),
-                        r.get::<String, _>("title")
-                    )
-                }),
+                .map(|r| -> Result<_, sqlx::Error> {
+                    Ok({
+                        format!(
+                            "{} {}",
+                            r.try_get::<String, _>("public_key")?,
+                            r.try_get::<String, _>("title")?
+                        )
+                    })
+                })
+                .transpose()?,
             "MESSAGE" => {
                 sqlx::query("SELECT body FROM penfii.messages WHERE id=$1 AND deleted_at IS NULL")
                     .bind(id)
                     .fetch_optional(&mut *conn)
                     .await?
-                    .map(|r| {
-                        let text = description_text(&r.get::<Value, _>("body"));
-                        let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-                        flat.chars().take(120).collect()
+                    .map(|r| -> Result<_, sqlx::Error> {
+                        Ok({
+                            let text = description_text(&r.try_get::<Value, _>("body")?);
+                            let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                            flat.chars().take(120).collect()
+                        })
                     })
+                    .transpose()?
             }
             "PROJECT" => {
                 sqlx::query_scalar("SELECT name FROM penfii.projects WHERE id=$1")
@@ -318,7 +418,7 @@ async fn decorate(
                 .bind(user)
                 .fetch_optional(&mut *conn)
                 .await?
-                .map(|r| json!({"id": r.get::<Uuid, _>("id"), "name": r.get::<String, _>("display_name")})),
+                .map(|r| -> Result<_, sqlx::Error> { Ok(json!({"id": r.try_get::<Uuid, _>("id")?, "name": r.try_get::<String, _>("display_name")?})) }).transpose()?,
             None => None,
         };
         let link = match kind.as_str() {
@@ -361,11 +461,13 @@ async fn decorate(
             map.remove("actorId");
         }
         let _ = actor;
+        let archived_at = (row.state == "ARCHIVED").then(|| row.sort_at_or_archived());
         out.push(InboxItem {
             id: row.id,
             kind: row.kind,
             state: row.state,
             snoozed_until: row.snoozed_until,
+            archived_at,
             created_at: row.created_at,
             version: row.version,
             actor: actor_value,
@@ -395,16 +497,22 @@ pub async fn command(
 ) -> Result<Value, CoreError> {
     let mut tx = pool.begin().await?;
     let row = sqlx::query(
-        "SELECT state, snoozed_until, version FROM penfii.inbox_items WHERE id=$1 AND recipient_id=$2 FOR UPDATE",
+        "SELECT state, snoozed_until, archived_at, version FROM penfii.inbox_items WHERE id=$1 AND recipient_id=$2 FOR UPDATE",
     )
     .bind(item_id)
     .bind(actor)
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(CoreError::NotFound)?;
-    let (state, snoozed, version): (String, Option<DateTime<Utc>>, i64) = (
+    let (state, snoozed, archived_at, version): (
+        String,
+        Option<DateTime<Utc>>,
+        Option<DateTime<Utc>>,
+        i64,
+    ) = (
         row.try_get("state")?,
         row.try_get("snoozed_until")?,
+        row.try_get("archived_at")?,
         row.try_get("version")?,
     );
     if version != expected_version {
@@ -422,6 +530,10 @@ pub async fn command(
         Command::Archive => ("ARCHIVED", None),
         Command::Unarchive => ("READ", None),
         Command::Snooze(until) => {
+            // An archived item comes back by hand (`unarchive`), not by a timer.
+            if state == "ARCHIVED" {
+                return Err(CoreError::validation("an archived item cannot be snoozed"));
+            }
             if until <= Utc::now() {
                 return Err(CoreError::validation("snooze until a time in the future"));
             }
@@ -429,19 +541,43 @@ pub async fn command(
             ("UNREAD", Some(until))
         }
     };
-    let (version, state_out, snooze_out) = if next_state == state && next_snooze == snoozed {
-        (version, state, snoozed)
+    // Recorded when it is archived, kept while it stays archived, cleared when it leaves the archive.
+    let next_archived = if next_state == "ARCHIVED" {
+        Some(match archived_at {
+            Some(at) => at,
+            // Stored, so it is the database's clock.
+            None => {
+                sqlx::query_scalar::<_, DateTime<Utc>>("SELECT now()")
+                    .fetch_one(&mut *tx)
+                    .await?
+            }
+        })
     } else {
-        sqlx::query("UPDATE penfii.inbox_items SET state=$2, snoozed_until=$3, version=version+1 WHERE id=$1")
-            .bind(item_id)
-            .bind(next_state)
-            .bind(next_snooze)
-            .execute(&mut *tx)
-            .await?;
-        (version + 1, next_state.to_owned(), next_snooze)
+        None
+    };
+    let (version, state_out, snooze_out, archived_out) = if next_state == state
+        && next_snooze == snoozed
+    {
+        (version, state, snoozed, archived_at)
+    } else {
+        sqlx::query("UPDATE penfii.inbox_items SET state=$2, snoozed_until=$3, archived_at=$4, version=version+1 WHERE id=$1")
+                .bind(item_id)
+                .bind(next_state)
+                .bind(next_snooze)
+                .bind(next_archived)
+                .execute(&mut *tx)
+                .await?;
+        (
+            version + 1,
+            next_state.to_owned(),
+            next_snooze,
+            next_archived,
+        )
     };
     tx.commit().await?;
-    Ok(json!({"id": item_id, "state": state_out, "snoozedUntil": snooze_out, "version": version}))
+    Ok(
+        json!({"id": item_id, "state": state_out, "snoozedUntil": snooze_out, "archivedAt": archived_out, "version": version}),
+    )
 }
 
 pub async fn read_all(

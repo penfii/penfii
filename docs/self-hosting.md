@@ -40,18 +40,19 @@ There is no sign-up page. Create the first account and workspace once, with the 
 
 ```sh
 docker compose run --rm admin-cli bootstrap \
-  --email owner@example.com --password 'choose-a-long-password' \
-  --display-name Owner --workspace-name Penfii --time-zone Asia/Seoul
+  --email owner@example.com --display-name Owner --workspace-name Penfii --time-zone Asia/Seoul
 ```
 
-A password must be 15 to 128 characters and must not be a known weak password. `bootstrap` refuses to run when any user already exists.
+The command asks for the password without showing it (and again to confirm). In a script, pipe it in instead: `printf '%s' "$PW" | docker compose run --rm -T admin-cli bootstrap ... --password-stdin`. Avoid `--password <value>`: it stays in the shell history and the process list. A password must be 15 to 128 characters and must not be a known weak password. `bootstrap` refuses to run when any user already exists.
 
 ### Adding other people
 
-Penfii does not send e-mail, and how an invitation reaches a person is not decided yet (see [Known limitations](known-limitations.md#invitations-and-e-mail)). What exists today:
+An invitation is a link, and sending it by e-mail is optional:
 
-- `admin-cli create-user` (same arguments as `bootstrap`) creates another account **with a workspace of its own**; it does not add the person to an existing workspace.
-- Owners and admins can create invitations in the web app. The invitation link token is returned to the inviter only when the server runs with `PENFII_DEV_RETURN_INVITE_TOKEN=1`, a development switch that should not be left on for a network you do not control.
+- Owners and admins invite people in the web app (Administration, Invitations). The app shows the invitation link right away; copy it and pass it on. This works without any e-mail setup. The link is not stored and cannot be shown again: "New link" in the list makes a new one, and the previous one stops working.
+- To have Penfii mail the link as well, set the `PENFII_SMTP_*` variables in `docker/.env` (see [E-mail](configuration.md#e-mail)) and set `PENFII_PUBLIC_URL` to the address people really open: the links in the mail start with it. A mail that fails to send does not fail the invitation.
+- With e-mail on, people who forget their password reset it themselves from the login page; without e-mail an operator sets it with `admin-cli user-set-password`.
+- `admin-cli create-user` creates a new account and adds it to an existing workspace (`--workspace <id>`, from `admin-cli workspace-list`; `--role` defaults to `MEMBER`). For an account that already exists, use `admin-cli workspace-add-member`. See [Operations](operations.md#adding-people-to-a-workspace).
 
 ## Check that it works
 
@@ -76,11 +77,14 @@ The stack keeps its data in named volumes. They survive `docker compose down` an
 
 ### Backup
 
-Back up PostgreSQL and the file store together; a ticket refers to files by id. For PostgreSQL:
+Back up PostgreSQL and the file store together; a ticket refers to files by id. PostgreSQL is a custom-format dump (roles are not in it):
 
 ```sh
-docker compose exec -T postgres pg_dump -U penfii penfii > penfii.sql
+docker compose exec -T postgres pg_dump -U penfii -Fc -f /tmp/penfii.dump penfii
+docker compose cp postgres:/tmp/penfii.dump ./penfii.dump
 ```
+
+`penfii` here is the bootstrap superuser (`POSTGRES_USER`), which can read every table. The runtime role cannot.
 
 For the file store, copy the `penfii_penfii-files` volume, for example:
 
@@ -89,7 +93,19 @@ docker run --rm -v penfii_penfii-files:/data -v "$PWD":/backup alpine \
   tar czf /backup/penfii-files.tar.gz -C /data .
 ```
 
-A tested restore procedure is not written yet (see [Not written yet](README.md#not-written-yet)). Try your backups on a throwaway copy before you rely on them.
+File objects are removed after the database commit, by a background consumer, and only for a bucket that does not use S3 Versioning. A dump taken in that gap can name a file whose object is still in the volume; restoring both from the same moment is the consistent pair. A failed delete is retried and can be given up (`admin-cli events-dead`, consumer `storage`) and then retried (`events-retry`).
+
+### Restore
+
+This checks that the database itself comes back. It does not start core-api against the restored data: that process would send mail, push and talk to object storage and OpenSearch.
+
+Roles are not in the dump. On the cluster you restore into, create them first (`admin-cli db-provision` with `PENFII_PROVISION_DATABASE_URL`), or restore into a scratch database that already has the owner role. `pg_restore` keeps owners when those roles exist; a missing owner role makes it restore objects as the user who runs the restore. Re-run provisioning after a restore so the runtime role's grants and timeouts exist. The script `docker/scripts/restore-check.sh` does this against a scratch server and checks migration history, row counts and that the runtime role can read.
+
+Point-in-time recovery (WAL archiving) is not set up here.
+
+### Upgrading an installation that used one database role
+
+Compose's `db-setup` does not move ownership. For a volume created before the owner and runtime roles existed, set `PENFII_DB_OWNER_USER=penfii` and `PENFII_DB_OWNER_PASSWORD` to `POSTGRES_PASSWORD`, set a new `PENFII_DB_RUNTIME_PASSWORD`, and start as usual. `db-provision` leaves the existing owner role as it is (it may still be a superuser) and adds the runtime role. Moving ownership off the superuser (`REASSIGN OWNED`) is optional and is not done by Compose.
 
 ## Network and TLS
 
@@ -116,7 +132,7 @@ cd docker
 docker compose up -d --build
 ```
 
-core-api applies pending database migrations when it starts. This update procedure has not been tested across releases, and there is no upgrade guarantee between 0.x releases, so back up first and read the [changelog](../CHANGELOG.md). A database made by a development build from before the schema was consolidated into `database/migrations/0001_initial.sql` cannot be upgraded in place and has to be recreated.
+`docker compose up` runs the one-shot `db-setup` service again before core-api starts (it is started again when its image is unchanged and re-created when the image changed), and `db-setup` applies pending database migrations with the schema owner's credential. core-api itself never migrates: it checks the history and refuses to start when it is behind. This update procedure has not been tested across releases, and there is no upgrade guarantee between 0.x releases, so back up first and read the [changelog](../CHANGELOG.md). A database made by a development build from before the schema was consolidated into `database/migrations/0001_initial.sql` cannot be upgraded in place and has to be recreated.
 
 ## Stopping and removing
 

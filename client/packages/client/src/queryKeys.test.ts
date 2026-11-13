@@ -53,3 +53,24 @@ describe('query keys', () => {
     expect(stale(queryKeys.space('w'))).toBe(false)
   })
 })
+
+describe('query keys live in queryKeys.ts', () => {
+  it('has no screen writing a key of its own, which no test of the keys would protect', async () => {
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const root = path.dirname(new URL(import.meta.url).pathname)
+    const found: string[] = []
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name)
+        if (entry.isDirectory()) walk(full)
+        else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) && entry.name !== 'queryKeys.ts') {
+          const text = fs.readFileSync(full, 'utf8')
+          if (/queryKey:\s*\[\s*['"`]/.test(text) || /\bKEY\s*=\s*\[\s*['"`]/.test(text)) found.push(path.relative(root, full))
+        }
+      }
+    }
+    walk(root)
+    expect(found).toEqual([])
+  })
+})

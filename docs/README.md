@@ -30,7 +30,6 @@ Penfii is at v0.1.0, an early release. These documents describe the repository a
 These are planned and are not covered anywhere yet:
 
 - An upgrade procedure between releases.
-- A backup and restore walk-through that has been tested end to end.
 - A reference for the HTTP API beyond [`server/api/openapi.json`](../server/api/openapi.json).
 - End-user documentation for the web app.
 - A documented release process. Changes per release are listed in the [changelog](../CHANGELOG.md).

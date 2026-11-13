@@ -735,24 +735,39 @@ impl AuthProviders {
             .map(|base| format!("{base}/v1/auth/{key}/callback"))
     }
 
-    /// Provider variables are `PENFII_AUTH_<NAME>_CLIENT_ID` and
-    /// `PENFII_AUTH_<NAME>_CLIENT_SECRET`; a provider with an incomplete set is not offered.
-    pub fn from_env(transport: Arc<dyn Transport>) -> Self {
-        let env = |name: &str| {
-            std::env::var(name)
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-        };
+    /// Provider variables are `PENFII_AUTH_<NAME>_CLIENT_ID` and `PENFII_AUTH_<NAME>_CLIENT_SECRET`, set
+    /// together or not at all: one without the other, a provider that cannot be used as configured, or a
+    /// switch that is not a switch stops the start (see [`crate::config`]).
+    pub fn from_env(transport: Arc<dyn Transport>) -> Result<Self, String> {
+        Self::from_lookup(transport, &crate::config::process_env)
+    }
+
+    pub fn from_lookup(
+        transport: Arc<dyn Transport>,
+        lookup: crate::config::Lookup<'_>,
+    ) -> Result<Self, String> {
+        use crate::config::{boolean, get, group};
+        let env = |name: &str| get(lookup, name);
         let flag =
-            |name: &str| env(name).is_some_and(|value| matches!(value.as_str(), "1" | "true"));
+            |name: &str| -> Result<bool, String> { Ok(boolean(lookup, name)?.unwrap_or(false)) };
         let mut set = Self::new(env("PENFII_PUBLIC_URL"));
-        let pair = |name: &str| {
+        // `(client id, the name of the secret's variable, the secret)`.
+        let pair = |name: &str, what: &str| -> Result<Option<(String, String, String)>, String> {
             let id = format!("PENFII_AUTH_{name}_CLIENT_ID");
             let secret = format!("PENFII_AUTH_{name}_CLIENT_SECRET");
-            Some((env(&id)?, secret.clone(), env(&secret)?))
+            let Some(values) = group(lookup, what, &[&id, &secret])? else {
+                return Ok(None);
+            };
+            let [id_value, secret_value]: [String; 2] = values
+                .try_into()
+                .map_err(|_| format!("{what}: client id and secret are both needed"))?;
+            Ok(Some((id_value, secret, secret_value)))
         };
-        if let Some((id, secret_ref, secret)) = pair("GOOGLE") {
+        // The switches are read whether or not the provider is set up, so a typo is found either way.
+        let google_signup = flag("PENFII_AUTH_GOOGLE_SIGNUP")?;
+        let microsoft_signup = flag("PENFII_AUTH_MICROSOFT_SIGNUP")?;
+        let github_signup = flag("PENFII_AUTH_GITHUB_SIGNUP")?;
+        if let Some((id, secret_ref, secret)) = pair("GOOGLE", "Google sign-in")? {
             set.add(Arc::new(
                 OidcProvider::google(
                     id,
@@ -761,10 +776,10 @@ impl AuthProviders {
                     env("PENFII_AUTH_GOOGLE_HOSTED_DOMAIN"),
                     transport.clone(),
                 )
-                .with_signup(flag("PENFII_AUTH_GOOGLE_SIGNUP")),
+                .with_signup(google_signup),
             ));
         }
-        if let Some((id, secret_ref, secret)) = pair("MICROSOFT") {
+        if let Some((id, secret_ref, secret)) = pair("MICROSOFT", "Microsoft sign-in")? {
             let tenant =
                 env("PENFII_AUTH_MICROSOFT_TENANT").unwrap_or_else(|| "organizations".into());
             let allowed = env("PENFII_AUTH_MICROSOFT_ALLOWED_TENANTS").map(|list| {
@@ -775,25 +790,15 @@ impl AuthProviders {
             });
             let multi = matches!(tenant.as_str(), "common" | "organizations" | "consumers");
             // An unpinned tenant endpoint is only usable with an operator tenant allow-list.
-            if !multi || allowed.as_ref().is_some_and(|list| !list.is_empty()) {
-                set.add(Arc::new(
-                    OidcProvider::microsoft(
-                        id,
-                        secret_ref,
-                        secret,
-                        tenant,
-                        allowed,
-                        transport.clone(),
-                    )
-                    .with_signup(flag("PENFII_AUTH_MICROSOFT_SIGNUP")),
-                ));
-            } else {
-                tracing::warn!(
-                    "Microsoft sign-in is off: set PENFII_AUTH_MICROSOFT_TENANT to one tenant or PENFII_AUTH_MICROSOFT_ALLOWED_TENANTS"
-                );
+            if multi && allowed.as_ref().is_none_or(|list| list.is_empty()) {
+                return Err("Microsoft sign-in is set up but cannot be used: set PENFII_AUTH_MICROSOFT_TENANT to one tenant or PENFII_AUTH_MICROSOFT_ALLOWED_TENANTS".into());
             }
+            set.add(Arc::new(
+                OidcProvider::microsoft(id, secret_ref, secret, tenant, allowed, transport.clone())
+                    .with_signup(microsoft_signup),
+            ));
         }
-        if let Some((id, secret_ref, secret)) = pair("GITHUB") {
+        if let Some((id, secret_ref, secret)) = pair("GITHUB", "GitHub sign-in")? {
             set.add(Arc::new(GithubProvider::new(
                 id,
                 secret_ref,
@@ -809,22 +814,34 @@ impl AuthProviders {
                 .map(str::trim)
                 .filter(|slug| !slug.is_empty())
             {
-                let upper = slug.to_ascii_uppercase().replace('-', "_");
-                let valid = slug
+                if !slug
                     .chars()
-                    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-');
-                let (Some(issuer), Some((id, secret_ref, secret)), true) = (
-                    env(&format!("PENFII_AUTH_OIDC_{upper}_ISSUER")),
-                    pair(&format!("OIDC_{upper}")),
-                    valid,
-                ) else {
-                    tracing::warn!("generic OIDC provider {slug:?} is incomplete and is off");
-                    continue;
+                    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+                {
+                    return Err(format!(
+                        "PENFII_AUTH_OIDC_PROVIDERS: {slug:?} is not a name (lower-case letters, digits and -)"
+                    ));
+                }
+                let upper = slug.to_ascii_uppercase().replace('-', "_");
+                let issuer_name = format!("PENFII_AUTH_OIDC_{upper}_ISSUER");
+                let Some(issuer) = env(&issuer_name) else {
+                    return Err(format!(
+                        "generic OIDC provider {slug:?} is listed in PENFII_AUTH_OIDC_PROVIDERS but {issuer_name} is not set"
+                    ));
+                };
+                let Some((id, secret_ref, secret)) = pair(
+                    &format!("OIDC_{upper}"),
+                    &format!("generic OIDC provider {slug:?}"),
+                )?
+                else {
+                    return Err(format!(
+                        "generic OIDC provider {slug:?} is listed in PENFII_AUTH_OIDC_PROVIDERS but has no client id and secret"
+                    ));
                 };
                 if !issuer.starts_with("https://") {
-                    tracing::warn!("generic OIDC provider {slug:?} needs an https issuer");
-                    continue;
+                    return Err(format!("{issuer_name} must be an https:// URL"));
                 }
+                let signup = flag(&format!("PENFII_AUTH_OIDC_{upper}_SIGNUP"))?;
                 set.add(Arc::new(
                     OidcProvider::new(
                         OidcConfig {
@@ -844,15 +861,15 @@ impl AuthProviders {
                         },
                         transport.clone(),
                     )
-                    .with_signup(flag(&format!("PENFII_AUTH_OIDC_{upper}_SIGNUP"))),
+                    .with_signup(signup),
                 ));
             }
         }
-        if flag("PENFII_AUTH_GITHUB_SIGNUP") {
+        if github_signup {
             tracing::warn!(
                 "PENFII_AUTH_GITHUB_SIGNUP is ignored: GitHub accounts are created by invitation only"
             );
         }
-        set
+        Ok(set)
     }
 }

@@ -45,7 +45,42 @@ pub struct McpContext {
     pub search: Option<SearchEngine>,
     /// Post-commit effects: the realtime channel the web app listens on.
     pub changes: tokio::sync::broadcast::Sender<penfii_core::ChangeNotice>,
-    limiter: Mutex<HashMap<Uuid, (Instant, u32)>>,
+    limiter: Mutex<RateLimiter>,
+}
+
+/// How long a grant's counting window is, and how long an idle grant is remembered.
+const WINDOW: Duration = Duration::from_secs(60);
+
+/// A fixed one-minute window per grant: protection, not a security boundary. A grant that has not called for a
+/// window is forgotten (swept once per window), so the map holds the grants that were active in the last
+/// minute or two, however many grants the process has seen since it started.
+struct RateLimiter {
+    windows: HashMap<Uuid, (Instant, u32)>,
+    swept_at: Instant,
+}
+
+impl RateLimiter {
+    fn new(now: Instant) -> Self {
+        Self {
+            windows: HashMap::new(),
+            swept_at: now,
+        }
+    }
+
+    /// Counts one call of `grant` at `now`; whether it is within `CALLS_PER_MINUTE`.
+    fn allow(&mut self, grant: Uuid, now: Instant) -> bool {
+        if now.duration_since(self.swept_at) >= WINDOW {
+            self.windows
+                .retain(|_, (started, _)| now.duration_since(*started) <= WINDOW);
+            self.swept_at = now;
+        }
+        let entry = self.windows.entry(grant).or_insert((now, 0));
+        if now.duration_since(entry.0) > WINDOW {
+            *entry = (now, 0);
+        }
+        entry.1 += 1;
+        entry.1 <= CALLS_PER_MINUTE
+    }
 }
 
 impl McpContext {
@@ -60,20 +95,14 @@ impl McpContext {
             oauth,
             search,
             changes,
-            limiter: Mutex::new(HashMap::new()),
+            limiter: Mutex::new(RateLimiter::new(Instant::now())),
         }
     }
 
-    /// A fixed one-minute window per grant: protection, not a security boundary.
+    /// See [`RateLimiter`]. A lock that a panic left poisoned is still usable: the limiter holds only counters.
     fn within_rate_limit(&self, grant: Uuid) -> bool {
-        let mut limiter = self.limiter.lock().unwrap();
-        let now = Instant::now();
-        let entry = limiter.entry(grant).or_insert((now, 0));
-        if now.duration_since(entry.0) > Duration::from_secs(60) {
-            *entry = (now, 0);
-        }
-        entry.1 += 1;
-        entry.1 <= CALLS_PER_MINUTE
+        let mut limiter = self.limiter.lock().unwrap_or_else(|e| e.into_inner());
+        limiter.allow(grant, Instant::now())
     }
 }
 
@@ -519,4 +548,49 @@ pub fn risk_classes() -> [RiskClass; 4] {
         RiskClass::Destructive,
         RiskClass::Administrative,
     ]
+}
+
+#[cfg(test)]
+mod limiter_tests {
+    use super::*;
+
+    #[test]
+    fn a_grant_is_limited_per_minute_and_idle_grants_are_forgotten() {
+        let start = Instant::now();
+        let mut limiter = RateLimiter::new(start);
+        let busy = Uuid::new_v4();
+
+        // The limit and the window are as before: 120 calls, then refused until the window ends.
+        for call in 1..=CALLS_PER_MINUTE {
+            assert!(limiter.allow(busy, start), "call {call}");
+        }
+        assert!(!limiter.allow(busy, start));
+        assert!(!limiter.allow(busy, start + Duration::from_secs(60)));
+        assert!(limiter.allow(busy, start + Duration::from_secs(61)));
+
+        // Many grants each call once, then nobody calls for two windows: the next call sweeps them.
+        for _ in 0..1000 {
+            limiter.allow(Uuid::new_v4(), start + Duration::from_secs(61));
+        }
+        assert_eq!(limiter.windows.len(), 1001);
+        let later = start + Duration::from_secs(61 + 130);
+        assert!(limiter.allow(busy, later));
+        assert_eq!(
+            limiter.windows.len(),
+            1,
+            "only the grant that is calling now is kept"
+        );
+    }
+
+    #[test]
+    fn a_poisoned_lock_does_not_stop_the_limiter() {
+        let limiter = Mutex::new(RateLimiter::new(Instant::now()));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = limiter.lock().unwrap();
+            panic!("a panic while the lock is held");
+        }));
+        assert!(limiter.is_poisoned());
+        let mut again = limiter.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(again.allow(Uuid::new_v4(), Instant::now()));
+    }
 }

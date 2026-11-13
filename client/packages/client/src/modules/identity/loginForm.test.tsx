@@ -51,4 +51,16 @@ describe('sign-in form', () => {
     await submit('whatever')
     expect(await screen.findByText('Too many attempts. Try again in 15 minutes')).toBeTruthy()
   })
+
+  it('asks to try again later when the database is unavailable, and not for any other 503', async () => {
+    api.login.mockRejectedValue(new ApiError(503, 'db_unavailable', 'the database is temporarily unavailable'))
+    mount()
+    await submit('whatever')
+    expect(await screen.findByText('The database is temporarily unavailable. Try again in a moment')).toBeTruthy()
+    cleanup()
+    api.login.mockRejectedValue(new ApiError(503, 'search_unavailable', 'search is down'))
+    mount()
+    await submit('whatever')
+    expect(await screen.findByText('The request could not be completed')).toBeTruthy()
+  })
 })

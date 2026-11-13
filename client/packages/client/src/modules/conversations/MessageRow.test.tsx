@@ -14,6 +14,7 @@ function message(patch: Partial<Message>): Message {
     streamSeq: 2,
     authorId: 'u1',
     authorDisplayName: 'Alice',
+    authorKind: 'HUMAN',
     threadRootId: null,
     replyToId: null,
     version: 1,

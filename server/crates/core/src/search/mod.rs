@@ -286,12 +286,17 @@ async fn resolve(
             .bind(parse_uuid(name).unwrap_or(Uuid::nil()))
             .fetch_all(&mut *conn)
             .await?;
-            let candidate_ids: Vec<Uuid> = rows.iter().map(|r| r.get("id")).collect();
-            let readable = visibility::channels(conn, actor, &candidate_ids).await?;
-            let matches: Vec<&sqlx::postgres::PgRow> = rows
+            let candidate_ids: Vec<Uuid> = rows
                 .iter()
-                .filter(|r| readable.contains(&r.get::<Uuid, _>("id")))
-                .collect();
+                .map(|r| r.try_get("id"))
+                .collect::<Result<_, sqlx::Error>>()?;
+            let readable = visibility::channels(conn, actor, &candidate_ids).await?;
+            let mut matches: Vec<&sqlx::postgres::PgRow> = Vec::new();
+            for r in &rows {
+                if readable.contains(&r.try_get::<Uuid, _>("id")?) {
+                    matches.push(r);
+                }
+            }
             match matches.len() {
                 0 => {
                     return Err(Invalid::new(
@@ -301,14 +306,16 @@ async fn resolve(
                     )
                     .into());
                 }
-                1 => ids.push(matches[0].get("id")),
+                1 => ids.push(matches[0].try_get("id")?),
                 _ => {
                     return Err(SearchError::Ambiguous {
                         token: format!("in:{value}"),
                         candidates: matches
                             .iter()
-                            .map(|r| (r.get("id"), r.get("name")))
-                            .collect(),
+                            .map(|r| -> Result<_, sqlx::Error> {
+                                Ok((r.try_get("id")?, r.try_get("name")?))
+                            })
+                            .collect::<Result<Vec<_>, sqlx::Error>>()?,
                     });
                 }
             }
@@ -358,7 +365,12 @@ async fn resolve(
                 _ => {
                     return Err(SearchError::Ambiguous {
                         token: format!("team:{value}"),
-                        candidates: rows.iter().map(|r| (r.get("id"), r.get("name"))).collect(),
+                        candidates: rows
+                            .iter()
+                            .map(|r| -> Result<_, sqlx::Error> {
+                                Ok((r.try_get("id")?, r.try_get("name")?))
+                            })
+                            .collect::<Result<Vec<_>, sqlx::Error>>()?,
                     });
                 }
             }
@@ -1333,9 +1345,14 @@ pub fn consumer(engine: &SearchEngine) -> Arc<index::SearchConsumer> {
 /// Keeps indices created and built while the process runs. A failure is logged by code and tried
 /// again; it never stops the process or any command.
 pub fn spawn_maintenance(engine: SearchEngine) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            let wait = match engine.indexer.backfill_all().await {
+    crate::lifecycle::spawn_worker("search maintenance", async move {
+        while !crate::lifecycle::stopping() {
+            let wait = match crate::lifecycle::guarded(
+                "search maintenance",
+                engine.indexer.backfill_all(),
+            )
+            .await
+            {
                 Ok(done) if done.is_empty() => 30,
                 Ok(_) => 1,
                 Err(error) => {
@@ -1343,7 +1360,7 @@ pub fn spawn_maintenance(engine: SearchEngine) -> tokio::task::JoinHandle<()> {
                     15
                 }
             };
-            tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+            crate::lifecycle::pause(std::time::Duration::from_secs(wait)).await;
         }
     })
 }

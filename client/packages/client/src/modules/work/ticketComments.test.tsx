@@ -45,6 +45,7 @@ function view() {
 }
 
 beforeEach(() => localStorage.setItem('penfii.locale', 'en-US'))
+beforeEach(() => api.me.mockResolvedValue({ id: 'u0', displayName: 'Me', email: 'me@example.com' }))
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()

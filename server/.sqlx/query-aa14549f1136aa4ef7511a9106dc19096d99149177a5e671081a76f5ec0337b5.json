@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM penfii.auth_throttle WHERE scope = $1 AND key_hash = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "aa14549f1136aa4ef7511a9106dc19096d99149177a5e671081a76f5ec0337b5"
+}

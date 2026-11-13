@@ -1,10 +1,19 @@
 import type {
+  AdminRecovery,
+  OffboardingImpact,
+  ChannelWithoutManager,
+  ManagedChannel,
+  ManagerRecovery,
+  ProjectWithoutAdmin,
   AuditPage,
   InvitationSummary,
   TeamMember,
   TeamRole,
   ProjectRole,
   TrashedTicket,
+  ArchivedTicket,
+  SprintArchiveChoice,
+  SprintArchiveSchedule,
   WorkspaceMember,
   BulkChange,
   BulkResult,
@@ -20,6 +29,10 @@ import type {
   ScheduleInput,
   Channel,
   ChannelMember,
+  CreateWebhookRequest,
+  Webhook,
+  WebhookCreated,
+  WebhookList,
   TicketReference,
   DocAccessRole,
   DocComment,
@@ -36,6 +49,9 @@ import type {
   FavoriteFolder,
   FavoriteItem,
   InboxFilter,
+  InboxView,
+  PushPublicKey,
+  PushSubscriptionInfo,
   InboxPage,
   LaterKind,
   NotificationPreferences,
@@ -182,7 +198,47 @@ export function isVersionConflict(error: unknown): boolean {
   return isApiError(error) && error.code === 'version_conflict'
 }
 
+/** 503 from a database that could not serve the request right now. Other 503s (search, collab) are not this. */
+export function isDbUnavailable(error: unknown): boolean {
+  return isApiError(error) && error.status === 503 && error.code === 'db_unavailable'
+}
+
 type UnauthorizedHandler = () => void
+
+/**
+ * Counts sessions of this tab. Every request remembers the number it started under; a request that finishes
+ * after `endSession` (logout, expired session, another person signing in) is refused instead of handed to
+ * code that would write its answer into the next person's state.
+ */
+let authEpoch = 0
+const inFlight = new Set<AbortController>()
+
+/**
+ * The signal TanStack Query gives a query function: the request made while `fn` runs (the call into the client, in its
+ * synchronous part) is aborted with it, so a query that is no longer wanted stops on the wire.
+ *   queryFn: ({ signal }) => withSignal(signal, () => api.getTicket(id))
+ */
+let nextSignal: AbortSignal | undefined
+
+export function withSignal<T>(signal: AbortSignal | undefined, fn: () => T): T {
+  nextSignal = signal
+  try {
+    return fn()
+  } finally {
+    nextSignal = undefined
+  }
+}
+
+export function getAuthEpoch(): number {
+  return authEpoch
+}
+
+/** Starts a new session epoch: aborts what is on the wire and makes every earlier request's answer unusable. */
+export function endSession(): void {
+  authEpoch += 1
+  for (const controller of inFlight) controller.abort()
+  inFlight.clear()
+}
 
 let unauthorizedHandler: UnauthorizedHandler | null = null
 
@@ -228,6 +284,10 @@ type RequestOptions = {
   query?: Query
   /** A 401 here answers a password the caller sent; it does not say the session ended. */
   answersUnauthorized?: boolean
+  /** Aborts the request (a query that is no longer needed). */
+  signal?: AbortSignal
+  /** The request is finished by the browser even if the page is left or reloaded meanwhile (small bodies only). */
+  keepalive?: boolean
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -283,12 +343,31 @@ async function request(path: string, options: RequestOptions = {}): Promise<unkn
   if (method !== 'GET') headers.set('X-Penfii-Client', '1')
   if (options.idempotencyKey) headers.set('Idempotency-Key', options.idempotencyKey)
 
+  const epoch = authEpoch
+  const controller = new AbortController()
+  inFlight.add(controller)
+  const given = options.signal ?? nextSignal
+  nextSignal = undefined
+  const signal = given ? AbortSignal.any([given, controller.signal]) : controller.signal
+  try {
+    return await send(path, options, method, headers, signal, epoch)
+  } finally {
+    inFlight.delete(controller)
+  }
+}
+
+async function send(path: string, options: RequestOptions, method: string, headers: Headers, signal: AbortSignal, epoch: number): Promise<unknown> {
   const response = await fetch(withQuery(path, options.query), {
     method,
     credentials: 'include',
     headers,
+    signal,
+    keepalive: options.keepalive,
     body: options.rawBody ?? (options.body !== undefined ? JSON.stringify(options.body) : undefined),
   })
+
+  // The body is read before the unauthorized handler runs: the handler ends the session and aborts what is in flight.
+  const text = await response.text()
 
   // A wrong password on these is an answer to the question asked, not an expired session.
   if (
@@ -300,11 +379,12 @@ async function request(path: string, options: RequestOptions = {}): Promise<unkn
     unauthorizedHandler?.()
   }
 
-  const text = await response.text()
   if (!response.ok) {
     const parsed = errorBody(text, response.status)
     throw new ApiError(response.status, parsed.code, parsed.message, parsed.details)
   }
+  // An answer to a question asked under an earlier session is not for whoever is signed in now.
+  if (epoch !== authEpoch) throw new ApiError(0, 'session_changed', 'The session changed')
   if (response.status === 204 || text.trim() === '') return undefined
   return JSON.parse(text) as unknown
 }
@@ -539,6 +619,7 @@ function normalizeMessage(payload: unknown): Message {
     streamSeq: typeof payload.streamSeq === 'number' ? payload.streamSeq : 0,
     authorId: typeof payload.authorId === 'string' ? payload.authorId : '',
     authorDisplayName: typeof payload.authorDisplayName === 'string' ? payload.authorDisplayName : '',
+    authorKind: payload.authorKind === 'INTEGRATION' ? 'INTEGRATION' : 'HUMAN',
     version: typeof payload.version === 'number' ? payload.version : 0,
     deleted: payload.deleted === true,
     body: payload.deleted === true ? null : ((payload.body as Message['body']) ?? null),
@@ -655,8 +736,23 @@ function normalizeChanges(payload: unknown): ConversationChange[] {
 }
 
 function normalizeInvitation(payload: unknown): InvitationCreated {
-  if (!isRecord(payload)) return {}
-  return typeof payload.inviteToken === 'string' ? { inviteToken: payload.inviteToken } : {}
+  if (
+    !isRecord(payload) ||
+    typeof payload.id !== 'string' ||
+    typeof payload.email !== 'string' ||
+    typeof payload.inviteToken !== 'string'
+  ) {
+    throw new ApiError(500, 'invalid_response', 'Expected an invitation')
+  }
+  const status = payload.emailStatus
+  return {
+    id: payload.id,
+    email: payload.email,
+    inviteToken: payload.inviteToken,
+    reissued: payload.reissued === true,
+    emailStatus: status === 'SENT' || status === 'FAILED' ? status : 'NOT_CONFIGURED',
+    ...(typeof payload.emailError === 'string' ? { emailError: payload.emailError } : {}),
+  }
 }
 
 function normalizePerson(payload: unknown): DirectoryPerson {
@@ -754,6 +850,14 @@ export function createPenfiiClient() {
     login(body: { email: string; password: string }): Promise<void> {
       return request('/v1/session/login', { method: 'POST', body }).then(() => undefined)
     },
+    /** Asks for a password reset mail. The answer is the same whether or not the address has an account; 404 when the server sends no e-mail. */
+    requestPasswordReset(email: string): Promise<void> {
+      return request('/v1/auth/password-reset/request', { method: 'POST', body: { email } }).then(() => undefined)
+    },
+    /** Sets a new password with the token of a reset link (409 `reset_token_invalid` when the link is used, replaced or expired). Every session of the account ends. */
+    confirmPasswordReset(token: string, password: string): Promise<void> {
+      return request('/v1/auth/password-reset/confirm', { method: 'POST', body: { token, password } }).then(() => undefined)
+    },
     logout(): Promise<void> {
       return request('/v1/session/logout', { method: 'POST', body: {} }).then(() => undefined)
     },
@@ -813,6 +917,10 @@ export function createPenfiiClient() {
     ): Promise<InvitationCreated> {
       return request(`/v1/workspaces/${workspaceId}/invitations`, { method: 'POST', body }).then(normalizeInvitation)
     },
+    /** Sends an open invitation again: a new link and expiry (the old link stops working), mailed when the server sends e-mail. */
+    reissueInvitation(workspaceId: string, invitationId: string): Promise<InvitationCreated> {
+      return request(`/v1/workspaces/${workspaceId}/invitations/${invitationId}/reissue`, { method: 'POST' }).then(normalizeInvitation)
+    },
     listMembers(workspaceId: string): Promise<WorkspaceMember[]> {
       return request(`/v1/workspaces/${workspaceId}/members`).then((payload) => itemsOf<WorkspaceMember>(payload))
     },
@@ -824,6 +932,24 @@ export function createPenfiiClient() {
     },
     setAccountDisabled(workspaceId: string, userId: string, disabled: boolean): Promise<void> {
       return request(`/v1/workspaces/${workspaceId}/members/${userId}/account`, { method: 'PUT', body: { disabled } }).then(() => undefined)
+    },
+    /** What removing the member, or disabling their account, would leave without an admin. Only informs. */
+    getOffboardingImpact(workspaceId: string, userId: string): Promise<OffboardingImpact> {
+      return request(`/v1/workspaces/${workspaceId}/members/${userId}/offboarding-impact`).then((payload) => payload as OffboardingImpact)
+    },
+    listProjectsWithoutAdmin(workspaceId: string): Promise<ProjectWithoutAdmin[]> {
+      return request(`/v1/workspaces/${workspaceId}/projects-without-admin`).then((payload) => itemsOf<ProjectWithoutAdmin>(payload))
+    },
+    /** Names a direct admin for a Project that has none who can act. Needs a recent sign-in. */
+    recoverProjectAdmin(projectId: string, userId: string): Promise<AdminRecovery> {
+      return request(`/v1/projects/${projectId}/admin-recovery`, { method: 'POST', body: { userId } }).then((payload) => payload as AdminRecovery)
+    },
+    listChannelsWithoutManager(workspaceId: string): Promise<ChannelWithoutManager[]> {
+      return request(`/v1/workspaces/${workspaceId}/channels-without-manager`).then((payload) => itemsOf<ChannelWithoutManager>(payload))
+    },
+    /** Names a manager for a private channel that has none who can act. Needs a recent sign-in. */
+    recoverChannelManager(channelId: string, userId: string): Promise<ManagerRecovery> {
+      return request(`/v1/channels/${channelId}/manager-recovery`, { method: 'POST', body: { userId } }).then((payload) => payload as ManagerRecovery)
     },
     listInvitations(workspaceId: string): Promise<InvitationSummary[]> {
       return request(`/v1/workspaces/${workspaceId}/invitations`).then((payload) => itemsOf<InvitationSummary>(payload))
@@ -855,6 +981,24 @@ export function createPenfiiClient() {
     },
     restoreTicketFromTrash(ticketId: string): Promise<void> {
       return request(`/v1/tickets/${ticketId}/commands/restore-from-trash`, { method: 'POST', body: {} }).then(() => undefined)
+    },
+    listProjectArchive(projectId: string): Promise<ArchivedTicket[]> {
+      return request(`/v1/projects/${projectId}/archive`).then((payload) => itemsOf<ArchivedTicket>(payload))
+    },
+    archiveTicket(ticketId: string): Promise<void> {
+      return request(`/v1/tickets/${ticketId}/commands/archive`, { method: 'POST', body: {} }).then(() => undefined)
+    },
+    unarchiveTicket(ticketId: string): Promise<void> {
+      return request(`/v1/tickets/${ticketId}/commands/unarchive`, { method: 'POST', body: {} }).then(() => undefined)
+    },
+    getSprintArchiveSchedule(sprintId: string): Promise<SprintArchiveSchedule | null> {
+      return request(`/v1/sprints/${sprintId}/archive-schedule`).then((payload) => (isRecord(payload) ? ((payload.schedule ?? null) as SprintArchiveSchedule | null) : null))
+    },
+    rescheduleSprintArchive(sprintId: string, expectedVersion: number, archiveAt: string): Promise<SprintArchiveSchedule> {
+      return request(`/v1/sprints/${sprintId}/archive-schedule`, { method: 'PUT', body: { expectedVersion, archiveAt } }) as Promise<SprintArchiveSchedule>
+    },
+    cancelSprintArchive(sprintId: string, expectedVersion: number): Promise<SprintArchiveSchedule> {
+      return request(`/v1/sprints/${sprintId}/archive-schedule`, { method: 'DELETE', body: { expectedVersion } }) as Promise<SprintArchiveSchedule>
     },
     purgeTicket(ticketId: string): Promise<void> {
       return request(`/v1/tickets/${ticketId}/commands/purge`, { method: 'POST', body: {} }).then(() => undefined)
@@ -1188,8 +1332,14 @@ export function createPenfiiClient() {
     ): Promise<Sprint> {
       return request(`/v1/projects/${projectId}/sprints`, { method: 'POST', body, idempotencyKey }) as Promise<Sprint>
     },
-    sprintCommand(sprintId: string, command: 'start' | 'complete' | 'cancel', expectedVersion: number, idempotencyKey: string, carryToSprintId?: string | null): Promise<Sprint> {
-      const body = command === 'complete' && carryToSprintId ? { expectedVersion, carryToSprintId } : { expectedVersion }
+    sprintCommand(sprintId: string, command: 'start' | 'complete' | 'cancel', expectedVersion: number, idempotencyKey: string, carryToSprintId?: string | null, archive?: SprintArchiveChoice): Promise<Sprint> {
+      const complete = command === 'complete'
+      const body = {
+        expectedVersion,
+        ...(complete && carryToSprintId ? { carryToSprintId } : {}),
+        ...(complete && archive?.mode === 'IMMEDIATE' ? { archive: 'IMMEDIATE' } : {}),
+        ...(complete && archive?.mode === 'AT' ? { archive: 'AT', archiveAt: archive.at } : {}),
+      }
       return request(`/v1/sprints/${sprintId}/commands/${command}`, { method: 'POST', body, idempotencyKey }) as Promise<Sprint>
     },
     getSprintClosePreview(sprintId: string): Promise<SprintClosePreview> {
@@ -1227,8 +1377,14 @@ export function createPenfiiClient() {
     getDraft(contextKind: string, contextId: string): Promise<StoredDraft | null> {
       return request('/v1/drafts', { query: { contextKind, contextId } }).then((body) => (body ?? null) as StoredDraft | null)
     },
-    saveDraft(body: { contextKind: string; contextId: string; expectedVersion?: number; payload: DraftPayload }): Promise<StoredDraft> {
+    /** `generation` names the input session (see `PutDraftRequest`). A save of a session that is over or older than the stored one is refused with `draft_closed`. */
+    saveDraft(body: { contextKind: string; contextId: string; generation: string; expectedVersion?: number; payload: DraftPayload }): Promise<StoredDraft> {
       return request('/v1/drafts', { method: 'PUT', body }) as Promise<StoredDraft>
+    },
+    /** Ends an input session (the message was sent or the box was emptied), whether or not a save of it has arrived. */
+    closeDraft(contextKind: string, contextId: string, generation: string): Promise<void> {
+      // Sent as the message goes out, so a reload or a closed tab right after must not lose it: the draft would come back.
+      return request('/v1/drafts', { method: 'DELETE', query: { contextKind, contextId, generation }, keepalive: true }).then(() => undefined)
     },
     deleteDraft(draftId: string): Promise<void> {
       return request(`/v1/drafts/${draftId}`, { method: 'DELETE' }).then(() => undefined)
@@ -1350,14 +1506,34 @@ export function createPenfiiClient() {
     moveFavorite(workspaceId: string, kind: SavedKind, targetId: string, folderId: string | null): Promise<void> {
       return request(`/v1/workspaces/${workspaceId}/favorites/${kind}/${targetId}/folder`, { method: 'PUT', body: { folderId } }).then(() => undefined)
     },
-    getInbox(workspaceId: string, query: { filter?: InboxFilter; state?: 'all' | 'unread'; cursor?: string; limit?: number }): Promise<InboxPage> {
-      return request(`/v1/workspaces/${workspaceId}/inbox`, { query }) as Promise<InboxPage>
+    /** `filter` is one type or several (a union); none is every kind. `state` is the only read axis. */
+    getInbox(
+      workspaceId: string,
+      query: { filter?: InboxFilter | InboxFilter[]; state?: 'all' | 'unread'; view?: InboxView; includeSnoozed?: boolean; cursor?: string; limit?: number },
+    ): Promise<InboxPage> {
+      const { filter, includeSnoozed, ...rest } = query
+      const joined = Array.isArray(filter) ? filter.join(',') : filter
+      return request(`/v1/workspaces/${workspaceId}/inbox`, { query: { ...rest, filter: joined || undefined, includeSnoozed: includeSnoozed ? 'true' : undefined } }) as Promise<InboxPage>
     },
-    inboxCommand(itemId: string, command: 'read' | 'unread' | 'archive' | 'unarchive' | 'snooze', body: { expectedVersion: number; until?: string }): Promise<{ id: string; state: string; version: number }> {
-      return request(`/v1/inbox/${itemId}/commands/${command}`, { method: 'POST', body }) as Promise<{ id: string; state: string; version: number }>
+    inboxCommand(itemId: string, command: 'read' | 'unread' | 'archive' | 'unarchive' | 'snooze', body: { expectedVersion: number; until?: string }): Promise<{ id: string; state: string; snoozedUntil: string | null; archivedAt: string | null; version: number }> {
+      return request(`/v1/inbox/${itemId}/commands/${command}`, { method: 'POST', body }) as Promise<{ id: string; state: string; snoozedUntil: string | null; archivedAt: string | null; version: number }>
     },
-    inboxReadAll(workspaceId: string, filter?: InboxFilter): Promise<{ changed: number }> {
-      return request(`/v1/workspaces/${workspaceId}/inbox/commands/read-all`, { method: 'POST', body: filter ? { filter } : {} }) as Promise<{ changed: number }>
+    inboxReadAll(workspaceId: string, filter?: InboxFilter | InboxFilter[]): Promise<{ changed: number }> {
+      const joined = Array.isArray(filter) ? filter.join(',') : filter
+      return request(`/v1/workspaces/${workspaceId}/inbox/commands/read-all`, { method: 'POST', body: joined ? { filter: joined } : {} }) as Promise<{ changed: number }>
+    },
+    getPushPublicKey(): Promise<PushPublicKey> {
+      return request('/v1/push/vapid-public-key') as Promise<PushPublicKey>
+    },
+    listPushSubscriptions(): Promise<PushSubscriptionInfo[]> {
+      return (request('/v1/me/push-subscriptions') as Promise<{ items: PushSubscriptionInfo[] }>).then((r) => r.items)
+    },
+    /** `subscription` is `PushSubscription.toJSON()`. The same endpoint again updates the row. */
+    subscribePush(subscription: { endpoint: string; keys: { p256dh: string; auth: string } }, device: { userAgent?: string; label?: string } = {}): Promise<PushSubscriptionInfo> {
+      return request('/v1/me/push-subscriptions', { method: 'POST', body: { ...subscription, ...device } }) as Promise<PushSubscriptionInfo>
+    },
+    unsubscribePush(id: string): Promise<void> {
+      return request(`/v1/me/push-subscriptions/${id}`, { method: 'DELETE' }).then(() => undefined)
     },
     getSubscription(kind: WatchTargetKind, targetId: string): Promise<Subscription> {
       return request(`${subscriptionPath(kind, targetId)}`) as Promise<Subscription>
@@ -1475,15 +1651,35 @@ export function createPenfiiClient() {
     setChannelMemberRole(channelId: string, userId: string, role: 'MANAGER' | 'MEMBER'): Promise<ChannelMember> {
       return request(`/v1/channels/${channelId}/members/${userId}`, { method: 'PATCH', body: { role } }) as Promise<ChannelMember>
     },
-    /** The caller leaves a private channel; nobody can take another person out. */
+    /** The caller leaves a private channel. */
     leaveChannel(channelId: string, userId: string): Promise<void> {
       return request(`/v1/channels/${channelId}/members/${userId}`, { method: 'DELETE' }) as Promise<void>
     },
+    /** A manager or the Project's admin takes another person out of a private channel (the last manager stays). */
+    removeChannelMember(channelId: string, userId: string): Promise<void> {
+      return request(`/v1/channels/${channelId}/members/${userId}`, { method: 'DELETE' }) as Promise<void>
+    },
+    /** The private channels of a Project for its admin, whether or not they can read them. */
+    listProjectPrivateChannels(projectId: string): Promise<ManagedChannel[]> {
+      return request(`/v1/projects/${projectId}/private-channels`).then((payload) => itemsOf<ManagedChannel>(payload))
+    },
     updateChannel(
       channelId: string,
-      body: { visibility?: 'PUBLIC' | 'PRIVATE'; description?: string | null },
+      body: { visibility?: 'PUBLIC' | 'PRIVATE'; description?: string | null; allowMemberInvites?: boolean },
     ): Promise<Channel> {
       return request(`/v1/channels/${channelId}`, { method: 'PATCH', body }).then(normalizeChannel)
+    },
+    listChannelWebhooks(channelId: string): Promise<WebhookList> {
+      return request(`/v1/channels/${channelId}/webhooks`) as Promise<WebhookList>
+    },
+    createChannelWebhook(channelId: string, body: CreateWebhookRequest): Promise<WebhookCreated> {
+      return request(`/v1/channels/${channelId}/webhooks`, { method: 'POST', body }) as Promise<WebhookCreated>
+    },
+    rotateWebhook(webhookId: string): Promise<WebhookCreated> {
+      return request(`/v1/webhooks/${webhookId}/rotate`, { method: 'POST', body: {} }) as Promise<WebhookCreated>
+    },
+    revokeWebhook(webhookId: string): Promise<Webhook> {
+      return request(`/v1/webhooks/${webhookId}/revoke`, { method: 'POST', body: {} }) as Promise<Webhook>
     },
     createDm(workspaceId: string, body: { userIds: string[] }): Promise<Dm> {
       return request(`/v1/workspaces/${workspaceId}/dms`, { method: 'POST', body }).then(normalizeDm)

@@ -3,8 +3,10 @@
 
 mod messages;
 mod reads;
+pub mod recovery;
 pub(crate) mod richtext;
 
+pub(crate) use messages::{CreatedMessage, persist_created_message, prepare_body};
 pub use messages::{
     DeleteMessage, EditMessage, ReactionCommand, SendMessage, add_reaction, delete_message,
     edit_message, list_messages, list_thread, message_history, remove_reaction, send_message,
@@ -27,9 +29,9 @@ use crate::identity::require_label;
 use crate::platform::ChangeNotice;
 
 #[derive(sqlx::FromRow)]
-struct ChannelRow {
-    id: Uuid,
-    workspace_id: Uuid,
+pub(crate) struct ChannelRow {
+    pub(crate) id: Uuid,
+    pub(crate) workspace_id: Uuid,
     name: String,
     description: Option<String>,
     topic: Option<String>,
@@ -110,6 +112,20 @@ pub async fn create_channel(
             .is_some_and(crate::project_role::can_manage)
         {
             return Err(CoreError::forbidden("project admin required"));
+        }
+        // A Team narrows who takes part: the creator has to be one of them, being a Project admin is no way around it.
+        if team_id.is_some() {
+            let takes_part: bool = sqlx::query_scalar("SELECT penfii.in_share_scope($1, $2, $3)")
+                .bind(project_id)
+                .bind(team_id)
+                .bind(actor_id)
+                .fetch_one(&mut *tx)
+                .await?;
+            if !takes_part {
+                return Err(CoreError::forbidden(
+                    "the creator has to take part through the Team",
+                ));
+            }
         }
     } else if !workspace_admin {
         return Err(CoreError::forbidden("workspace owner or admin required"));
@@ -194,16 +210,151 @@ pub(crate) async fn insert_channel(
     })
 }
 
+/// The channel, when `actor_id` may change its settings: a channel MANAGER, an admin of its
+/// Project, or a Workspace owner/admin for a public Workspace-wide channel.
+/// Who the actor is to a channel, in the terms the management rules use. Managing a channel and
+/// reading it are different things (FEA-049): a Project's admin manages its private channels without
+/// being able to read them, and a manager's role counts only while the Project still has them.
+pub(crate) struct Standing {
+    pub(crate) row: ChannelRow,
+    pub(crate) access: ConvAccess,
+    /// The effective MANAGER role of this channel.
+    pub(crate) manager: bool,
+    /// An admin of the channel's Project.
+    pub(crate) project_admin: bool,
+    pub(crate) workspace_role: String,
+}
+
+impl Standing {
+    pub(crate) fn can_read(&self) -> bool {
+        self.access.can_read()
+    }
+
+    /// The two people who run a channel's people and settings: its manager and its Project's admin.
+    pub(crate) fn runs_channel(&self) -> bool {
+        self.manager || self.project_admin
+    }
+
+    /// The answer to something the actor may not do. Someone who cannot read the channel and does not
+    /// run it is not told that it exists; the others are told they lack the right.
+    pub(crate) fn refusal(&self) -> CoreError {
+        if self.can_read() || self.runs_channel() {
+            CoreError::forbidden("channel manager required")
+        } else {
+            CoreError::NotFound
+        }
+    }
+}
+
+pub(crate) async fn standing(
+    conn: &mut PgConnection,
+    actor_id: Uuid,
+    channel_id: Uuid,
+) -> Result<Standing, CoreError> {
+    let Some(row) = load_channel(conn, channel_id, actor_id).await? else {
+        return Err(CoreError::NotFound);
+    };
+    let workspace_role = access::require_member(conn, row.workspace_id, actor_id).await?;
+    let Some(access) = access::load_conversation(conn, actor_id, channel_id).await? else {
+        return Err(CoreError::NotFound);
+    };
+    let project_admin = match row.project_id {
+        Some(project_id) => crate::project_role::project_role(conn, project_id, actor_id)
+            .await?
+            .1
+            .as_deref()
+            .is_some_and(crate::project_role::can_manage),
+        None => false,
+    };
+    let manager = row.role.as_deref() == Some("MANAGER");
+    Ok(Standing {
+        row,
+        access,
+        manager,
+        project_admin,
+        workspace_role,
+    })
+}
+
+/// The right to use a channel's webhooks (FEA-049). In a private channel, issuing a posting credential
+/// (create, rotate) is for someone who may post there: its manager, or an admin of its Project who can
+/// read it. Seeing the webhooks and revoking one only takes the channel to be run by the actor (its
+/// manager or its Project's admin): revoking ends a credential and gives no access to the content.
+/// Public channels keep the settings rule.
+pub(crate) async fn require_webhook_access(
+    conn: &mut PgConnection,
+    actor_id: Uuid,
+    channel_id: Uuid,
+    issuing: bool,
+) -> Result<ChannelRow, CoreError> {
+    let st = standing(conn, actor_id, channel_id).await?;
+    if st.row.visibility != "PRIVATE" {
+        return require_channel_settings(conn, actor_id, channel_id).await;
+    }
+    let allowed = if issuing {
+        st.manager || (st.project_admin && st.can_read())
+    } else {
+        st.runs_channel()
+    };
+    if allowed {
+        Ok(st.row)
+    } else {
+        Err(st.refusal())
+    }
+}
+
+pub(crate) async fn require_channel_settings(
+    conn: &mut PgConnection,
+    actor_id: Uuid,
+    channel_id: Uuid,
+) -> Result<ChannelRow, CoreError> {
+    let Some(row) = load_channel(conn, channel_id, actor_id).await? else {
+        return Err(CoreError::NotFound);
+    };
+    let workspace_role = access::require_member(conn, row.workspace_id, actor_id).await?;
+    let project_admin = match row.project_id {
+        Some(project_id) => crate::project_role::project_role(conn, project_id, actor_id)
+            .await?
+            .1
+            .as_deref()
+            .is_some_and(crate::project_role::can_manage),
+        None => false,
+    };
+    let workspace_admin = workspace_role == "OWNER" || workspace_role == "ADMIN";
+    let manager = row.role.as_deref() == Some("MANAGER");
+    let global_public = row.project_id.is_none() && row.visibility != "PRIVATE" && workspace_admin;
+    if !manager && !project_admin && !global_public {
+        if access::require_read(conn, actor_id, channel_id)
+            .await
+            .is_err()
+        {
+            return Err(CoreError::NotFound);
+        }
+        return Err(CoreError::forbidden("channel manager required"));
+    }
+    Ok(row)
+}
+
+/// Changes a channel's visibility, description or member-invitation switch.
+///
+/// * The description and the switch: the channel's manager and its Project's admin (and a Workspace
+///   owner or admin for a public Workspace-wide channel, which has no switch to change).
+/// * Public -> private: the same people. Private -> public shows the past messages to people who could
+///   not read them, so only the channel's own manager may do it; an admin who cannot read the channel
+///   cannot open it to themself that way.
+/// * A change of visibility makes or removes no membership. The people who read it only through its
+///   public rule hear that their access changed.
 pub async fn update_channel(
     pool: &PgPool,
     actor_id: Uuid,
     channel_id: Uuid,
     visibility: Option<&str>,
     description: Option<&str>,
-) -> Result<Channel, CoreError> {
-    if visibility.is_none() && description.is_none() {
+    allow_member_invites: Option<bool>,
+) -> Result<(Channel, Vec<ChangeNotice>), CoreError> {
+    if visibility.is_none() && description.is_none() && allow_member_invites.is_none() {
         return Err(CoreError::validation(
-            "visibility or description is required",
+            "visibility, description or allowMemberInvites is required",
         ));
     }
     if let Some(visibility) = visibility
@@ -223,30 +374,51 @@ pub async fn update_channel(
         None => None,
     };
     let mut tx = pool.begin().await?;
-    let Some(row) = load_channel(&mut tx, channel_id, actor_id).await? else {
-        return Err(CoreError::NotFound);
-    };
-    let workspace_role = access::require_member(&mut tx, row.workspace_id, actor_id).await?;
-    let project_admin = match row.project_id {
-        Some(project_id) => crate::project_role::project_role(&mut tx, project_id, actor_id)
-            .await?
-            .1
-            .as_deref()
-            .is_some_and(crate::project_role::can_manage),
-        None => false,
-    };
-    let workspace_admin = workspace_role == "OWNER" || workspace_role == "ADMIN";
-    let manager = row.role.as_deref() == Some("MANAGER");
-    let global_public = row.project_id.is_none() && row.visibility != "PRIVATE" && workspace_admin;
-    if !manager && !project_admin && !global_public {
-        if access::require_read(&mut tx, actor_id, channel_id)
-            .await
-            .is_err()
-        {
-            return Err(CoreError::NotFound);
-        }
-        return Err(CoreError::forbidden("channel manager required"));
+    // The channel is read and changed under one lock: the visibility the rules below start from cannot
+    // be changed by someone else in between (a private channel opened by a non-manager that way).
+    sqlx::query("SELECT 1 FROM penfii.channels WHERE id = $1 FOR UPDATE")
+        .bind(channel_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let st = standing(&mut tx, actor_id, channel_id).await?;
+    let workspace_admin = st.workspace_role == "OWNER" || st.workspace_role == "ADMIN";
+    let global_public =
+        st.row.project_id.is_none() && st.row.visibility != "PRIVATE" && workspace_admin;
+    if !st.runs_channel() && !global_public {
+        return Err(st.refusal());
     }
+    let was = st.row.visibility.clone();
+    let changes_visibility = visibility.is_some_and(|v| v != was);
+    if changes_visibility && was == "PRIVATE" && !st.manager {
+        // Private -> public: only the channel's own manager.
+        return Err(CoreError::forbidden(
+            "only a channel manager makes a private channel public",
+        ));
+    }
+    let changes_switch = allow_member_invites.is_some_and(|v| v != st.row.allow_member_invites);
+    if changes_switch && !st.runs_channel() {
+        return Err(st.refusal());
+    }
+    // The people who read it only through its public rule (no membership of their own); asked before
+    // the change, while the answer is the same under either rule.
+    let affected: Vec<Uuid> = if changes_visibility {
+        sqlx::query_scalar(
+            "SELECT wm.user_id FROM penfii.workspace_members wm
+             WHERE wm.workspace_id = $1 AND wm.state = 'ACTIVE'
+               AND NOT EXISTS (SELECT 1 FROM penfii.channel_members cm
+                               WHERE cm.channel_id = $2 AND cm.user_id = wm.user_id)
+               AND ($3::uuid IS NULL OR penfii.in_share_scope($3, $4, wm.user_id))
+             ORDER BY wm.user_id",
+        )
+        .bind(st.row.workspace_id)
+        .bind(channel_id)
+        .bind(st.row.project_id)
+        .bind(st.row.team_id)
+        .fetch_all(&mut *tx)
+        .await?
+    } else {
+        Vec::new()
+    };
     if let Some(visibility) = visibility {
         sqlx::query("UPDATE penfii.channels SET visibility = $2 WHERE id = $1")
             .bind(channel_id)
@@ -258,6 +430,13 @@ pub async fn update_channel(
         sqlx::query("UPDATE penfii.channels SET description = $2 WHERE id = $1")
             .bind(channel_id)
             .bind(description)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(allow) = allow_member_invites {
+        sqlx::query("UPDATE penfii.channels SET allow_member_invites = $2 WHERE id = $1")
+            .bind(channel_id)
+            .bind(allow)
             .execute(&mut *tx)
             .await?;
     }
@@ -279,8 +458,129 @@ pub async fn update_channel(
         serde_json::json!({"visibility": channel.visibility}),
     )
     .await?;
+    let can_read = st.can_read();
+    if changes_visibility {
+        crate::admin::audit(
+            &mut tx,
+            channel.workspace_id,
+            Some(actor_id),
+            "channel.visibility_changed",
+            "CHANNEL",
+            channel_id,
+            serde_json::json!({
+                "from": was,
+                "to": channel.visibility,
+                "actorWasMember": st.row.role.is_some(),
+                "actorCanRead": can_read,
+                "peopleWithoutMembership": affected.len(),
+            }),
+        )
+        .await?;
+    }
+    if changes_switch {
+        crate::admin::audit(
+            &mut tx,
+            channel.workspace_id,
+            Some(actor_id),
+            "channel.allow_member_invites_changed",
+            "CHANNEL",
+            channel_id,
+            serde_json::json!({
+                "from": st.row.allow_member_invites,
+                "to": allow_member_invites,
+                "actorCanRead": can_read,
+            }),
+        )
+        .await?;
+    }
     tx.commit().await?;
-    Ok(channel)
+    // Who had read it by the public rule: closed to them (and their open screens) when it turns private,
+    // shown to them when it turns public.
+    let mut notices = Vec::new();
+    for user_id in affected {
+        if channel.visibility == "PRIVATE" {
+            notices.push(ChangeNotice::Access { user_id });
+        }
+        notices.push(ChangeNotice::Space { user_id });
+    }
+    Ok((channel, notices))
+}
+
+/// A private channel of a Project as its admin sees it in the management list: enough to find it and
+/// run its people, never what was said in it.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedChannel {
+    pub id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    /// Active members of the Workspace in the channel.
+    pub member_count: i64,
+    /// Managers who can act (the guard of the last manager counts the same ones).
+    pub manager_count: i64,
+    pub allow_member_invites: bool,
+    pub archived: bool,
+    /// Whether the admin is in the channel themself, that is, can read it.
+    pub is_member: bool,
+}
+
+/// The private channels of a Project, for the Project's admin, whether or not they can read them
+/// (FEA-049). Archived ones are included and marked.
+pub async fn project_private_channels(
+    pool: &PgPool,
+    actor_id: Uuid,
+    project_id: Uuid,
+) -> Result<Vec<ManagedChannel>, CoreError> {
+    let mut conn = pool.acquire().await?;
+    crate::project_role::require_project_admin(&mut conn, project_id, actor_id).await?;
+    let rows = sqlx::query_as::<_, (Uuid, String, Option<String>, i64, i64, bool, bool, bool)>(&format!(
+        "SELECT ch.id, ch.name, ch.description,
+                (SELECT count(*) FROM penfii.channel_members cm
+                 JOIN penfii.workspace_members wm
+                   ON wm.workspace_id = c.workspace_id AND wm.user_id = cm.user_id AND wm.state = 'ACTIVE'
+                 WHERE cm.channel_id = ch.id
+                   AND penfii.in_share_scope(ch.project_id, ch.team_id, cm.user_id)),
+                (SELECT count(*) FROM {m} x WHERE x.channel_id = ch.id),
+                ch.allow_member_invites, ch.archived_at IS NOT NULL,
+                EXISTS (SELECT 1 FROM penfii.channel_members cm
+                        WHERE cm.channel_id = ch.id AND cm.user_id = $2
+                          AND penfii.in_share_scope(ch.project_id, ch.team_id, cm.user_id))
+         FROM penfii.channels ch
+         JOIN penfii.conversations c ON c.id = ch.id
+         WHERE ch.project_id = $1 AND ch.visibility = 'PRIVATE'
+         ORDER BY ch.archived_at IS NOT NULL, ch.name, ch.id",
+        m = recovery::ACTIVE_CHANNEL_MANAGERS
+    ))
+    .bind(project_id)
+    .bind(actor_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(
+                id,
+                name,
+                description,
+                member_count,
+                manager_count,
+                allow_member_invites,
+                archived,
+                is_member,
+            )| {
+                ManagedChannel {
+                    id,
+                    name,
+                    description,
+                    member_count,
+                    manager_count,
+                    allow_member_invites,
+                    archived,
+                    is_member,
+                }
+            },
+        )
+        .collect())
 }
 
 pub async fn join_channel(
@@ -299,6 +599,9 @@ pub async fn join_channel(
     }
     if row.visibility != "PUBLIC" {
         return Err(CoreError::NotFound);
+    }
+    if let Some(project_id) = row.project_id {
+        recovery::lock_project_channels(&mut tx, project_id).await?;
     }
     if let Some(project_id) = row.project_id
         && !access::in_share_scope(&mut tx, project_id, row.team_id, actor_id).await?
@@ -329,19 +632,22 @@ pub async fn list_channel_members(
     channel_id: Uuid,
 ) -> Result<Vec<ChannelMember>, CoreError> {
     let mut tx = pool.begin().await?;
-    let Some(access) = access::load_conversation(&mut tx, actor_id, channel_id).await? else {
-        return Err(CoreError::NotFound);
-    };
-    if access.kind != "CHANNEL" || !access.can_read() {
+    let st = standing(&mut tx, actor_id, channel_id).await?;
+    // The people of a channel are what its Project's admin runs, so they see the list of a private
+    // channel they cannot read (names and roles, never messages).
+    if !(st.can_read() || (st.project_admin && st.row.visibility == "PRIVATE")) {
         return Err(CoreError::NotFound);
     }
+    let access = st.access;
     let rows = sqlx::query_as::<_, (Uuid, String, String, DateTime<Utc>)>(
         "SELECT cm.user_id, u.display_name, cm.role, cm.joined_at
          FROM penfii.channel_members cm
+         JOIN penfii.channels ch ON ch.id = cm.channel_id
          JOIN penfii.users u ON u.id = cm.user_id
          JOIN penfii.workspace_members wm
            ON wm.workspace_id = $2 AND wm.user_id = cm.user_id AND wm.state = 'ACTIVE'
          WHERE cm.channel_id = $1
+           AND (ch.project_id IS NULL OR penfii.in_share_scope(ch.project_id, ch.team_id, cm.user_id))
          ORDER BY (cm.role = 'MANAGER') DESC, cm.joined_at, u.display_name",
     )
     .bind(channel_id)
@@ -372,29 +678,21 @@ pub async fn add_channel_member(
     user_id: Uuid,
 ) -> Result<(ChannelMember, Option<ChangeNotice>), CoreError> {
     let mut tx = pool.begin().await?;
-    let Some(row) = load_channel(&mut tx, channel_id, actor_id).await? else {
-        return Err(CoreError::NotFound);
-    };
-    access::require_member(&mut tx, row.workspace_id, actor_id).await?;
-    let Some(access) = access::load_conversation(&mut tx, actor_id, channel_id).await? else {
-        return Err(CoreError::NotFound);
-    };
-    if !access.can_read() {
-        return Err(CoreError::NotFound);
+    let st = standing(&mut tx, actor_id, channel_id).await?;
+    // The people who run the channel put people in whether or not they can read it themselves; a
+    // member does it only while the channel allows member invitations.
+    let member_invites = st.row.allow_member_invites && st.row.role.is_some();
+    if !st.runs_channel() && !member_invites {
+        return Err(st.refusal());
     }
-    let manager = row.role.as_deref() == Some("MANAGER");
-    let project_admin = match row.project_id {
-        Some(project_id) => crate::project_role::project_role(&mut tx, project_id, actor_id)
-            .await?
-            .1
-            .as_deref()
-            .is_some_and(crate::project_role::can_manage),
-        None => false,
-    };
-    let member_invites = row.allow_member_invites && row.role.is_some();
-    if !manager && !project_admin && !member_invites {
-        return Err(CoreError::forbidden("channel manager required"));
+    // Running a channel is not a way into it: whoever cannot read it does not put themself in.
+    if user_id == actor_id && !st.can_read() {
+        return Err(CoreError::forbidden(
+            "an admin who cannot read the channel cannot add themself",
+        ));
     }
+    let can_read = st.can_read();
+    let Standing { row, access, .. } = st;
     access.require_writable()?;
     let active: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM penfii.workspace_members
@@ -408,6 +706,9 @@ pub async fn add_channel_member(
         return Err(CoreError::validation(
             "that person is not a member of the Workspace",
         ));
+    }
+    if let Some(project_id) = row.project_id {
+        recovery::lock_project_channels(&mut tx, project_id).await?;
     }
     if let Some(project_id) = row.project_id
         && !access::in_share_scope(&mut tx, project_id, row.team_id, user_id).await?
@@ -437,6 +738,16 @@ pub async fn add_channel_member(
             serde_json::json!({"userId": user_id}),
         )
         .await?;
+        crate::admin::audit(
+            &mut tx,
+            row.workspace_id,
+            Some(actor_id),
+            "channel.member_added",
+            "CHANNEL",
+            channel_id,
+            serde_json::json!({"userId": user_id, "actorCanRead": can_read}),
+        )
+        .await?;
     }
     let (display_name, role, joined_at): (String, String, DateTime<Utc>) = sqlx::query_as(
         "SELECT u.display_name, cm.role, cm.joined_at
@@ -461,7 +772,7 @@ pub async fn add_channel_member(
     ))
 }
 
-/// Whether the channel keeps a manager (a person active in the Workspace) once `leaving` is no
+/// Whether the channel keeps a manager (a person active in the Workspace, whose account is not disabled) once `leaving` is no
 /// longer one. The channel's managers are locked first, in a fixed order, so two people who each
 /// give up the role at once (leaving, or being made members) cannot leave the channel without one.
 async fn other_manager_stays(
@@ -476,13 +787,10 @@ async fn other_manager_stays(
     .bind(channel_id)
     .fetch_all(&mut **tx)
     .await?;
-    Ok(sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM penfii.channel_members cm
-                        JOIN penfii.conversations c ON c.id = cm.channel_id
-                        JOIN penfii.workspace_members wm
-                          ON wm.workspace_id = c.workspace_id AND wm.user_id = cm.user_id AND wm.state = 'ACTIVE'
-                        WHERE cm.channel_id = $1 AND cm.role = 'MANAGER' AND cm.user_id <> $2)",
-    )
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT EXISTS (SELECT 1 FROM {m} x WHERE x.channel_id = $1 AND x.user_id <> $2)",
+        m = recovery::ACTIVE_CHANNEL_MANAGERS
+    ))
     .bind(channel_id)
     .bind(leaving)
     .fetch_one(&mut **tx)
@@ -504,28 +812,17 @@ pub async fn set_channel_member_role(
         return Err(CoreError::validation("role must be MANAGER or MEMBER"));
     }
     let mut tx = pool.begin().await?;
-    let Some(row) = load_channel(&mut tx, channel_id, actor_id).await? else {
-        return Err(CoreError::NotFound);
-    };
-    access::require_member(&mut tx, row.workspace_id, actor_id).await?;
-    let Some(access) = access::load_conversation(&mut tx, actor_id, channel_id).await? else {
-        return Err(CoreError::NotFound);
-    };
-    if !access.can_read() {
-        return Err(CoreError::NotFound);
+    let st = standing(&mut tx, actor_id, channel_id).await?;
+    if !st.runs_channel() {
+        return Err(st.refusal());
     }
-    let manager = row.role.as_deref() == Some("MANAGER");
-    let project_admin = match row.project_id {
-        Some(project_id) => crate::project_role::project_role(&mut tx, project_id, actor_id)
-            .await?
-            .1
-            .as_deref()
-            .is_some_and(crate::project_role::can_manage),
-        None => false,
-    };
-    if !manager && !project_admin {
-        return Err(CoreError::forbidden("channel manager required"));
+    if user_id == actor_id && !st.can_read() {
+        return Err(CoreError::forbidden(
+            "an admin who cannot read the channel cannot make themself a manager",
+        ));
     }
+    let can_read = st.can_read();
+    let Standing { row, access, .. } = st;
     if row.visibility != "PRIVATE" {
         return Err(CoreError::validation(
             "roles are set in a private channel only",
@@ -535,10 +832,12 @@ pub async fn set_channel_member_role(
     let current: Option<(String, String, DateTime<Utc>)> = sqlx::query_as(
         "SELECT cm.role, u.display_name, cm.joined_at
          FROM penfii.channel_members cm
+         JOIN penfii.channels ch ON ch.id = cm.channel_id
          JOIN penfii.users u ON u.id = cm.user_id
          JOIN penfii.workspace_members wm
            ON wm.workspace_id = $3 AND wm.user_id = cm.user_id AND wm.state = 'ACTIVE'
-         WHERE cm.channel_id = $1 AND cm.user_id = $2",
+         WHERE cm.channel_id = $1 AND cm.user_id = $2
+           AND (ch.project_id IS NULL OR penfii.in_share_scope(ch.project_id, ch.team_id, cm.user_id))",
     )
     .bind(channel_id)
     .bind(user_id)
@@ -586,13 +885,24 @@ pub async fn set_channel_member_role(
         serde_json::json!({"userId": user_id, "role": role, "was": before}),
     )
     .await?;
+    crate::admin::audit(
+        &mut tx,
+        row.workspace_id,
+        Some(actor_id),
+        "channel.member_role_changed",
+        "CHANNEL",
+        channel_id,
+        serde_json::json!({"userId": user_id, "role": role, "was": before, "actorCanRead": can_read}),
+    )
+    .await?;
     tx.commit().await?;
     Ok((member(role), Some(ChangeNotice::Space { user_id })))
 }
 
-/// A person leaves a private channel; nobody else can be taken out. The last MANAGER stays, so a
-/// channel is never left without someone who can run it. Public channels are not left here.
-/// Returns what the leaver's open screens must hear: their channel list changed and the sockets
+/// A person leaves a private channel, or the people who run it take someone out: its manager and its
+/// Project's admin, whether or not they can read it. The last MANAGER stays either way, so a channel
+/// is never left without someone who can run it. Public channels are not left here.
+/// Returns what the person's open screens must hear: their channel list changed and the sockets
 /// they hold on the channel close.
 pub async fn leave_channel(
     pool: &PgPool,
@@ -601,33 +911,70 @@ pub async fn leave_channel(
     user_id: Uuid,
 ) -> Result<Vec<ChangeNotice>, CoreError> {
     let mut tx = pool.begin().await?;
-    let Some(row) = load_channel(&mut tx, channel_id, actor_id).await? else {
-        return Err(CoreError::NotFound);
-    };
-    access::require_member(&mut tx, row.workspace_id, actor_id).await?;
-    let Some(role) = row.role.as_deref() else {
-        return Err(CoreError::NotFound);
-    };
-    if user_id != actor_id {
-        return Err(CoreError::forbidden("you can only remove yourself"));
+    let st = standing(&mut tx, actor_id, channel_id).await?;
+    let own = user_id == actor_id;
+    if own {
+        if st.row.role.is_none() {
+            return Err(CoreError::NotFound);
+        }
+    } else if !st.runs_channel() {
+        return Err(st.refusal());
     }
-    if row.visibility != "PRIVATE" {
-        return Err(CoreError::validation("only a private channel can be left"));
+    if st.row.visibility != "PRIVATE" {
+        return Err(CoreError::validation(if own {
+            "only a private channel can be left"
+        } else {
+            "people are taken out of a private channel only"
+        }));
     }
-    if role == "MANAGER" && !other_manager_stays(&mut tx, channel_id, actor_id).await? {
+    let can_read = st.can_read();
+    let row = st.row;
+    // The person's role with effect (a row of someone who lost the Project is none).
+    let role: Option<String> = sqlx::query_scalar(&format!(
+        "SELECT {role} FROM penfii.channels ch
+         LEFT JOIN penfii.channel_members cm ON cm.channel_id = ch.id AND cm.user_id = $2
+         WHERE ch.id = $1",
+        role = access::CHANNEL_ROLE
+    ))
+    .bind(channel_id)
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let row_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM penfii.channel_members WHERE channel_id = $1 AND user_id = $2)",
+    )
+    .bind(channel_id)
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !own && !row_exists {
+        return Err(CoreError::NotFound);
+    }
+    if role.as_deref() == Some("MANAGER")
+        && !other_manager_stays(&mut tx, channel_id, user_id).await?
+    {
         return Err(CoreError::conflict(
             "last_manager",
-            "the last manager cannot leave; make someone else a manager first",
+            if own {
+                "the last manager cannot leave; make someone else a manager first"
+            } else {
+                "the last manager cannot be removed; make someone else a manager first"
+            },
         ));
     }
     let removed =
         sqlx::query("DELETE FROM penfii.channel_members WHERE channel_id = $1 AND user_id = $2")
             .bind(channel_id)
-            .bind(actor_id)
+            .bind(user_id)
             .execute(&mut *tx)
             .await?
             .rows_affected();
     if removed == 1 {
+        let facts = if own {
+            serde_json::json!({"userId": user_id, "self": true})
+        } else {
+            serde_json::json!({"userId": user_id, "reason": "removed", "by": actor_id})
+        };
         crate::events::emit_simple(
             &mut tx,
             row.workspace_id,
@@ -635,15 +982,31 @@ pub async fn leave_channel(
             channel_id,
             "channel.member_removed",
             Some(actor_id),
-            serde_json::json!({"userId": actor_id, "self": true}),
+            facts,
         )
         .await?;
+        if !own {
+            crate::admin::audit(
+                &mut tx,
+                row.workspace_id,
+                Some(actor_id),
+                "channel.member_removed",
+                "CHANNEL",
+                channel_id,
+                serde_json::json!({"userId": user_id, "actorCanRead": can_read}),
+            )
+            .await?;
+        }
     }
     tx.commit().await?;
-    Ok(vec![
-        ChangeNotice::Space { user_id: actor_id },
-        ChangeNotice::Access { user_id: actor_id },
-    ])
+    let mut notices = vec![
+        ChangeNotice::Space { user_id },
+        ChangeNotice::Access { user_id },
+    ];
+    if !own {
+        notices.push(ChangeNotice::Space { user_id: actor_id });
+    }
+    Ok(notices)
 }
 
 pub async fn create_dm(
@@ -865,15 +1228,17 @@ async fn load_channel(
     channel_id: Uuid,
     user_id: Uuid,
 ) -> Result<Option<ChannelRow>, CoreError> {
-    let row = sqlx::query_as::<_, ChannelRow>(
+    let row = sqlx::query_as::<_, ChannelRow>(&format!(
         "SELECT ch.id, c.workspace_id, ch.name, ch.description, ch.topic, ch.visibility,
-                ch.team_id, ch.project_id, ch.allow_member_invites, ch.archived_at, cm.role
+                ch.team_id, ch.project_id, ch.allow_member_invites, ch.archived_at,
+                {role} AS role
          FROM penfii.channels ch
          JOIN penfii.conversations c ON c.id = ch.id
          LEFT JOIN penfii.channel_members cm
             ON cm.channel_id = ch.id AND cm.user_id = $2
          WHERE ch.id = $1",
-    )
+        role = access::CHANNEL_ROLE
+    ))
     .bind(channel_id)
     .bind(user_id)
     .fetch_optional(&mut *conn)

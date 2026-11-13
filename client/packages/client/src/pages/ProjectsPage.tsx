@@ -1,10 +1,11 @@
 import { useEffect, useRef } from 'react'
+import { QueryError } from '../ui/QueryError'
 import { DocsScreen } from '../modules/docs/DocsScreen'
 import { Link, NavLink, Navigate, useParams, useSearchParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { EmptyState } from '../design/ui'
 import { useI18n } from '../i18n/I18nProvider'
-import { shellProject, shellProjects, tasksFor } from '../preview/shellModel'
+import { previewSlots } from '../preview/slots'
 import { queries } from '../queries'
 import { MemberStack } from '../modules/people/MemberStack'
 import { useTicketPanel } from '../modules/work/panelParam'
@@ -16,14 +17,13 @@ import { WatchButton } from '../modules/attention/WatchButton'
 import { ProjectSettings, SettingsLink } from '../modules/attention/ProjectSettings'
 import { StatusSummary } from '../modules/work/ReportPanels'
 import { TimelinePage } from '../modules/work/Timeline'
-import { panelOpen } from '../shell/DetailPanel'
 import { ConversationFrame } from './SpacePage'
 
 export function ProjectsPage() {
   const { workspaceId = '', projectId, view } = useParams()
   const [params] = useSearchParams()
   if (!projectId) {
-    return <ProjectIndex workspaceId={workspaceId} mode={params.get('view')} />
+    return <ProjectIndex workspaceId={workspaceId} />
   }
   // The tab that used to be named Board is Work now; old links keep working.
   if (view === 'board') return <Navigate to={`/w/${workspaceId}/projects/${projectId}/work${params.toString() ? `?${params.toString()}` : ''}`} replace />
@@ -31,49 +31,25 @@ export function ProjectsPage() {
   return <ProjectScreen workspaceId={workspaceId} projectId={projectId} view={screen} />
 }
 
-function ProjectIndex({ workspaceId, mode }: { workspaceId: string; mode: string | null }) {
+function ProjectIndex({ workspaceId }: { workspaceId: string }) {
   const { t } = useI18n()
   const space = useQuery({ ...queries.space(workspaceId), enabled: workspaceId.length > 0 })
   const apiProjects = space.data?.projects ?? []
-  if (mode === 'tasks') {
-    const tasks = shellProjects.flatMap((project) => tasksFor(project.id))
+  if (apiProjects.length === 0) {
     return (
       <div className="page-scroll">
-        <header className="page-intro"><h1>{t('shell.projects.tasks')}</h1></header>
-        {tasks.length === 0 ? <EmptyState title={t('shell.projects.tasks')} body={t('empty.tasks')} /> : null}
-        <div className="result-list">
-          {tasks.map((task) => (
-            <Link key={task.id} className="result-hit" to={`/w/${workspaceId}/projects/${task.projectId}/work?panel=${panelOpen('task', task.id)}`}>
-              <strong>{task.title}</strong>
-              <small>{shellProject(task.projectId)?.name}</small>
-            </Link>
-          ))}
-        </div>
-      </div>
-    )
-  }
-  const projects = mode === 'recent' ? [...shellProjects].reverse() : shellProjects
-  if (projects.length === 0 && apiProjects.length === 0) {
-    return (
-      <div className="page-scroll">
-        <header className="page-intro"><h1>{mode === 'recent' ? t('shell.projects.recent') : t('shell.projects.all')}</h1></header>
-        {space.isSuccess ? <EmptyState title={t('tree.emptyProjects')} body={t('empty.projectsBody')} /> : <p className="hint">{t('loading')}</p>}
+        <header className="page-intro"><h1>{t('shell.projects.all')}</h1></header>
+        {space.isSuccess ? <EmptyState title={t('tree.emptyProjects')} body={t('empty.projectsBody')} /> : space.isError ? <QueryError query={space} /> : <p className="hint">{t('loading')}</p>}
       </div>
     )
   }
   return (
     <div className="page-scroll">
       <header className="page-intro">
-        <h1>{mode === 'recent' ? t('shell.projects.recent') : t('shell.projects.all')}</h1>
+        <h1>{t('shell.projects.all')}</h1>
         <p>{t('projects.lead')}</p>
       </header>
       <div className="result-list">
-        {projects.map((project) => (
-          <Link key={project.id} className="result-hit" to={`/w/${workspaceId}/projects/${project.id}`}>
-            <strong>{project.name}</strong>
-            <small>{project.group === 'mine' ? t('shell.projects.mine') : t('shell.projects.team')}</small>
-          </Link>
-        ))}
         {apiProjects.map((project) => (
           <Link key={project.id} className="result-hit" to={`/w/${workspaceId}/projects/${project.id}`}>
             <strong>{project.name}</strong>
@@ -135,20 +111,21 @@ function ProjectHeaderActions({ workspaceId, projectId }: { workspaceId: string;
 
 function ProjectScreen({ workspaceId, projectId, view }: { workspaceId: string; projectId: string; view: 'overview' | 'work' | 'planning' | 'settings' | 'timeline' | 'docs' | 'chat' }) {
   const { t } = useI18n()
-  const sample = shellProject(projectId)
-  const space = useQuery({ ...queries.space(workspaceId), enabled: !sample })
+  const space = useQuery({ ...queries.space(workspaceId), enabled: workspaceId.length > 0 })
   const apiProject = space.data?.projects.find((item) => item.id === projectId)
-  const name = sample?.name ?? apiProject?.name
+  const name = apiProject?.name
   // On a phone the section strip scrolls sideways: bring the current section into view when it changes.
   const tabs = useRef<HTMLElement>(null)
   useEffect(() => {
     tabs.current?.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
   }, [view])
-  if (!sample && space.isSuccess && !apiProject) {
+  // A failed read of the Space is not "still loading".
+  if (space.isError) return <div className="page-scroll"><QueryError query={space} /></div>
+  if (space.isSuccess && !apiProject) {
     return <EmptyState title={t('notFound')} body={t('projects.emptyBody')} />
   }
   // Until the Space says whether the person takes part, nothing of the inside is asked for.
-  if (!sample && !apiProject) return <div className="page-scroll"><p className="hint">{t('loading')}</p></div>
+  if (!apiProject) return <div className="page-scroll"><p className="hint">{t('loading')}</p></div>
   if (apiProject?.participating === false) return <NotParticipating name={name} />
   return (
     <div className={view === 'work' ? 'page-scroll board-page project-page' : 'page-scroll project-page'}>
@@ -180,16 +157,16 @@ function ProjectScreen({ workspaceId, projectId, view }: { workspaceId: string; 
 
 function Overview({ workspaceId, projectId, name }: { workspaceId: string; projectId: string; name: string }) {
   const { t } = useI18n()
-  const project = shellProject(projectId)
-  const tasks = tasksFor(projectId)
-  // A server Project shows what the server holds; the sample Projects keep their preview figures.
-  const board = useQuery({ ...queries.projectBoard(projectId), enabled: !project })
-  const members = useQuery({ ...queries.projectMembers(projectId), enabled: !project })
+  const board = useQuery(queries.projectBoard(projectId))
+  const members = useQuery(queries.projectMembers(projectId))
   const real = board.data ? board.data.columns.flatMap((column) => column.tickets) : []
   const done = real.filter((ticket) => board.data?.states.find((state) => state.id === ticket.statusId)?.category === 'DONE').length
-  const progress = project ? `${project.progress}%` : real.length > 0 ? `${Math.round((done / real.length) * 100)}%` : '0%'
-  const count = project ? tasks.length || 18 : real.length
-  const memberCount = project ? project.members : (members.data?.length ?? 0)
+  const progress = real.length > 0 ? `${Math.round((done / real.length) * 100)}%` : '0%'
+  const count = real.length
+  const memberCount = members.data?.length ?? 0
+  // A demo build gives its sample Projects an overview of their own; for every other Project this is `null`.
+  const demo = previewSlots.overview?.(projectId)
+  if (demo) return <>{demo}</>
   return (
     <>
       <div className="metric-row">
@@ -207,21 +184,12 @@ function Overview({ workspaceId, projectId, name }: { workspaceId: string; proje
         </article>
       </div>
       {/* Where the Project stands comes before the notes and pins, which change rarely. */}
-      {project ? null : <StatusSummary projectId={projectId} />}
-      {project ? (
-        <section className="doc-sheet">
-          <h2>{t('shell.overview.activity')}</h2>
-          <ul>{project.activity.map((item) => <li key={item}>{item}</li>)}</ul>
-          <h2>{t('shell.overview.upcoming')}</h2>
-          <ul>{project.upcoming.map((item) => <li key={item}>{item}</li>)}</ul>
-        </section>
-      ) : (
-        <section className="doc-sheet">
-          <p>{t('projects.overviewBody', { name })}</p>
-          <p><Link to={`/w/${workspaceId}/projects/${projectId}/work`}>{t('projects.openBoard')}</Link></p>
-          <PinsPanel projectId={projectId} />
-        </section>
-      )}
+      <StatusSummary projectId={projectId} />
+      <section className="doc-sheet">
+        <p>{t('projects.overviewBody', { name })}</p>
+        <p><Link to={`/w/${workspaceId}/projects/${projectId}/work`}>{t('projects.openBoard')}</Link></p>
+        <PinsPanel projectId={projectId} />
+      </section>
     </>
   )
 }

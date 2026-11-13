@@ -1,10 +1,9 @@
-/// Operator limits. Missing or non-positive session and message limits stay unset.
+/// Operator limits. Missing, empty or `0` session and message limits stay unset.
 #[derive(Debug, Clone)]
 pub struct Limits {
     pub session_ttl_seconds: Option<i64>,
     pub message_body_max_bytes: Option<i64>,
     pub invite_ttl_seconds: Option<i64>,
-    pub dev_return_invite_token: bool,
     pub file_max_bytes: Option<i64>,
     pub message_file_max_count: Option<i64>,
     pub message_file_max_bytes: Option<i64>,
@@ -12,38 +11,27 @@ pub struct Limits {
 }
 
 impl Limits {
-    pub fn from_env() -> Self {
-        Self {
-            session_ttl_seconds: positive_env("PENFII_SESSION_TTL_SECONDS"),
-            message_body_max_bytes: positive_env("PENFII_MESSAGE_BODY_MAX_BYTES"),
-            invite_ttl_seconds: present_i64("PENFII_INVITE_TTL_SECONDS"),
-            dev_return_invite_token: flag_env("PENFII_DEV_RETURN_INVITE_TOKEN"),
-            file_max_bytes: positive_env("PENFII_FILE_MAX_BYTES"),
-            message_file_max_count: positive_env("PENFII_MESSAGE_FILE_MAX_COUNT"),
-            message_file_max_bytes: positive_env("PENFII_MESSAGE_FILE_MAX_BYTES"),
+    /// Reads the limits from the environment. Not set (or empty) leaves a limit unset, as does `0`; a value that is
+    /// not a whole number, or is negative, stops the start (see [`crate::config`]).
+    pub fn from_env() -> Result<Self, String> {
+        Self::from_lookup(&crate::config::process_env)
+    }
+
+    pub fn from_lookup(lookup: crate::config::Lookup<'_>) -> Result<Self, String> {
+        use crate::config::integer;
+        let positive = |name: &str| -> Result<Option<i64>, String> {
+            Ok(integer(lookup, name, 0)?.filter(|value| *value > 0))
+        };
+        Ok(Self {
+            session_ttl_seconds: positive("PENFII_SESSION_TTL_SECONDS")?,
+            message_body_max_bytes: positive("PENFII_MESSAGE_BODY_MAX_BYTES")?,
+            invite_ttl_seconds: integer(lookup, "PENFII_INVITE_TTL_SECONDS", 0)?,
+            file_max_bytes: positive("PENFII_FILE_MAX_BYTES")?,
+            message_file_max_count: positive("PENFII_MESSAGE_FILE_MAX_COUNT")?,
+            message_file_max_bytes: positive("PENFII_MESSAGE_FILE_MAX_BYTES")?,
             login_throttle: ThrottleLimits::default(),
-        }
+        })
     }
-}
-
-fn present_i64(name: &str) -> Option<i64> {
-    let Ok(raw) = std::env::var(name) else {
-        return None;
-    };
-    raw.trim().parse::<i64>().ok()
-}
-
-fn positive_env(name: &str) -> Option<i64> {
-    match present_i64(name) {
-        Some(value) if value > 0 => Some(value),
-        _ => None,
-    }
-}
-
-fn flag_env(name: &str) -> bool {
-    std::env::var(name)
-        .ok()
-        .is_some_and(|value| value.trim() == "1")
 }
 
 /// How many failed password proofs a key may make in a window before it is locked for that long.
@@ -93,7 +81,7 @@ impl ThrottleLimits {
     /// `PENFII_LOGIN_THROTTLE_{ACCOUNT_ADDRESS,ACCOUNT,ADDRESS}_{FAILURES,WINDOW_SECONDS}`. Unset keeps
     /// the default; a value that is not a positive integer is an error, not a silent default.
     pub fn from_env() -> Result<Self, String> {
-        Self::from_lookup(|name| std::env::var(name).ok())
+        Self::from_lookup(|name| crate::config::get(&crate::config::process_env, name))
     }
 
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, String> {

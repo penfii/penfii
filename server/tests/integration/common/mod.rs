@@ -6,6 +6,8 @@
 //! database when the test passes, so tests run side by side and nothing they write is seen by
 //! another test.
 
+pub mod smtp;
+
 use std::borrow::Cow;
 use std::sync::LazyLock;
 
@@ -136,7 +138,6 @@ pub fn limits() -> Limits {
         session_ttl_seconds: Some(3600),
         message_body_max_bytes: Some(65536),
         invite_ttl_seconds: Some(604_800),
-        dev_return_invite_token: true,
         file_max_bytes: Some(10 * 1024 * 1024),
         message_file_max_count: Some(10),
         message_file_max_bytes: Some(50 * 1024 * 1024),
@@ -319,9 +320,27 @@ impl Env {
         Env::build(pool, Some(objects)).await
     }
 
+    /// A router that sends e-mail through `mailer`.
+    pub async fn with_mailer(pool: PgPool, mailer: penfii_core::mail::Mailer) -> Env {
+        Env::build_with(pool, None, Some(std::sync::Arc::new(mailer))).await
+    }
+
     async fn build(pool: PgPool, objects: Option<ObjectStore>) -> Env {
+        Env::build_with(pool, objects, None).await
+    }
+
+    async fn build_with(
+        pool: PgPool,
+        objects: Option<ObjectStore>,
+        mailer: Option<std::sync::Arc<penfii_core::mail::Mailer>>,
+    ) -> Env {
         let boot = setup(&pool).await;
-        let app = penfii_http_api::router_with(pool.clone(), limits(), false, objects, None);
+        let app = penfii_http_api::router_from(penfii_http_api::RouterConfig {
+            objects,
+            mailer,
+            webhook_kek: Some(webhook_kek()),
+            ..penfii_http_api::RouterConfig::new(pool.clone(), limits(), false)
+        });
         let cookie = sign_in(&app, OWNER_EMAIL, OWNER_PASSWORD).await;
         Env {
             pool,
@@ -396,4 +415,54 @@ impl Env {
         add_workspace(&self.pool, person.id, "Other").await;
         person
     }
+}
+
+/// Two database role names no other test uses (roles belong to the server, not to a test database).
+pub fn role_names() -> (String, String) {
+    let id = Uuid::new_v4().simple().to_string();
+    (format!("own_{}", &id[..12]), format!("app_{}", &id[..12]))
+}
+
+/// The URL of the test database behind `pool`, signed in as `role`.
+pub fn url_as(pool: &PgPool, role: &str, password: &str) -> String {
+    let mut url = url::Url::parse(&database_url(pool)).unwrap();
+    url.set_username(role).unwrap();
+    url.set_password(Some(password)).unwrap();
+    url.to_string()
+}
+
+/// Provisions an owner role and a runtime role in the database behind `pool` (as the privileged test
+/// connection does in `admin-cli db-provision`). Returns the plan that was used.
+pub async fn provision_roles(
+    pool: &PgPool,
+    owner: &str,
+    runtime: &str,
+) -> penfii_core::provision::Provisioned {
+    use sqlx::Connection;
+    let mut conn = sqlx::PgConnection::connect(&database_url(pool))
+        .await
+        .expect("privileged connection");
+    penfii_core::provision::provision(
+        &mut conn,
+        &penfii_core::provision::Provision {
+            owner_role: owner.to_string(),
+            owner_password: Some("owner-pass".into()),
+            runtime_role: runtime.to_string(),
+            runtime_password: Some("runtime-pass".into()),
+        },
+    )
+    .await
+    .expect("provision")
+}
+
+/// The key the test routers encrypt Signature-webhook secrets with (the server reads `PENFII_WEBHOOK_KEK` once, at start).
+pub const WEBHOOK_KEK_HEX: &str =
+    "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
+pub fn webhook_kek() -> [u8; 32] {
+    penfii_core::config::webhook_kek(&|name| {
+        (name == "PENFII_WEBHOOK_KEK").then(|| WEBHOOK_KEK_HEX.to_owned())
+    })
+    .unwrap()
+    .unwrap()
 }

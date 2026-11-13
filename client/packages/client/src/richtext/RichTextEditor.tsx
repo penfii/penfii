@@ -3,13 +3,16 @@ import type { RichTextDoc } from '@penfii/contracts'
 import { EditorContent, useEditor } from '@tiptap/react'
 import { useI18n } from '../i18n/I18nProvider'
 import { editorToRichText, richTextToEditor, sameRichText } from './adapter'
-import { editorExtensions } from './editorExtensions'
+import { editorExtensions, mentionSuggestionKey, type MentionCandidate } from './editorExtensions'
+import { MENTION_LIST_ID, MentionList, mentionOptionId, type MentionUi } from './MentionList'
+import { useMentionNameOf, useRichTextEnv, useResolverVersion } from './env'
 import { containsFence, fenceOpening } from './fence'
 import { pastedLink } from './linkPaste'
 import { parseRichText } from './parse'
 import { toggleCodeBlock, toggleInlineCode } from './codeCommands'
 import { TOOLBAR_SHORTCUTS, ariaShortcut, commandTitle } from './shortcuts'
 import { isSafeHttpUrl } from './url'
+import { isImeKey } from '../ui/ime'
 
 function openFence(editor: NonNullable<ReturnType<typeof useEditor>>): boolean {
   return editor.chain().focus().command(({ tr, state }) => {
@@ -22,6 +25,14 @@ function openFence(editor: NonNullable<ReturnType<typeof useEditor>>): boolean {
     tr.replaceWith($from.before(), $from.after(), node)
     return true
   }).run()
+}
+
+function newOccurrenceId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.floor(Math.random() * 16)
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16)
+  })
 }
 
 function markdownLike(text: string): boolean {
@@ -44,6 +55,8 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, {
   onFiles?: (files: File[]) => void
   /** Puts the cursor at the end of the text when the editor appears. */
   autoFocus?: boolean
+  /** `@` opens a list of people from `search` (from the first `@`). Absent: no mention picking. */
+  mentions?: { search: (query: string) => Promise<MentionCandidate[]> }
 }>(function RichTextEditor({
   value,
   onChange,
@@ -53,6 +66,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, {
   baseline,
   onFiles,
   autoFocus = false,
+  mentions,
 }, ref) {
   const { t } = useI18n()
   const onChangeRef = useRef(onChange)
@@ -64,6 +78,21 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, {
   const [linkOpen, setLinkOpen] = useState(false)
   const [linkHref, setLinkHref] = useState('')
   const [revision, setRevision] = useState(0)
+  const searchRef = useRef(mentions?.search)
+  const mentionUiRef = useRef<MentionUi | null>(null)
+  const [mentionUi, setMentionUiState] = useState<MentionUi | null>(null)
+  const nameOf = useMentionNameOf()
+  const nameOfRef = useRef(nameOf)
+  nameOfRef.current = nameOf
+  const env = useRichTextEnv()
+  useResolverVersion(env)
+  searchRef.current = mentions?.search
+  function setMentionUi(next: MentionUi | null) {
+    mentionUiRef.current = next
+    setMentionUiState(next)
+  }
+  // Only a composer that was given a search offers mentions; the choice is made when the editor is made.
+  const mentionsEnabled = useRef(Boolean(mentions)).current
   onChangeRef.current = onChange
   onSendRef.current = onSend
   baselineRef.current = baseline ?? null
@@ -73,7 +102,72 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, {
   const editor = useEditor({
     immediatelyRender: true,
     autofocus: autoFocus ? 'end' : false,
-    extensions: editorExtensions(() => placeholderRef.current),
+    extensions: editorExtensions(() => placeholderRef.current, {
+      nameOf: (userId) => nameOfRef.current(userId),
+      suggestion: mentionsEnabled
+        ? {
+            char: '@',
+            pluginKey: mentionSuggestionKey,
+            allowSpaces: false,
+            // `@` after a letter is part of a word (an address), not a mention.
+            allowedPrefixes: [' ', '\n', '(', '"'],
+            items: async ({ query }) => {
+              if (!searchRef.current) return []
+              try {
+                return await searchRef.current(query)
+              } catch {
+                return []
+              }
+            },
+            command: ({ editor: current, range, props }) => {
+              current
+                .chain()
+                .focus()
+                .insertContentAt(range, [
+                  { type: 'mention', attrs: { occurrenceId: newOccurrenceId(), kind: 'USER', userId: props.id, label: props.name } },
+                  { type: 'text', text: ' ' },
+                ])
+                .run()
+            },
+            render: () => {
+              let selected = 0
+              const show = (props: { items: MentionCandidate[]; query: string; clientRect?: (() => DOMRect | null) | null; command: (item: MentionCandidate) => void }) => {
+                selected = Math.min(selected, Math.max(0, props.items.length - 1))
+                setMentionUi({ items: props.items, selected, loading: false, rect: props.clientRect?.() ?? null, choose: props.command })
+              }
+              return {
+                onStart: (props) => {
+                  selected = 0
+                  show(props)
+                },
+                onUpdate: (props) => show(props),
+                onExit: () => setMentionUi(null),
+                onKeyDown: ({ event }) => {
+                  const ui = mentionUiRef.current
+                  if (!ui) return false
+                  if (event.key === 'Escape') {
+                    setMentionUi(null)
+                    return true
+                  }
+                  if (ui.items.length === 0) return false
+                  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                    const step = event.key === 'ArrowDown' ? 1 : -1
+                    selected = (selected + step + ui.items.length) % ui.items.length
+                    setMentionUi({ ...ui, selected })
+                    return true
+                  }
+                  if (event.key === 'Enter' || event.key === 'Tab') {
+                    const picked = ui.items[selected]
+                    if (picked) ui.choose(picked)
+                    return true
+                  }
+                  return false
+                },
+              }
+            },
+          }
+        : null,
+    }),
     content: richTextToEditor(value),
     editorProps: {
       attributes: {
@@ -82,6 +176,9 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, {
         'aria-label': label,
       },
       handleKeyDown: (_view, event) => {
+        // With the people list open, Enter and Tab choose from it (the list handles them), they do not send.
+        const picking = mentionUiRef.current
+        if (picking && picking.items.length > 0 && (event.key === 'Enter' || event.key === 'Tab') && !event.isComposing && event.keyCode !== 229) return false
         if (event.key !== 'Enter' || event.shiftKey) return false
         if (event.isComposing || event.keyCode === 229) return true
         const current = editorRef.current
@@ -160,6 +257,8 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, {
     },
   }), [editor])
 
+  const listOpen = Boolean(mentionUi && mentionUi.items.length > 0)
+  const activeOption = mentionUi && listOpen ? mentionOptionId(mentionUi.selected) : undefined
   useEffect(() => {
     if (!editor) return
     editor.setOptions({
@@ -168,10 +267,23 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, {
         attributes: {
           ...editor.options.editorProps.attributes,
           'aria-label': label,
+          ...(mentionsEnabled ? { 'aria-haspopup': 'listbox', 'aria-expanded': String(listOpen) } : {}),
+          ...(listOpen ? { 'aria-controls': MENTION_LIST_ID } : {}),
+          ...(activeOption ? { 'aria-activedescendant': activeOption } : {}),
         },
       },
     })
-  }, [editor, label])
+  }, [editor, label, listOpen, activeOption, mentionsEnabled])
+
+  const resolverVersion = env?.resolver.getVersion()
+  // Names that arrive after the text was drawn replace the placeholder in the mentions on screen.
+  useEffect(() => {
+    if (!editor || editor.isDestroyed || !editor.view) return
+    editor.view.dom.querySelectorAll<HTMLElement>('[data-mention-user]').forEach((node) => {
+      const name = nameOfRef.current(node.dataset.mentionUser ?? '')
+      if (name) node.textContent = `@${name}`
+    })
+  }, [editor, resolverVersion])
 
   useEffect(() => {
     if (!editor) return
@@ -259,7 +371,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, {
             value={linkHref}
             onChange={(event) => setLinkHref(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === 'Enter') {
+              if (event.key === 'Enter' && !isImeKey(event)) {
                 event.preventDefault()
                 applyLink()
               }
@@ -268,6 +380,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, {
         ) : null}
       </div>
       <EditorContent editor={editor} />
+      {mentionUi ? <MentionList ui={mentionUi} /> : null}
     </div>
   )
 })

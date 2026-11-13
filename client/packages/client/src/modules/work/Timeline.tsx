@@ -1,3 +1,4 @@
+import { useProjectLive } from './live'
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { Link } from 'react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -9,6 +10,7 @@ import { queryKeys } from '../../queryKeys'
 import { queries } from '../../queries'
 import { buildAxis, edgePath, ganttRows, nonWorkingSpans, planBar, planConflict, planConflicts, resizeDuration, scheduleBody, shiftStart, unplannedReason, workDayMinutes, type GanttRow } from './ganttModel'
 import { useTicketPanel } from './panelParam'
+import { useNow } from '../../ui/useNow'
 import { formatMinutes } from './planValues'
 import { errorCode } from './ticketModel'
 import { browserZone, formatZoned } from './zonedTime'
@@ -54,10 +56,12 @@ export function TimelinePage({ workspaceId, projectId }: { workspaceId: string; 
   const opener = useRef<string | null>(null)
   const previousPanel = useRef<string | null>(null)
   const scrolled = useRef(false)
+  const today = useNow()
   const [coarse] = useState(() => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches)
   const ROW = coarse ? ROW_TOUCH : ROW_FINE
   const scrollRef = useRef<HTMLDivElement>(null)
   const schedule = useQuery(queries.projectSchedule(projectId))
+  useProjectLive(projectId)
   const calendar = useQuery(queries.projectCalendar(projectId))
   const [scale, setScale] = useState<'day' | 'week' | 'month'>('week')
   const planning = useQuery(queries.projectPlanning(projectId))
@@ -79,9 +83,9 @@ export function TimelinePage({ workspaceId, projectId }: { workspaceId: string; 
     }
     for (const sprint of planning.data?.sprints ?? []) dates.push(`${sprint.startsOn}T00:00:00Z`, `${sprint.endsOn}T00:00:00Z`)
     for (const milestone of planning.data?.milestones ?? []) if (milestone.targetOn && milestone.state !== 'CANCELED') dates.push(`${milestone.targetOn}T00:00:00Z`)
-    dates.push(new Date().toISOString())
+    dates.push(new Date(today).toISOString())
     return buildAxis(dates, zone, dayWidth)
-  }, [rows, zone, planning.data, dayWidth])
+  }, [rows, zone, planning.data, dayWidth, today])
 
   /** Opens the Ticket and remembers where from, so closing the panel puts the focus back there. */
   function open(ticketId: string) {
@@ -102,8 +106,8 @@ export function TimelinePage({ workspaceId, projectId }: { workspaceId: string; 
   useEffect(() => {
     if (scrolled.current || !axis || !scrollRef.current) return
     scrolled.current = true
-    scrollRef.current.scrollLeft = Math.max(0, axis.x(Date.now()) - 48)
-  }, [axis, schedule.isSuccess])
+    scrollRef.current.scrollLeft = Math.max(0, axis.x(today) - 48)
+  }, [axis, schedule.isSuccess, today])
 
   if (schedule.isPending) return <p className="hint" role="status">{t('loading')}</p>
   if (schedule.isError || !data) {
@@ -204,7 +208,7 @@ export function TimelinePage({ workspaceId, projectId }: { workspaceId: string; 
   function goToday() {
     const box = scrollRef.current
     if (!box || !axis) return
-    const left = Math.max(0, axis.x(Date.now()) - 48)
+    const left = Math.max(0, axis.x(today) - 48)
     if (typeof box.scrollTo === 'function') box.scrollTo({ left, behavior: typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
     else box.scrollLeft = left
   }
@@ -313,10 +317,10 @@ export function TimelinePage({ workspaceId, projectId }: { workspaceId: string; 
                   </g>
                   )
                 })}
-                {Date.now() >= axis.from && Date.now() <= axis.to ? (
+                {today >= axis.from && today <= axis.to ? (
                   <g>
-                    <line x1={axis.x(Date.now())} x2={axis.x(Date.now())} y1={HEAD - 6} y2={height} className="today" />
-                    <text x={axis.x(Date.now()) + 3} y={12} className="axis-label today-label">{t('timeline.today')}</text>
+                    <line x1={axis.x(today)} x2={axis.x(today)} y1={HEAD - 6} y2={height} className="today" />
+                    <text x={axis.x(today) + 3} y={12} className="axis-label today-label">{t('timeline.today')}</text>
                   </g>
                 ) : null}
                 {data.edges.map((edge) => {

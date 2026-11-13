@@ -13,7 +13,7 @@ import { JoinedCard } from './InviteJoined'
 import { ProviderButtons, useAuthRedirectError } from './ProviderButtons'
 import { queries } from '../../queries'
 import { Button } from '../../design/ui'
-import { clearAllNewDocDrafts } from '../docs/newDocDraft'
+import { purgeUserStorage } from '../../app/userBoundary'
 
 export function InviteForm({ token }: { token: string }) {
   const { t } = useI18n()
@@ -54,7 +54,7 @@ export function InviteForm({ token }: { token: string }) {
       setTeamOutcome(accepted.team)
       setJoined(accepted.workspaceId)
     } catch (caught) {
-      setError(errorText(caught, t('error.generic')))
+      setError(errorText(caught, t('error.generic'), t('error.dbUnavailable')))
     } finally {
       setBusy(false)
     }
@@ -68,7 +68,7 @@ export function InviteForm({ token }: { token: string }) {
 
   function switchAccount() {
     rememberReturn(`/invite/${token}`)
-    clearAllNewDocDrafts()
+    purgeUserStorage()
     void api.logout().finally(() => window.location.assign(`/invite/${token}`))
   }
 

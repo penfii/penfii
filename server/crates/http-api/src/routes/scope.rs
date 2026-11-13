@@ -11,7 +11,7 @@ use uuid::Uuid;
 use super::key;
 use crate::AppState;
 use crate::error::ApiError;
-use crate::extract::{self, Actor, RawJson};
+use crate::extract::{self, Actor, Body};
 
 use axum::Router;
 use axum::routing::{get, post};
@@ -109,6 +109,8 @@ fn bulk_change_from(value: &Value) -> Result<scope::BulkChange, ApiError> {
         Some("SPRINT") => Ok(scope::BulkChange::Sprint(optional_id("sprintId")?)),
         Some("ADD_MILESTONES") => Ok(scope::BulkChange::AddMilestones(ids("milestoneIds")?)),
         Some("REMOVE_MILESTONES") => Ok(scope::BulkChange::RemoveMilestones(ids("milestoneIds")?)),
+        Some("ARCHIVE") => Ok(scope::BulkChange::Archive),
+        Some("TRASH") => Ok(scope::BulkChange::Trash),
         _ => Err(ApiError::validation("unknown bulk change type")),
     }
 }
@@ -118,9 +120,8 @@ async fn bulk_tickets(
     Path(workspace_id): Path<Uuid>,
     headers: HeaderMap,
     Actor(user_id): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<BulkBody>,
 ) -> Result<Response, ApiError> {
-    let body: BulkBody = extract::parse(raw)?;
     let change = bulk_change_from(&body.change)?;
     let (result, changes) = scope::bulk_change(
         &state.pool,

@@ -6,14 +6,9 @@ import { MantineProvider } from '@mantine/core'
 import { filterSuggestionItems } from '@blocknote/core'
 import { en as enDictionary, ko as koDictionary } from '@blocknote/core/locales'
 import {
-  BasicTextStyleButton,
-  ColorStyleButton,
-  CreateLinkButton,
   FormattingToolbar,
   FormattingToolbarController,
-  NestBlockButton,
   SuggestionMenuController,
-  UnnestBlockButton,
   getDefaultReactSlashMenuItems,
   useCreateBlockNote,
   type DefaultReactSuggestionItem,
@@ -29,6 +24,7 @@ import { DocContext, type DocEditorContext } from './docContext'
 import { toBlocks, toContent } from './draftModel'
 import { ReferencePicker } from './ReferencePicker'
 import { ReferenceResolver } from './referenceCache'
+import { FormatButtons, PhoneFormatBar } from './FormatBar'
 import { docSchema, type DocReferenceKind } from './schema'
 
 /** What the page asks of the editor: the draft as DocContent, and whether it differs from the start. */
@@ -186,18 +182,11 @@ export default function DocEditor({ docId, projectId, workspaceId, content, edit
             <FormattingToolbarController
               formattingToolbar={() => (
                 <FormattingToolbar>
-                  <BasicTextStyleButton basicTextStyle="bold" />
-                  <BasicTextStyleButton basicTextStyle="italic" />
-                  <BasicTextStyleButton basicTextStyle="underline" />
-                  <BasicTextStyleButton basicTextStyle="strike" />
-                  <BasicTextStyleButton basicTextStyle="code" />
-                  <ColorStyleButton />
-                  <NestBlockButton />
-                  <UnnestBlockButton />
-                  <CreateLinkButton />
+                  <FormatButtons />
                 </FormattingToolbar>
               )}
             />
+            {editable ? <PhoneFormatBar /> : null}
             {editable ? <SuggestionMenuController triggerCharacter="/" getItems={async (query) => slashItems(query)} /> : null}
             {editable ? <SuggestionMenuController triggerCharacter="@" getItems={mentionItems} /> : null}
           </BlockNoteView>

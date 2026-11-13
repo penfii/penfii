@@ -4,6 +4,11 @@ use axum::response::{IntoResponse, Response};
 use penfii_core::CoreError;
 use serde_json::{Map, Value, json};
 
+/// The public error code of a request the database could not serve right now (HTTP 503): a lock not
+/// granted in time, a deadlock, no connection to be had, a connection that was lost. The body is
+/// the usual `{code, message}`; it says nothing about the database and offers no retry hint.
+pub const DB_UNAVAILABLE: &str = "db_unavailable";
+
 pub struct ApiError {
     status: StatusCode,
     body: Value,
@@ -88,6 +93,16 @@ impl ApiError {
                 "too many attempts, try again later",
                 json!({"retryAfterSeconds": retry_after_seconds}),
             ),
+            CoreError::DbUnavailable(cause) => {
+                // Availability or contention, not a defect: a warning, and the cause is a fixed name
+                // (no SQLSTATE, no driver text) that stays in the log.
+                tracing::warn!(cause, "database unavailable for this request");
+                Self::coded(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    DB_UNAVAILABLE,
+                    "the database is temporarily unavailable",
+                )
+            }
             CoreError::Internal(message) => {
                 tracing::error!("{message}");
                 Self::coded(

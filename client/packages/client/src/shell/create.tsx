@@ -1,9 +1,9 @@
 import { createContext, useContext, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { isApiError, isNotFound } from '@penfii/api-client'
-import type { Space, Team, TeamRole } from '@penfii/contracts'
+import type { InvitationCreated, Space, Team, TeamRole } from '@penfii/contracts'
 import { activeTeams } from '../modules/spaces/teamState'
-import { Link, useNavigate } from 'react-router'
+import { useNavigate } from 'react-router'
 import { useSession } from '../modules/identity'
 import { api } from '../api'
 import { Button, Dialog, Field, Select } from '../design/ui'
@@ -17,6 +17,7 @@ import { useTicketPrefix } from '../modules/work/useTicketPrefix'
 import { PersonPicker } from '../modules/spaces/PersonPicker'
 import { TEAM_ROLES } from '../modules/spaces/TeamMembersPanel'
 import { visibilityHint, visibilityLabel } from '../modules/spaces/visibilityLabel'
+import { InviteResult } from '../modules/admin/InviteResult'
 
 export type CreateKind = 'team' | 'project' | 'channel' | 'dm' | 'group' | 'invite' | 'task' | 'document'
 
@@ -69,13 +70,13 @@ function CreateDialogs({
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [notice, setNotice] = useState<string | null>(null)
-  const [inviteToken, setInviteToken] = useState<string | null>(null)
+  const [invited, setInvited] = useState<InvitationCreated | null>(null)
   const teams = space?.teams ?? []
   const offerTeams = activeTeams(teams)
 
   useEffect(() => {
     setNotice(null)
-    setInviteToken(null)
+    setInvited(null)
   }, [kind])
 
   async function refresh() {
@@ -89,7 +90,7 @@ function CreateDialogs({
       await refresh()
       onClose()
     } catch (caught) {
-      setNotice(isNotFound(caught) ? t('notFound') : errorText(caught, t('error.generic')))
+      setNotice(isNotFound(caught) ? t('notFound') : errorText(caught, t('error.generic'), t('error.dbUnavailable')))
     }
   }
 
@@ -163,14 +164,14 @@ function CreateDialogs({
       {kind === 'invite' ? (
         <InviteDialog
           workspaceId={workspaceId}
-          token={inviteToken}
+          invited={invited}
           teams={offerTeams}
           onSubmit={async (email, role, teamId) => {
             setNotice(null)
-            setInviteToken(null)
+            setInvited(null)
             try {
               const created = await api.createInvitation(workspaceId, { email, role, teamId })
-              setInviteToken(created.inviteToken ?? null)
+              setInvited(created)
               await queryClient.invalidateQueries({ queryKey: queryKeys.adminInvitations(workspaceId) })
               await queryClient.invalidateQueries({ queryKey: queryKeys.all.adminAudit(workspaceId) })
               return true
@@ -179,7 +180,7 @@ function CreateDialogs({
               else if (isApiError(caught) && caught.code === 'team_archived') setNotice(t('invite.teamArchived'))
               else if (isApiError(caught) && caught.status === 403) setNotice(t('admin.invite.roleNotAllowed'))
               else if (isApiError(caught) && caught.status === 409) setNotice(t('account.exists'))
-              else setNotice(isNotFound(caught) ? t('notFound') : errorText(caught, t('error.generic')))
+              else setNotice(isNotFound(caught) ? t('notFound') : errorText(caught, t('error.generic'), t('error.dbUnavailable')))
               return false
             }
           }}
@@ -452,12 +453,12 @@ function PeopleDialog({
 
 function InviteDialog({
   workspaceId,
-  token,
+  invited,
   teams,
   onSubmit,
 }: {
   workspaceId: string
-  token: string | null
+  invited: InvitationCreated | null
   teams: Team[]
   onSubmit: (email: string, role: string, teamId: string | null) => Promise<boolean>
 }) {
@@ -515,12 +516,7 @@ function InviteDialog({
         </div>
       ) : null}
       <Button type="submit">{t('create.invite')}</Button>
-      {sent ? <p role="status">{token ? t('admin.invite.sent') : t('admin.invite.sentNoLink')}</p> : null}
-      {token ? (
-        <p className="invite-token">
-          {t('invite.token')}: <Link to={`/invite/${token}`}>{token}</Link>
-        </p>
-      ) : null}
+      {sent && invited ? <InviteResult invitation={invited} /> : null}
     </form>
   )
 }

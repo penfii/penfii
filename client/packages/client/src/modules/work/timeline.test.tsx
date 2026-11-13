@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { useTicketPanel } from './panelParam'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GanttItem, ProjectSchedule } from '@penfii/contracts'
@@ -169,6 +169,22 @@ describe('Timeline', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Today' }))
     expect(scrollTo).toHaveBeenCalledTimes(1)
     expect((scrollTo.mock.calls[0][0] as { left: number }).left).toBeGreaterThanOrEqual(0)
+  })
+
+  it('moves the "today" line on as days pass, without any other change to the page', async () => {
+    // Only the clock and its interval are faked; the data still arrives through ordinary timers.
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'], now: new Date('2026-11-03T09:00:00Z') })
+    try {
+      mount()
+      await screen.findAllByRole('button', { name: /^PFI-1 Task 1, / })
+      const x = () => Number(document.querySelector('line.today')?.getAttribute('x1'))
+      const first = x()
+      expect(Number.isFinite(first)).toBe(true)
+      act(() => { vi.advanceTimersByTime(24 * 3_600_000) })
+      expect(x()).toBeGreaterThan(first)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('says a Project has no Tickets in its own words, not the chat\'s', async () => {

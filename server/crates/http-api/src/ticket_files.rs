@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
-use crate::extract::{self, Actor, RawJson};
+use crate::extract::{Actor, Body};
 
 use axum::Router;
 use axum::routing::{delete, get};
@@ -35,7 +35,7 @@ struct AttachBody {
     file_id: Uuid,
 }
 
-pub async fn list_ticket_attachments(
+async fn list_ticket_attachments(
     State(state): State<AppState>,
     Path(ticket_id): Path<Uuid>,
     Actor(user): Actor,
@@ -43,20 +43,19 @@ pub async fn list_ticket_attachments(
     Ok(Json(ticket_files::list_body(&state.pool, user, ticket_id).await?).into_response())
 }
 
-pub async fn attach_ticket_file(
+async fn attach_ticket_file(
     State(state): State<AppState>,
     Path(ticket_id): Path<Uuid>,
     Actor(user): Actor,
-    RawJson(raw): RawJson,
+    Body(body): Body<AttachBody>,
 ) -> Result<Response, ApiError> {
-    let body: AttachBody = extract::parse(raw)?;
     let (attached, change) =
         ticket_files::attach_body(&state.pool, user, ticket_id, body.file_id).await?;
     state.publish(change);
     Ok((StatusCode::CREATED, Json(attached)).into_response())
 }
 
-pub async fn detach_ticket_file(
+async fn detach_ticket_file(
     State(state): State<AppState>,
     Path((ticket_id, attachment_id)): Path<(Uuid, Uuid)>,
     Actor(user): Actor,

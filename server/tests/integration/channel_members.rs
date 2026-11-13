@@ -252,11 +252,17 @@ async fn a_member_leaves_a_private_channel_and_only_themselves(pool: PgPool) {
         StatusCode::OK
     );
 
-    // Nobody takes another person out, not even the channel's manager.
+    // A plain member does not take another person out; the channel's manager does (FEA-049).
     let refused = env.leave(&bob, &channel, &carol).await;
     assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.body);
-    let refused = env.leave(&env.owner, &channel, &carol).await;
-    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.body);
+    assert!(env.can_read(&carol, &channel).await);
+    let removed = env.leave(&env.owner, &channel, &carol).await;
+    assert_eq!(removed.status, StatusCode::NO_CONTENT, "{}", removed.body);
+    assert!(!env.can_read(&carol, &channel).await);
+    assert_eq!(
+        env.add(&env.owner, &channel, &carol).await.status,
+        StatusCode::OK
+    );
     assert!(env.can_read(&carol, &channel).await);
 
     // A member leaves: the channel closes to them, the others stay.
@@ -276,14 +282,14 @@ async fn a_member_leaves_a_private_channel_and_only_themselves(pool: PgPool) {
     );
     assert!(env.can_read(&bob, &channel).await);
 
-    // The domain event has it (channel changes are not audit-log entries).
+    // The domain events have both removals: the member's own leaving and the manager taking carol out.
     let events: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM penfii.domain_events WHERE event_kind = 'channel.member_removed'",
     )
     .fetch_one(&env.pool)
     .await
     .unwrap();
-    assert_eq!(events, 1);
+    assert_eq!(events, 2);
 }
 
 #[sqlx::test(migrator = "crate::common::GUARD")]

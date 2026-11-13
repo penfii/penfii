@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import { RouterProvider, createMemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -36,6 +36,8 @@ vi.mock('./DocEditor', async () => {
 
 import { DocTree } from './DocTree'
 import { DocPageView } from './DocPageView'
+import { DraftDoc } from './DraftDoc'
+import { NoticeHost, dismissNotice } from '../../design/notices'
 import { renderWithProviders } from '../../test/renderWithProviders'
 
 const node = (id: string, parentId: string | null, title = id): DocNode => ({
@@ -53,7 +55,7 @@ const version = (over: Partial<DocVersion> = {}): DocVersion => ({
 })
 
 function mount(ui: ReactElement, path = '/w/w/docs') {
-  return renderWithProviders(ui, { route: path, path: '/w/:workspaceId/docs' })
+  return renderWithProviders(<>{ui}<NoticeHost /></>, { route: path, path: '/w/:workspaceId/docs' })
 }
 
 beforeEach(() => {
@@ -69,7 +71,7 @@ beforeEach(() => {
   api.me.mockResolvedValue({ id: 'u1', email: 'a@x', displayName: 'Alice' })
   api.getSpace.mockResolvedValue({ teams: [], projects: [], channels: [], dms: [] })
 })
-afterEach(cleanup)
+afterEach(() => { dismissNotice(); cleanup() })
 
 describe('Doc tree', () => {
   it('shows pages nested under their parents and opens the path to the selected page', async () => {
@@ -138,6 +140,40 @@ describe('Doc tree actions follow the rights of each page', () => {
   })
 })
 
+describe('Doc tree and a new page', () => {
+  it('says so when the open page is hidden by the search, keeps the search, and clears it only when asked', async () => {
+    mount(<DocTree workspaceId="w" selectedId="b" onSelect={() => undefined} />)
+    const search = (await screen.findByLabelText('문서 검색')) as HTMLInputElement
+    fireEvent.change(search, { target: { value: '루트' } })
+    expect(await screen.findByText(/“하위”이\(가\) 열려 있지만 현재 검색 때문에/)).toBeTruthy()
+    expect(search.value).toBe('루트')
+    expect(screen.queryByRole('treeitem', { name: /하위/ })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '목록에서 보기' }))
+    expect(search.value).toBe('')
+    expect(await screen.findByRole('treeitem', { name: /하위/ })).toBeTruthy()
+    expect(screen.queryByText(/열려 있지만/)).toBeNull()
+  })
+
+  it('puts a page created from a draft into the list before it opens', async () => {
+    localStorage.removeItem('penfii.newDocDraft')
+    let tree = [node('a', null, '루트')]
+    api.getDocTree.mockImplementation(() => Promise.resolve(tree))
+    api.createDoc.mockImplementation(() => {
+      tree = [...tree, node('n', null, '새 문서')]
+      return Promise.resolve(page({ id: 'n', title: '새 문서', revisionNo: 1 }))
+    })
+    const created: string[] = []
+    mount(<><DocTree workspaceId="w" selectedId={null} onSelect={() => undefined} /><DraftDoc workspaceId="w" onCreated={(id) => created.push(id)} onDiscard={() => undefined} /></>)
+    await screen.findByRole('treeitem', { name: /루트/ })
+    expect(screen.queryByRole('treeitem', { name: /새 문서/ })).toBeNull()
+    fireEvent.change(await screen.findByLabelText('제목을 입력하세요 (필수)'), { target: { value: '새 문서' } })
+    fireEvent.click(screen.getByRole('button', { name: '저장' }))
+    fireEvent.click(await screen.findByRole('button', { name: /^(만들기|저장하고 만들기)$/ }))
+    await waitFor(() => expect(created).toEqual(['n']))
+    expect(await screen.findByRole('treeitem', { name: /새 문서/ })).toBeTruthy()
+  })
+})
+
 describe('Doc page', () => {
   it('shows the unavailable state for a page that is deleted or not allowed, without a title', async () => {
     api.getDoc.mockRejectedValue(new ApiError(404, 'not_found', 'not found'))
@@ -162,7 +198,7 @@ describe('Doc page', () => {
     mount(<DocPageView workspaceId="w" docId="p1" />)
     fireEvent.click(await screen.findByRole('button', { name: '편집' }))
     expect(await screen.findByRole('button', { name: '저장' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '취소' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '편집 종료' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: '편집' })).toBeNull()
     expect(screen.queryByRole('button', { name: '버전 만들기' })).toBeNull()
     expect((await screen.findByTestId('editor')).dataset.editable).toBe('true')
@@ -204,27 +240,100 @@ describe('Doc page', () => {
     api.saveDoc.mockRejectedValue(new ApiError(409, 'version_conflict', 'conflict'))
     mount(<DocPageView workspaceId="w" docId="p1" />)
     fireEvent.click(await screen.findByRole('button', { name: '편집' }))
-    fireEvent.click(await screen.findByRole('button', { name: '저장' }))
+    await screen.findByRole('button', { name: '저장' })
+    fireEvent.click(screen.getByText('type'))
+    fireEvent.click(screen.getByRole('button', { name: '저장' }))
     expect(await screen.findByText(/다른 곳에서 먼저 저장되어/)).toBeTruthy()
+    expect(screen.getByText('저장하지 못함')).toBeTruthy()
     expect(screen.getByRole('button', { name: '저장' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '최신 내용 불러오기' }))
     expect(await screen.findByRole('button', { name: '편집' })).toBeTruthy()
   })
 
-  it('Cancel leaves at once when nothing changed and asks before throwing a draft away', async () => {
+  it('Finish editing leaves at once when nothing changed and asks before leaving a draft: save and finish, keep editing, or discard', async () => {
     api.getDoc.mockResolvedValue(page())
+    api.saveDoc.mockResolvedValue(page({ revisionNo: 4 }))
     mount(<DocPageView workspaceId="w" docId="p1" />)
     fireEvent.click(await screen.findByRole('button', { name: '편집' }))
-    fireEvent.click(await screen.findByRole('button', { name: '취소' }))
+    fireEvent.click(await screen.findByRole('button', { name: '편집 종료' }))
     expect(await screen.findByRole('button', { name: '편집' })).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: '편집' }))
     await screen.findByRole('button', { name: '저장' })
     fireEvent.click(screen.getByText('type'))
-    fireEvent.click(screen.getByRole('button', { name: '취소' }))
-    fireEvent.click(await screen.findByRole('button', { name: '버리기' }))
+    fireEvent.click(screen.getByRole('button', { name: '편집 종료' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.textContent).toContain('편집을 마칠까요?')
+    // Keep editing: the draft is untouched.
+    fireEvent.click(within(dialog).getByRole('button', { name: '계속 편집' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(screen.getByText('저장하지 않은 변경')).toBeTruthy()
+    // Discard and leave: nothing is sent.
+    fireEvent.click(screen.getByRole('button', { name: '편집 종료' }))
+    fireEvent.click(await screen.findByRole('button', { name: '버리고 나가기' }))
     expect(await screen.findByRole('button', { name: '편집' })).toBeTruthy()
     expect(api.saveDoc).not.toHaveBeenCalled()
+  })
+
+  it('Ctrl+S saves a changed draft, does nothing when nothing changed, and never lets the browser save the page', async () => {
+    api.getDoc.mockResolvedValue(page())
+    api.saveDoc.mockResolvedValue(page({ revisionNo: 4 }))
+    mount(<DocPageView workspaceId="w" docId="p1" />)
+    fireEvent.click(await screen.findByRole('button', { name: '편집' }))
+    await screen.findByRole('button', { name: '저장' })
+    const clean = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true })
+    document.dispatchEvent(clean)
+    expect(clean.defaultPrevented).toBe(true)
+    expect(api.saveDoc).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText('type'))
+    const changed = new KeyboardEvent('keydown', { key: 'S', metaKey: true, bubbles: true, cancelable: true })
+    document.dispatchEvent(changed)
+    expect(changed.defaultPrevented).toBe(true)
+    await waitFor(() => expect(api.saveDoc).toHaveBeenCalledTimes(1))
+    expect(await screen.findByRole('button', { name: '편집' })).toBeTruthy()
+    // Reading again: the shortcut is the browser's.
+    const reading = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true })
+    document.dispatchEvent(reading)
+    expect(reading.defaultPrevented).toBe(false)
+  })
+
+  it('Save and finish saves the draft and leaves, and says so in a notice', async () => {
+    api.getDoc.mockResolvedValue(page())
+    api.saveDoc.mockResolvedValue(page({ revisionNo: 4 }))
+    mount(<DocPageView workspaceId="w" docId="p1" />)
+    fireEvent.click(await screen.findByRole('button', { name: '편집' }))
+    await screen.findByRole('button', { name: '저장' })
+    fireEvent.click(screen.getByText('type'))
+    fireEvent.click(screen.getByRole('button', { name: '편집 종료' }))
+    fireEvent.click(await screen.findByRole('button', { name: '저장하고 종료' }))
+    await waitFor(() => expect(api.saveDoc).toHaveBeenCalledTimes(1))
+    expect(await screen.findByRole('button', { name: '편집' })).toBeTruthy()
+    expect(screen.getAllByText('저장했습니다').length).toBeGreaterThan(0)
+  })
+
+  it('keeps Save off while nothing has changed, says Saved, and shows Saving, Save failed and Retry', async () => {
+    api.getDoc.mockResolvedValue(page({ updatedAt: '2026-10-23T05:00:00Z' }))
+    let fail = true
+    let release: () => void = () => undefined
+    api.saveDoc.mockImplementation(() => new Promise((resolve, reject) => { release = () => (fail ? reject(new Error('down')) : resolve(page({ revisionNo: 4 }))) }))
+    mount(<DocPageView workspaceId="w" docId="p1" />)
+    fireEvent.click(await screen.findByRole('button', { name: '편집' }))
+    const save = (await screen.findByRole('button', { name: '저장' })) as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    expect(document.getElementById('doc-edit-status')?.textContent).toMatch(/^저장됨 · /)
+    fireEvent.click(screen.getByText('type'))
+    expect(save.disabled).toBe(false)
+    fireEvent.click(save)
+    expect(await screen.findByText('저장 중…')).toBeTruthy()
+    await act(async () => { release() })
+    expect(await screen.findByText('저장하지 못함')).toBeTruthy()
+    // The failure stays, the draft is still here, and the button now says what it does.
+    expect(screen.getByRole('alert').textContent).toBe('저장하지 못함')
+    fail = false
+    fireEvent.click(screen.getByRole('button', { name: '다시 저장' }))
+    await act(async () => { release() })
+    expect(await screen.findByRole('button', { name: '편집' })).toBeTruthy()
+    expect(api.saveDoc).toHaveBeenCalledTimes(2)
   })
 
   it('asks before any navigation leaves an unsaved draft', async () => {
@@ -249,6 +358,32 @@ describe('Doc page', () => {
     fireEvent.click(await screen.findByRole('button', { name: '버리고 이동' }))
     await waitFor(() => expect(router.state.location.pathname).toBe('/elsewhere'))
     expect(api.saveDoc).not.toHaveBeenCalled()
+  })
+
+  it('offers Save and leave when navigation is held, and leaves only if the save worked', async () => {
+    api.getDoc.mockResolvedValue(page())
+    api.saveDoc.mockRejectedValueOnce(new Error('down')).mockResolvedValueOnce(page({ revisionNo: 4 }))
+    const router = createMemoryRouter(
+      [
+        { path: '/w/:workspaceId/docs', element: <DocPageView workspaceId="w" docId="p1" /> },
+        { path: '/elsewhere', element: <p>다른 곳</p> },
+      ],
+      { initialEntries: ['/w/w/docs?doc=p1'] },
+    )
+    renderWithProviders(<RouterProvider router={router} />)
+    fireEvent.click(await screen.findByRole('button', { name: '편집' }))
+    await screen.findByRole('button', { name: '저장' })
+    fireEvent.click(screen.getByText('type'))
+    void router.navigate('/elsewhere')
+    fireEvent.click(await screen.findByRole('button', { name: '저장하고 이동' }))
+    await waitFor(() => expect(api.saveDoc).toHaveBeenCalledTimes(1))
+    // The save failed: still here, the failure is shown.
+    expect(await screen.findByText('저장하지 못함')).toBeTruthy()
+    expect(router.state.location.pathname).toBe('/w/w/docs')
+    void router.navigate('/elsewhere')
+    fireEvent.click(await screen.findByRole('button', { name: '저장하고 이동' }))
+    await waitFor(() => expect(router.state.location.pathname).toBe('/elsewhere'))
+    expect(api.saveDoc).toHaveBeenCalledTimes(2)
   })
 
   it('does not hold navigation after the draft was saved', async () => {
@@ -342,14 +477,14 @@ describe('Doc page', () => {
     expect(body.content[0]!.content.some((c) => c.type === 'mention' && c.attrs?.userId === 'u2')).toBe(true)
   })
 
-  it('edit view offers only Save and Cancel (History and Restore live in the read view)', async () => {
+  it('edit view offers only Save and Finish editing (History and Restore live in the read view)', async () => {
     api.getDoc.mockResolvedValue(page())
     mount(<DocPageView workspaceId="w" docId="p1" />)
     fireEvent.click(await screen.findByRole('button', { name: '편집' }))
     await screen.findByRole('button', { name: '저장' })
     expect(screen.queryByRole('button', { name: '기록' })).toBeNull()
-    expect(screen.getByRole('button', { name: '취소' })).toBeTruthy()
-    expect(screen.getByText('변경 사항 없음')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '편집 종료' })).toBeTruthy()
+    expect(document.getElementById('doc-edit-status')?.textContent).toMatch(/^저장됨/)
   })
 
   it('says why Save is off while the title is empty, and turns it on as soon as one is typed', async () => {

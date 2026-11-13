@@ -1,10 +1,7 @@
 import { useLayoutEffect, useRef } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 import type { Ticket } from '@penfii/contracts'
-import { Badge } from '../design/ui'
 import { useI18n } from '../i18n/I18nProvider'
-import { previewDocs } from '../preview/catalog'
-import { taskById, type TaskStatus } from '../preview/shellModel'
 import { TicketPanel } from '../modules/work/TicketPanel'
 import { CreateTicketPanel } from '../modules/work/CreateTicketPanel'
 import type { PaneControls } from './ResizeHandle'
@@ -12,13 +9,6 @@ import { ChooseProjectPanel } from '../modules/work/ChooseProjectPanel'
 import { announceTicket } from '../modules/work/fromChat'
 import { useLeaveOverlay } from './overlayTrail'
 import { CREATE_KEYS, chatSourceFromParams, createContextFromParams, isCreatePanel, ticketIdFromPanel } from '../modules/work/panelParam'
-
-const statusLabel: Record<TaskStatus, 'shell.board.backlog' | 'projects.todo' | 'projects.doing' | 'projects.done'> = {
-  backlog: 'shell.board.backlog',
-  todo: 'projects.todo',
-  doing: 'projects.doing',
-  done: 'projects.done',
-}
 
 export function DetailPanel({ ticketPane, bindClose }: { ticketPane?: PaneControls; bindClose?: (close: () => void) => void }) {
   const { t } = useI18n()
@@ -39,10 +29,6 @@ export function DetailPanel({ ticketPane, bindClose }: { ticketPane?: PaneContro
     closeRef.current = () => {}
     return null
   }
-  const splitAt = panel.indexOf(':')
-  const kind = splitAt === -1 ? panel : panel.slice(0, splitAt)
-  const id = splitAt === -1 ? '' : panel.slice(splitAt + 1)
-
   function close() {
     const next = new URLSearchParams(params)
     next.delete('panel')
@@ -121,40 +107,15 @@ export function DetailPanel({ ticketPane, bindClose }: { ticketPane?: PaneContro
     )
   }
 
-  const task = kind === 'task' ? taskById(id) : undefined
-  const doc = kind === 'document' ? previewDocs.find((item) => item.id === id) : undefined
-
+  // Nothing else opens here: a panel kind this build does not know.
   closeRef.current = close
   return (
     <aside className="detail-panel" aria-label={t('shell.detail.task')}>
       <div className="detail-head">
-        <h2>{task ? t('shell.detail.task') : doc ? t('nav.docs') : t('shell.detail.task')}</h2>
+        <h2>{t('shell.detail.task')}</h2>
         <button type="button" className="btn btn-ghost" onClick={close}>{t('close')}</button>
       </div>
-      {task ? (
-        <>
-          <h3>{task.title}</h3>
-          <section>
-            <h4>{t('shell.detail.properties')}</h4>
-            <p><Badge>{t(statusLabel[task.status])}</Badge></p>
-            <p>{task.assignee}</p>
-          </section>
-          <section>
-            <h4>{t('shell.detail.comments')}</h4>
-            {task.comments.length === 0 ? <p className="tree-empty">{t('shell.detail.noComments')}</p> : null}
-            <ul className="plain-list">
-              {task.comments.map((comment) => <li key={comment}>{comment}</li>)}
-            </ul>
-          </section>
-        </>
-      ) : null}
-      {doc ? (
-        <>
-          <h3>{t(doc.titleKey)}</h3>
-          <p>{t(doc.bodyKey)}</p>
-        </>
-      ) : null}
-      {!task && !doc ? <p className="tree-empty">{t('shell.detail.missing')}</p> : null}
+      <p className="tree-empty">{t('shell.detail.missing')}</p>
     </aside>
   )
 }

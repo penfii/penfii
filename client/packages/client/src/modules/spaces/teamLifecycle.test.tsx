@@ -26,6 +26,7 @@ function wrap(node: React.ReactNode) {
 beforeEach(() => {
   localStorage.setItem('penfii.locale', 'en-US')
   for (const fn of Object.values(api)) fn.mockReset()
+  api.searchDirectory.mockResolvedValue({ query: '', results: [] })
   HTMLDialogElement.prototype.showModal ??= function showModal(this: HTMLDialogElement) { this.setAttribute('open', '') }
   HTMLDialogElement.prototype.close ??= function close(this: HTMLDialogElement) { this.removeAttribute('open') }
 })

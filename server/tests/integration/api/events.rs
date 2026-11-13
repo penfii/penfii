@@ -463,3 +463,270 @@ async fn a_team_made_by_the_dev_directory_seed_records_team_created_once(pool: P
         assert_eq!(outbox, 1);
     }
 }
+
+mod lease_probe {
+    use penfii_core::CoreError;
+    use penfii_core::events::{EventRow, ExternalConsumer, HandlerFuture};
+    use sqlx::PgPool;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Notify;
+
+    /// What one call of the consumer does: tell the test it has started, wait to be released, then
+    /// answer. A call with `wait = false` answers at once; `hang` never answers (a worker that died).
+    #[derive(Clone)]
+    pub struct Step {
+        pub entered: Arc<Notify>,
+        pub release: Arc<Notify>,
+        pub wait: bool,
+        pub hang: bool,
+        pub fail: bool,
+    }
+
+    impl Step {
+        pub fn new(wait: bool, fail: bool) -> Self {
+            Self {
+                entered: Arc::new(Notify::new()),
+                release: Arc::new(Notify::new()),
+                wait,
+                hang: false,
+                fail,
+            }
+        }
+    }
+
+    /// An external consumer whose n-th call follows the n-th step (the last step repeats).
+    pub struct Scripted {
+        pub steps: Mutex<Vec<Step>>,
+        pub calls: AtomicUsize,
+    }
+
+    impl Scripted {
+        pub fn new(steps: Vec<Step>) -> Self {
+            Self {
+                steps: Mutex::new(steps),
+                calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl ExternalConsumer for Scripted {
+        fn name(&self) -> &'static str {
+            "scripted"
+        }
+        fn accepts(&self, kind: &str) -> bool {
+            kind == "ticket.created"
+        }
+        fn handle<'a>(&'a self, _pool: &'a PgPool, _event: &'a EventRow) -> HandlerFuture<'a> {
+            Box::pin(async move {
+                let call = self.calls.fetch_add(1, Ordering::SeqCst);
+                let step = {
+                    let steps = self.steps.lock().unwrap();
+                    steps[call.min(steps.len() - 1)].clone()
+                };
+                step.entered.notify_one();
+                if step.hang {
+                    std::future::pending::<()>().await;
+                }
+                if step.wait {
+                    step.release.notified().await;
+                }
+                if step.fail {
+                    Err(CoreError::validation("scripted failure"))
+                } else {
+                    Ok(())
+                }
+            })
+        }
+    }
+}
+
+/// One Ticket in a fresh workspace, its `ticket.created` receipt for the `scripted` consumer made,
+/// and a registry that backs off for no time and gives up after three claims.
+async fn one_scripted_receipt(
+    world: &World,
+    consumer: &std::sync::Arc<lease_probe::Scripted>,
+) -> (penfii_core::events::Registry, Uuid, Uuid) {
+    let workspace_id = workspace(world, &format!("lease-{}", Uuid::new_v4())).await;
+    let (project_id, _) = new_project(world, workspace_id, "Lease").await;
+    let (status, v) = make_ticket(world, &project_id, "lease-1", json!({"title":"L"})).await;
+    assert_eq!(status, StatusCode::CREATED, "{v}");
+    let mut registry = fast_registry(workspace_id);
+    registry.external = vec![consumer.clone()];
+    penfii_core::events::fan_out(&world.pool, &registry, 100)
+        .await
+        .unwrap();
+    let event_id: Uuid = sqlx::query_scalar(
+        "SELECT r.event_id FROM penfii.consumer_receipts r JOIN penfii.domain_events e ON e.event_id = r.event_id
+         WHERE r.consumer = 'scripted' AND e.workspace_id = $1",
+    )
+    .bind(workspace_id)
+    .fetch_one(&world.pool)
+    .await
+    .unwrap();
+    (registry, workspace_id, event_id)
+}
+
+async fn receipt(pool: &PgPool, event_id: Uuid) -> (String, i32, Option<Uuid>, Option<String>) {
+    sqlx::query_as(
+        "SELECT state, attempts, lease_token, last_error_code FROM penfii.consumer_receipts
+         WHERE event_id = $1 AND consumer = 'scripted'",
+    )
+    .bind(event_id)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+async fn expire_lease(pool: &PgPool, event_id: Uuid) {
+    sqlx::query("UPDATE penfii.consumer_receipts SET lease_until = now() - interval '1 second' WHERE event_id = $1 AND consumer = 'scripted'")
+        .bind(event_id)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// A worker whose lease ran out and that reports late (a failure or a success) changes nothing: the
+/// receipt stays with the worker that claimed it after that, attempts and all.
+async fn late_report(pool: PgPool, late_fails: bool) {
+    use lease_probe::{Scripted, Step};
+    use std::sync::Arc;
+    let world = &World::new(pool).await;
+    let first = Step::new(true, late_fails);
+    let second = Step::new(true, false);
+    let (first_entered, first_release) = (first.entered.clone(), first.release.clone());
+    let (second_entered, second_release) = (second.entered.clone(), second.release.clone());
+    let consumer = Arc::new(Scripted::new(vec![first, second]));
+    let (registry, _, event_id) = one_scripted_receipt(world, &consumer).await;
+
+    // Worker A claims the receipt (attempt 1) and is held inside its handler.
+    let a = tokio::spawn({
+        let (pool, registry, consumer) = (world.pool.clone(), registry.clone(), consumer.clone());
+        async move {
+            penfii_core::events::run_external_consumer(&pool, &registry, &(consumer as _)).await
+        }
+    });
+    first_entered.notified().await;
+    let (state, attempts, token_a, _) = receipt(&world.pool, event_id).await;
+    assert_eq!((state.as_str(), attempts), ("RUNNING", 1));
+
+    // Its lease runs out; worker B claims the receipt again (attempt 2) and is held as well.
+    expire_lease(&world.pool, event_id).await;
+    let b = tokio::spawn({
+        let (pool, registry, consumer) = (world.pool.clone(), registry.clone(), consumer.clone());
+        async move {
+            penfii_core::events::run_external_consumer(&pool, &registry, &(consumer as _)).await
+        }
+    });
+    second_entered.notified().await;
+    let (state, attempts, token_b, _) = receipt(&world.pool, event_id).await;
+    assert_eq!(
+        (state.as_str(), attempts),
+        ("RUNNING", 2),
+        "a re-claim counts"
+    );
+    assert_ne!(token_a, token_b);
+
+    // A reports late: nothing changes.
+    first_release.notify_one();
+    a.await.unwrap().unwrap();
+    let (state, attempts, token, code) = receipt(&world.pool, event_id).await;
+    assert_eq!((state.as_str(), attempts), ("RUNNING", 2));
+    assert_eq!(token, token_b, "B's lease is still B's");
+    assert_eq!(code, None);
+
+    // B finishes: the receipt is done.
+    second_release.notify_one();
+    b.await.unwrap().unwrap();
+    let (state, attempts, token, _) = receipt(&world.pool, event_id).await;
+    assert_eq!((state.as_str(), attempts), ("DONE", 2));
+    assert_eq!(token, None);
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_late_failure_of_a_worker_that_lost_its_lease_changes_nothing(pool: PgPool) {
+    late_report(pool, true).await;
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_late_success_of_a_worker_that_lost_its_lease_changes_nothing(pool: PgPool) {
+    late_report(pool, false).await;
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_worker_that_keeps_dying_cannot_go_on_for_ever(pool: PgPool) {
+    use lease_probe::{Scripted, Step};
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    let world = &World::new(pool).await;
+    let mut dying = Step::new(false, false);
+    dying.hang = true;
+    let consumer = Arc::new(Scripted::new(vec![dying]));
+    let (registry, _, event_id) = one_scripted_receipt(world, &consumer).await;
+    let dyn_consumer: Arc<dyn penfii_core::events::ExternalConsumer> = consumer.clone();
+
+    // max_attempts is 3: three claims run the handler, and each time the worker dies (its run is
+    // dropped while the handler hangs) and its lease runs out.
+    for claim in 1..=3 {
+        let died = tokio::time::timeout(
+            std::time::Duration::from_millis(300),
+            penfii_core::events::run_external_consumer(&world.pool, &registry, &dyn_consumer),
+        )
+        .await;
+        assert!(died.is_err(), "the handler never answers");
+        let (state, attempts, _, _) = receipt(&world.pool, event_id).await;
+        assert_eq!((state.as_str(), attempts), ("RUNNING", claim));
+        expire_lease(&world.pool, event_id).await;
+    }
+    // The fourth claim does not run the handler: the receipt has used its attempts up.
+    let handled = penfii_core::events::run_external_consumer(&world.pool, &registry, &dyn_consumer)
+        .await
+        .unwrap();
+    assert_eq!(handled, 0);
+    assert_eq!(consumer.calls.load(Ordering::SeqCst), 3);
+    let (state, attempts, token, code) = receipt(&world.pool, event_id).await;
+    assert_eq!((state.as_str(), attempts), ("DEAD", 3));
+    assert_eq!(token, None);
+    assert_eq!(code.as_deref(), Some("lease_expired"));
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_failing_external_consumer_is_claimed_once_per_attempt_and_ends_dead(pool: PgPool) {
+    use lease_probe::{Scripted, Step};
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    let world = &World::new(pool).await;
+    let consumer = Arc::new(Scripted::new(vec![Step::new(false, true)]));
+    let (registry, _, event_id) = one_scripted_receipt(world, &consumer).await;
+    let dyn_consumer: Arc<dyn penfii_core::events::ExternalConsumer> = consumer.clone();
+
+    // First failure: the attempt was counted by the claim, the failure adds nothing.
+    penfii_core::events::run_external_consumer(&world.pool, &registry, &dyn_consumer)
+        .await
+        .unwrap();
+    let (state, attempts, token, code) = receipt(&world.pool, event_id).await;
+    assert_eq!((state.as_str(), attempts), ("PENDING", 1));
+    assert_eq!((token, code.as_deref()), (None, Some("validation")));
+
+    // Backoff is 0 in this registry: it is claimed again until max_attempts (3), then it is DEAD.
+    for _ in 0..4 {
+        penfii_core::events::run_external_consumer(&world.pool, &registry, &dyn_consumer)
+            .await
+            .unwrap();
+    }
+    let (state, attempts, _, _) = receipt(&world.pool, event_id).await;
+    assert_eq!((state.as_str(), attempts), ("DEAD", 3));
+    assert_eq!(
+        consumer.calls.load(Ordering::SeqCst),
+        3,
+        "no run past max_attempts"
+    );
+
+    // An operator's retry starts the count again.
+    let retried =
+        penfii_core::events::requeue_dead(&world.pool, Some("scripted"), Some(event_id)).await;
+    assert!(retried.is_ok(), "{retried:?}");
+    let (state, attempts, _, _) = receipt(&world.pool, event_id).await;
+    assert_eq!((state.as_str(), attempts), ("PENDING", 0));
+}

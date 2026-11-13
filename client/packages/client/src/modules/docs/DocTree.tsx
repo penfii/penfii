@@ -55,6 +55,12 @@ export function DocTree({
   const roots = useMemo(() => buildTree(shown), [shown])
   const space = useQuery({ ...queries.space(workspaceId), enabled: !projectId })
   const searching = query.trim().length > 0
+  // A page that was just created or opened from elsewhere may be out of sight in a long list.
+  useEffect(() => {
+    if (selectedId) document.querySelector('[role="treeitem"][aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' })
+  }, [selectedId, tree.data])
+  // The page being looked at (a new one, say) may not match the search: say so and let the person choose to clear it; the search is never cleared for them.
+  const hiddenOpen = searching && selectedId ? nodes.find((node) => node.id === selectedId && !shown.some((item) => item.id === node.id)) : undefined
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [renaming, setRenaming] = useState<string | null>(null)
   const [renameText, setRenameText] = useState('')
@@ -222,6 +228,12 @@ export function DocTree({
       <button type="button" className="nav-add" onClick={() => (onDraft ? onDraft(null) : setCreating({ parentId: null }))}>+ {t('docs.new')}</button>
       <input className="doc-tree-search" value={query} aria-label={t('docs.tree.search')} placeholder={t('docs.tree.search')} onChange={(event) => setQuery(event.target.value)} />
       {message ? <p className="board-error" role="alert">{message}</p> : null}
+      {hiddenOpen ? (
+        <p className="doc-tree-hidden" role="status">
+          {t('docs.new.hiddenBySearch', { title: hiddenOpen.title || t('docs.untitled') })}{' '}
+          <button type="button" className="link-button" onClick={() => setQuery('')}>{t('docs.new.showInList')}</button>
+        </p>
+      ) : null}
       {rows.length === 0 ? <p className="tree-empty">{t('docs.tree.empty')}</p> : null}
       <ul className="doc-tree" role="tree" aria-label={t('nav.docs')} onKeyDown={onKeyDown}>
         {(groups ?? [null]).flatMap((group) => {

@@ -6,10 +6,21 @@
     ".": {
       "entry": ["scripts/*.mjs"]
     },
+    "packages/contracts": {
+      // Written by scripts/generate-types.mjs; its unused exports (paths, webhooks, $defs) are part of the tool's output.
+      "ignore": ["src/generated.ts"]
+    },
+    "apps/e2e": {
+      // Run by Playwright, not imported.
+      "entry": ["tests/**/*.spec.ts"],
+      // Test helpers: `knip --production` skips the specs that import them, so it would call them unused.
+      "ignore": ["support/**"]
+    },
+    "apps/web": {
+      // Served as /sw.js and registered by the app at run time (modules/push/registerServiceWorker.ts), so no import reaches it.
+      "entry": ["public/sw.js"]
+    },
     "packages/client": {
-      // The live co-editing editor is kept but not mounted (wiki pages use save-and-version). Treating it as
-      // an entry keeps it, its provider and the yjs / y-prosemirror / y-protocols / lib0 dependencies checked.
-      "entry": ["src/modules/docs/DocCollabEditor.tsx!"],
       // `knip --production` also reports code that only tests use; these files exist for the tests.
       "project": ["src/**/*.{ts,tsx}!", "!src/test/**!", "!src/**/test{Fixtures,Host}.{ts,tsx}!", "!src/modules/docs/golden.ts!"]
     }

@@ -40,7 +40,6 @@ Out of scope: findings that need a modified or malicious server or an already co
 
 These settings exist for local development and must not be used on a network you do not control:
 
-- `PENFII_DEV_RETURN_INVITE_TOKEN=1` returns invitation link tokens to the inviter's browser.
 - `make run` in `server/` and the development seed (`alice@ourspace.dev`, password `1234`, debug builds only) are for development.
 
 For a real deployment, see [docs/self-hosting.md](docs/self-hosting.md). In particular:
@@ -49,5 +48,6 @@ For a real deployment, see [docs/self-hosting.md](docs/self-hosting.md). In part
 - Behind a reverse proxy, set `PENFII_TRUSTED_PROXIES` and `PENFII_EDGE_PROXIES` to that proxy and nothing else; the sign-in throttle reads the client address from `X-Forwarded-For` only from the proxies you name.
 - Keep OpenSearch, PostgreSQL and the object store unreachable from outside the Compose network. The bundled OpenSearch runs with its security plugin disabled.
 - Replace every `CHANGE_ME` in `docker/.env` and keep that file private.
+- E-mail is optional (`PENFII_SMTP_*`). Penfii checks the SMTP server's certificate and has no setting to skip that; plain SMTP (`none`) is refused together with a user name and password. Set `PENFII_PUBLIC_URL` to the real `https://` address, because the links in invitation and password-reset mail start with it. A password-reset token travels in the address fragment and is stored only as a hash; it works once for 30 minutes.
 - The password rule (15 to 128 characters, not a known weak password) applies to every password that is set, and sign-in throttling is configurable (`PENFII_LOGIN_THROTTLE_*`); see [docs/configuration.md](docs/configuration.md).
 - Back up PostgreSQL and the file store ([backup](docs/self-hosting.md#backup)).

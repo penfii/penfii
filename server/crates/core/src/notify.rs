@@ -16,6 +16,7 @@ use crate::error::CoreError;
 use crate::events::{EventRow, HandlerFuture, PgConsumer};
 use crate::platform::ChangeNotice;
 use crate::preferences::{self, is_watcher_kind};
+use crate::push::{self, PushJob, PushService};
 use crate::{visibility, watch};
 
 /// Highest first. When several reasons reach one person for one event, the first one wins.
@@ -25,6 +26,7 @@ const PRIORITY: &[&str] = &[
     "dependency.released",
     "reply.direct",
     "reminder.due",
+    "dm.message",
     "thread.reply",
     "ticket.commented",
     "ticket.status_changed",
@@ -135,13 +137,26 @@ pub(crate) struct Candidate {
 pub struct InboxConsumer {
     touched: Mutex<HashSet<Uuid>>,
     changes: Option<broadcast::Sender<ChangeNotice>>,
+    /// Pushes a new Inbox item for the push kinds. Absent: push is off.
+    push: Option<Arc<PushService>>,
+    /// Waiting for the batch to commit; nothing is sent from inside the transaction.
+    jobs: Mutex<Vec<PushJob>>,
 }
 
 impl InboxConsumer {
     pub fn new(changes: Option<broadcast::Sender<ChangeNotice>>) -> Arc<Self> {
+        Self::with_push(changes, None)
+    }
+
+    pub fn with_push(
+        changes: Option<broadcast::Sender<ChangeNotice>>,
+        push: Option<Arc<PushService>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             touched: Mutex::new(HashSet::new()),
             changes,
+            push,
+            jobs: Mutex::new(Vec::new()),
         })
     }
 }
@@ -171,11 +186,14 @@ impl PgConsumer for InboxConsumer {
             let Some(subject) = subject else {
                 return Ok(());
             };
-            let delivered = deliver(conn, event, subject, candidates).await?;
-            if !delivered.is_empty()
-                && let Ok(mut touched) = self.touched.lock()
-            {
-                touched.extend(delivered);
+            let delivered = deliver(conn, event, subject, candidates, self.push.is_some()).await?;
+            if !delivered.is_empty() {
+                if let Ok(mut touched) = self.touched.lock() {
+                    touched.extend(delivered.iter().map(|d| d.recipient));
+                }
+                if let Ok(mut jobs) = self.jobs.lock() {
+                    jobs.extend(delivered.into_iter().filter_map(|d| d.push));
+                }
             }
             Ok(())
         })
@@ -190,6 +208,14 @@ impl PgConsumer for InboxConsumer {
             for user_id in users {
                 let _ = changes.send(ChangeNotice::Inbox { user_id });
             }
+        }
+        // The batch is committed: now (and only now) the pushes go out.
+        let jobs: Vec<PushJob> = match self.jobs.lock() {
+            Ok(mut jobs) => std::mem::take(&mut *jobs),
+            Err(_) => return,
+        };
+        if let Some(push) = &self.push {
+            push.dispatch(jobs);
         }
     }
 }
@@ -250,6 +276,24 @@ async fn message_candidates(
                     recipient: author,
                     kind: "reply.direct",
                     logical_key: format!("reply:{message}:{author}"),
+                    params: params.clone(),
+                });
+            }
+        }
+        // A new message in a DM is for the other people in it, whatever else it is.
+        if let Some(conversation) = conversation {
+            let others: Vec<Uuid> = sqlx::query_scalar(
+                "SELECT user_id FROM penfii.dm_members WHERE conversation_id = $1",
+            )
+            .bind(conversation)
+            .fetch_all(&mut *conn)
+            .await?;
+            for user in others {
+                out.push(Candidate {
+                    subject: None,
+                    recipient: user,
+                    kind: "dm.message",
+                    logical_key: format!("dm:{message}:{user}"),
                     params: params.clone(),
                 });
             }
@@ -437,13 +481,39 @@ async fn ticket_candidates(
     Ok((Some(Subject::Ticket(ticket)), out))
 }
 
+/// A person who got a new item, and the push to send for it, if it is one that is pushed.
+struct Delivered {
+    recipient: Uuid,
+    push: Option<PushJob>,
+}
+
+/// The language of a person's pushes: their own setting, else the server's default.
+async fn locale_of(conn: &mut PgConnection, user: Uuid) -> Result<String, CoreError> {
+    let own: Option<String> = sqlx::query_scalar("SELECT locale FROM penfii.users WHERE id=$1")
+        .bind(user)
+        .fetch_optional(&mut *conn)
+        .await?
+        .flatten();
+    if let Some(locale) = own.filter(|l| !l.is_empty()) {
+        return Ok(locale);
+    }
+    Ok(
+        sqlx::query_scalar("SELECT default_locale FROM penfii.instance_settings")
+            .fetch_optional(&mut *conn)
+            .await?
+            .unwrap_or_else(|| "ko-KR".to_owned()),
+    )
+}
+
 /// Applies the rules every kind shares and writes the items. Returns the people who got one.
+/// `want_push` is whether push is on; it only decides if a `PushJob` is prepared.
 async fn deliver(
     conn: &mut PgConnection,
     event: &EventRow,
     subject: Subject,
     candidates: Vec<Candidate>,
-) -> Result<Vec<Uuid>, CoreError> {
+    want_push: bool,
+) -> Result<Vec<Delivered>, CoreError> {
     // One reason per person: the strongest.
     let mut best: BTreeMap<Uuid, Candidate> = BTreeMap::new();
     for candidate in candidates {
@@ -464,26 +534,11 @@ async fn deliver(
             }
         }
     }
-    let conversation = match subject {
-        Subject::Message(id) => {
-            sqlx::query_scalar::<_, Uuid>("SELECT conversation_id FROM penfii.messages WHERE id=$1")
-                .bind(id)
-                .fetch_optional(&mut *conn)
-                .await?
-        }
-        _ => None,
-    };
     let mut delivered = Vec::new();
     for (recipient, candidate) in best {
         if is_watcher_kind(candidate.kind) {
             let (prefs, _) = preferences::load(conn, recipient).await?;
             if prefs.level == "DIRECT_ONLY" {
-                continue;
-            }
-            if candidate.kind == "thread.reply"
-                && let Some(channel) = conversation
-                && preferences::is_muted(conn, recipient, channel).await?
-            {
                 continue;
             }
         }
@@ -529,11 +584,12 @@ async fn deliver(
         .bind(&decision)
         .execute(&mut *conn)
         .await?;
+        let item_id = Uuid::new_v4();
         let inserted = sqlx::query(
             "INSERT INTO penfii.inbox_items(id, workspace_id, event_id, recipient_id, notification_kind, logical_key)
              VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
         )
-        .bind(Uuid::new_v4())
+        .bind(item_id)
         .bind(event.workspace_id)
         .bind(event.event_id)
         .bind(recipient)
@@ -542,7 +598,37 @@ async fn deliver(
         .execute(&mut *conn)
         .await?;
         if inserted.rows_affected() > 0 {
-            delivered.push(recipient);
+            // Only a new item can be pushed, so handling the same event again never repeats a push.
+            // During quiet hours the item exists but nothing is sent, and nothing is sent later.
+            let push = if want_push
+                && push::is_push_kind(candidate.kind)
+                && !preferences::dnd_now(conn, recipient).await?
+            {
+                let locale = locale_of(conn, recipient).await?;
+                let (subject_kind, subject_id) = match subject {
+                    Subject::Ticket(id) => ("TICKET", id),
+                    Subject::Message(id) => ("MESSAGE", id),
+                    Subject::Project(id) => ("PROJECT", id),
+                    Subject::File(id) => ("FILE", id),
+                    Subject::Doc(id) => ("DOC", id),
+                };
+                Some(PushJob {
+                    recipient,
+                    inbox_item_id: item_id,
+                    payload: push::payload(
+                        candidate.kind,
+                        &locale,
+                        item_id,
+                        event.workspace_id,
+                        subject_kind,
+                        subject_id,
+                        &candidate.params,
+                    ),
+                })
+            } else {
+                None
+            };
+            delivered.push(Delivered { recipient, push });
         }
     }
     Ok(delivered)

@@ -19,6 +19,10 @@ pub const DIRECT_KINDS: &[&str] = &[
     "dependency.released",
     "reply.direct",
     "reminder.due",
+    // A DM, and a thread the person is in or follows, are addressed to them: neither "only direct"
+    // nor a muted channel holds them back.
+    "dm.message",
+    "thread.reply",
 ];
 
 pub fn is_watcher_kind(kind: &str) -> bool {
@@ -163,6 +167,20 @@ async fn offset_minutes(conn: &mut PgConnection, time_zone: &str, now: DateTime<
     .unwrap_or(0)
 }
 
+/// Whether quiet hours apply to this person right now. Used where a decision is made at delivery time.
+pub(crate) async fn dnd_now(conn: &mut PgConnection, user_id: Uuid) -> Result<bool, CoreError> {
+    let (preferences, _) = load(conn, user_id).await?;
+    let now = Utc::now();
+    let zone = preferences
+        .dnd
+        .schedule
+        .as_ref()
+        .map(|s| s.time_zone.clone())
+        .unwrap_or_else(|| "UTC".into());
+    let offset = offset_minutes(conn, &zone, now).await;
+    Ok(dnd_active(&preferences.dnd, now, offset))
+}
+
 pub async fn view(pool: &PgPool, actor: Uuid) -> Result<PreferencesView, CoreError> {
     let mut conn = pool.acquire().await?;
     let (preferences, version) = load(&mut conn, actor).await?;
@@ -286,20 +304,6 @@ pub async fn muted_channels(pool: &PgPool, actor: Uuid) -> Result<Vec<Uuid>, Cor
     )
     .bind(actor)
     .fetch_all(pool)
-    .await?)
-}
-
-pub async fn is_muted(
-    conn: &mut PgConnection,
-    user_id: Uuid,
-    channel_id: Uuid,
-) -> Result<bool, CoreError> {
-    Ok(sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM penfii.channel_mutes WHERE user_id=$1 AND channel_id=$2)",
-    )
-    .bind(user_id)
-    .bind(channel_id)
-    .fetch_one(&mut *conn)
     .await?)
 }
 

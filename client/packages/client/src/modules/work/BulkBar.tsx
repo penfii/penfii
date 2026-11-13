@@ -29,6 +29,13 @@ export function failureKey(item: BulkItemResult): MessageKey | null {
       return 'bulk.fail.notFound'
     case 'version_conflict':
       return 'bulk.fail.conflict'
+    case 'open_children':
+      return 'bulk.fail.open_children'
+    case 'ticket_trashed':
+      return 'bulk.fail.ticket_trashed'
+    case 'not_processed':
+      return 'bulk.lifecycle.notProcessed'
+    case null:
     default:
       return null
   }
@@ -85,7 +92,8 @@ export function useBulkForm(workspaceId: string, selected: WorkTicket[], onResul
       case 'ADD_LABELS':
       case 'REMOVE_LABELS':
         return { type: field, labelIds: [value] }
-      default:
+      case 'ADD_MILESTONES':
+      case 'REMOVE_MILESTONES':
         return { type: field, milestoneIds: [value] }
     }
   }

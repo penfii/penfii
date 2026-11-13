@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { QueryError } from '../../ui/QueryError'
 import './knowledge.css'
 import { useParams, useSearchParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
@@ -22,7 +23,8 @@ export function DocsScreen({ projectId, withTree = false }: { projectId?: string
   const draftParent = params.get('parent')
   const commands = useDocTreeCommands(workspaceId)
   const tree = useDocTree(workspaceId, projectId ?? null)
-  const hasPages = (tree.data?.length ?? 0) > 0
+  // "Create the first page" is only true once the list has loaded and is empty; while it loads or failed, nothing is known about the pages.
+  const noPagesYet = tree.isSuccess && tree.data.length === 0
   const templates = useQuery(queries.docTemplates(workspaceId))
   // A page just created opens in the editor (`edit=1`); leaving an unsaved draft is asked about by the page (UnsavedBlocker).
   const [creating, setCreating] = useState<{ templateId?: string; defaultTitle?: string } | null>(null)
@@ -88,7 +90,8 @@ export function DocsScreen({ projectId, withTree = false }: { projectId?: string
     <DocPageView key={selected} workspaceId={workspaceId} docId={selected} startEditing={params.get('edit') === '1'} onEditStarted={onEditStarted} />
   ) : (
     <div className="doc-page">
-      <EmptyState title={t('nav.docs')} body={hasPages ? t('docs.tree.pick') : t('docs.tree.empty')}>
+      {tree.isError ? <QueryError query={tree} /> : null}
+      <EmptyState title={t('nav.docs')} body={noPagesYet ? t('docs.tree.empty') : t('docs.tree.pick')}>
         <Button onClick={() => startDraft(null)}>{t('docs.new')}</Button>
         {templates.data && templates.data.length > 0 ? (
           <p className="doc-templates">

@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use super::derived::visible;
 use super::order::lock_project;
+use super::sprint_archive::{self, SprintArchive};
 use super::{long_text, require_admin, short_name, version_conflict};
 use crate::error::CoreError;
 use crate::platform::{self, ChangeNotice};
@@ -269,6 +270,14 @@ fn outcome_of(category: &str) -> &'static str {
     }
 }
 
+/// What closing a Sprint decides beyond completing it: where its unfinished Tasks go, and when its
+/// finished work is archived.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CloseChoice {
+    pub carry_to: Option<Uuid>,
+    pub archive: Option<SprintArchive>,
+}
+
 /// Starts, completes or cancels a Sprint.
 ///
 /// Start records the baseline once. Complete is the one-decision close: every current assignment
@@ -281,18 +290,27 @@ pub async fn sprint_command(
     sprint_id: Uuid,
     expected_version: i64,
     command: SprintCommand,
-    carry_to: Option<Uuid>,
+    close: CloseChoice,
     idem: &str,
 ) -> Result<(Sprint, Vec<ChangeNotice>), CoreError> {
+    let CloseChoice { carry_to, archive } = close;
     if carry_to.is_some() && command != SprintCommand::Complete {
         return Err(CoreError::validation(
             "only closing a Sprint can carry its unfinished work to another Sprint",
         ));
     }
+    if archive.is_some() && command != SprintCommand::Complete {
+        return Err(CoreError::validation(
+            "only closing a Sprint can archive its finished work",
+        ));
+    }
+    if let Some(SprintArchive::At(at)) = archive {
+        sprint_archive::require_future(at)?;
+    }
     let mut tx = pool.begin().await?;
     let (row, project_id) = locked_sprint(&mut tx, actor_id, sprint_id).await?;
     let workspace: Uuid = row.try_get("workspace_id")?;
-    let body = json!({"sprintId":sprint_id,"expectedVersion":expected_version,"carryTo":carry_to});
+    let body = json!({"sprintId":sprint_id,"expectedVersion":expected_version,"carryTo":carry_to,"archive":sprint_archive::fingerprint(archive)});
     if let Some(done) =
         platform::replay::<Sprint>(&mut tx, workspace, actor_id, idem, command.kind(), &body)
             .await?
@@ -330,7 +348,7 @@ pub async fn sprint_command(
     .fetch_one(&mut *tx)
     .await?;
     let sprint_name: String = row.try_get("name")?;
-    let notices = if command == SprintCommand::Start {
+    let mut notices = if command == SprintCommand::Start {
         record_baseline(&mut tx, actor_id, sprint_id, &updated).await?;
         Vec::new()
     } else {
@@ -347,6 +365,26 @@ pub async fn sprint_command(
         )
         .await?
     };
+    // The finished work is archived with the completion, or scheduled. Unfinished work was already
+    // carried above; nothing here moves it.
+    match archive {
+        Some(SprintArchive::Immediate) => {
+            let counts =
+                sprint_archive::archive_finished(&mut tx, actor_id, sprint_id, false).await?;
+            if counts.archived > 0 {
+                // Many Tickets left the board at once: one notice for the Project, not one per Ticket.
+                notices.push(crate::ChangeNotice::Project { project_id });
+            }
+        }
+        Some(SprintArchive::At(at)) => {
+            let time_zone: String = row.try_get("time_zone")?;
+            sprint_archive::insert_schedule(
+                &mut tx, workspace, project_id, sprint_id, actor_id, at, &time_zone,
+            )
+            .await?;
+        }
+        None => {}
+    }
     let sprint = sprint_from(&updated)?;
     let sprint_event = match command {
         SprintCommand::Start => Some("sprint.started"),
@@ -401,8 +439,8 @@ async fn carry_target(
         CoreError::validation("the next Sprint must be planned or active in this project")
     })?;
     Ok(Some((
-        target.get::<Uuid, _>("id"),
-        target.get::<String, _>("name"),
+        target.try_get::<Uuid, _>("id")?,
+        target.try_get::<String, _>("name")?,
     )))
 }
 
@@ -812,7 +850,10 @@ pub async fn assign_sprint(
     .bind(ticket_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let current_id: Option<Uuid> = current.as_ref().map(|r| r.get("sprint_id"));
+    let current_id: Option<Uuid> = current
+        .as_ref()
+        .map(|r| r.try_get("sprint_id"))
+        .transpose()?;
     let mut notice = None;
     if current_id != sprint_id {
         let target = match sprint_id {
@@ -827,7 +868,7 @@ pub async fn assign_sprint(
                 .ok_or_else(|| {
                     CoreError::validation("the Sprint must be planned or active in this project")
                 })?;
-                Some((id, row.get::<String, _>("name")))
+                Some((id, row.try_get::<String, _>("name")?))
             }
             None => None,
         };
@@ -840,11 +881,11 @@ pub async fn assign_sprint(
             sqlx::query(
                 "UPDATE penfii.sprint_assignments SET ended_at=now(), end_reason=$2 WHERE id=$1",
             )
-            .bind(row.get::<Uuid, _>("id"))
+            .bind(row.try_get::<Uuid, _>("id")?)
             .bind(reason)
             .execute(&mut *tx)
             .await?;
-            snapshot_assignment_end(&mut tx, row.get::<Uuid, _>("id")).await?;
+            snapshot_assignment_end(&mut tx, row.try_get::<Uuid, _>("id")?).await?;
         }
         if let Some((id, _)) = &target {
             sqlx::query(
@@ -859,7 +900,7 @@ pub async fn assign_sprint(
         }
         let from = current
             .as_ref()
-            .map(|r| json!({"id":r.get::<Uuid,_>("sprint_id"),"name":r.get::<String,_>("name")}));
+            .map(|r| -> Result<_, sqlx::Error> { Ok(json!({"id":r.try_get::<Uuid,_>("sprint_id")?,"name":r.try_get::<String,_>("name")?})) }).transpose()?;
         let to = target
             .as_ref()
             .map(|(id, name)| json!({"id":id,"name":name}));

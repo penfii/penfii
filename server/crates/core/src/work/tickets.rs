@@ -217,7 +217,8 @@ pub async fn get_ticket(
     ticket_id: Uuid,
 ) -> Result<Ticket, CoreError> {
     let mut tx = pool.begin().await?;
-    let row=sqlx::query_as::<_,TicketRow>(&format!("SELECT {TICKET_COLUMNS} FROM {TICKET_FROM} WHERE t.id=$1 AND t.archived_at IS NULL AND t.trashed_at IS NULL AND t.purged_at IS NULL")).bind(ticket_id).fetch_optional(&mut *tx).await?.ok_or(CoreError::NotFound)?;
+    // An archived Ticket opens (read-only: every command goes through the live loaders); a trashed or purged one does not.
+    let row=sqlx::query_as::<_,TicketRow>(&format!("SELECT {TICKET_COLUMNS} FROM {TICKET_FROM} WHERE t.id=$1 AND t.trashed_at IS NULL AND t.purged_at IS NULL")).bind(ticket_id).fetch_optional(&mut *tx).await?.ok_or(CoreError::NotFound)?;
     let mut value = ticket(row);
     let _ = require_project_role(&mut tx, value.project_id, actor_id, false).await?;
     if !channel_allowed(&mut tx, value.channel_id, actor_id).await? {
@@ -612,7 +613,7 @@ pub(crate) async fn apply_status_change(
         }
     }
     if old.hierarchy_kind == "TASK" && target_category == "DONE" {
-        let unfinished:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM penfii.tickets WHERE parent_id=$1 AND hierarchy_kind='SUBTASK' AND status_id IN (SELECT id FROM penfii.workflow_statuses WHERE project_id=$2 AND category NOT IN ('DONE','CANCELED')) AND purged_at IS NULL)").bind(ticket_id).bind(old.project_id).fetch_one(&mut *tx).await?;
+        let unfinished:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM penfii.tickets WHERE parent_id=$1 AND hierarchy_kind='SUBTASK' AND status_id IN (SELECT id FROM penfii.workflow_statuses WHERE project_id=$2 AND category NOT IN ('DONE','CANCELED')) AND archived_at IS NULL AND trashed_at IS NULL AND purged_at IS NULL)").bind(ticket_id).bind(old.project_id).fetch_one(&mut *tx).await?;
         if unfinished {
             return Err(CoreError::conflict(
                 "unfinished_subtasks",
@@ -676,6 +677,18 @@ pub(crate) async fn load_live_ticket(
 ) -> Result<Ticket, CoreError> {
     let lock = if lock { " FOR UPDATE OF t" } else { "" };
     let row=sqlx::query_as::<_,TicketRow>(&format!("SELECT {TICKET_COLUMNS} FROM {TICKET_FROM} WHERE t.id=$1 AND t.archived_at IS NULL AND t.trashed_at IS NULL AND t.purged_at IS NULL{lock}")).bind(ticket_id).fetch_optional(&mut *conn).await?.ok_or(CoreError::NotFound)?;
+    let mut value = ticket(row);
+    attach_labels(&mut *conn, &mut value).await?;
+    Ok(value)
+}
+
+/// A Ticket that may be read: live or archived, never trashed or purged. Reads of an archived Ticket
+/// use this; every command keeps [`load_live_ticket`], which is what makes an archived Ticket read-only.
+pub(crate) async fn load_readable_ticket(
+    conn: &mut PgConnection,
+    ticket_id: Uuid,
+) -> Result<Ticket, CoreError> {
+    let row=sqlx::query_as::<_,TicketRow>(&format!("SELECT {TICKET_COLUMNS} FROM {TICKET_FROM} WHERE t.id=$1 AND t.trashed_at IS NULL AND t.purged_at IS NULL")).bind(ticket_id).fetch_optional(&mut *conn).await?.ok_or(CoreError::NotFound)?;
     let mut value = ticket(row);
     attach_labels(&mut *conn, &mut value).await?;
     Ok(value)
@@ -851,9 +864,12 @@ pub async fn children(
     ticket_id: Uuid,
 ) -> Result<Vec<Ticket>, CoreError> {
     let mut tx = pool.begin().await?;
-    read_access(&mut tx, actor_id, ticket_id).await?;
-    let rows = sqlx::query_as::<_, TicketRow>(&format!("SELECT {TICKET_COLUMNS} FROM {TICKET_FROM} WHERE t.parent_id=$1 AND t.archived_at IS NULL AND t.trashed_at IS NULL AND t.purged_at IS NULL ORDER BY t.created_at,t.id"))
+    let access = read_access(&mut tx, actor_id, ticket_id).await?;
+    // An archived parent shows its archived children too: they were archived with it.
+    let archived_parent = !access.live;
+    let rows = sqlx::query_as::<_, TicketRow>(&format!("SELECT {TICKET_COLUMNS} FROM {TICKET_FROM} WHERE t.parent_id=$1 AND ($2 OR t.archived_at IS NULL) AND t.trashed_at IS NULL AND t.purged_at IS NULL ORDER BY t.created_at,t.id"))
         .bind(ticket_id)
+        .bind(archived_parent)
         .fetch_all(&mut *tx)
         .await?;
     let mut access: HashMap<Uuid, bool> = HashMap::new();

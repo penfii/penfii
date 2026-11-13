@@ -67,6 +67,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: server
+      - run: make tools
       - run: make integration || { echo "make integration failed; retrying once"; make integration; }
 
   # The Node version is the one the web image uses; the tests are known to behave differently on

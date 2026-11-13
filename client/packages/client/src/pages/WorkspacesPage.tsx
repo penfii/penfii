@@ -78,7 +78,7 @@ function WorkspaceCreateDialog({ open, onClose }: { open: boolean; onClose: () =
             await queryClient.invalidateQueries({ queryKey: queryKeys.workspaceCreation })
             onClose()
             void navigate(`/w/${created.id}`)
-          }).catch((caught: unknown) => setError(errorText(caught, t('error.generic'))))
+          }).catch((caught: unknown) => setError(errorText(caught, t('error.generic'), t('error.dbUnavailable'))))
         }}
       >
         <Field label={t('workspaces.name')}>

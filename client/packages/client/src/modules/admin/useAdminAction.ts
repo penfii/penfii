@@ -40,6 +40,7 @@ function failureText(caught: unknown, t: ReturnType<typeof useI18n>['t']): strin
     if (caught.code === 'last_owner') return t('admin.lastOwner')
     if (caught.code === 'team_archived') return t('teams.error.archived')
     if (caught.code === 'last_team_manager') return t('admin.teams.lastManager')
+    if (caught.code === 'not_in_project') return t('admin.noManager.notInProject')
     if (caught.code === 'ticket_has_children') return t('admin.trash.hasChildren')
     if (caught.code === 'ticket_has_dependencies') return t('admin.trash.hasDependencies')
   }

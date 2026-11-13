@@ -601,3 +601,6 @@ button.reply-count { border: 0; background: transparent; padding: 0; font: inher
   gap: 0.75rem;
   padding: 0.25rem 0;
 }
+
+.query-error { margin: var(--space-4); color: var(--danger, #b3261e); }
+.query-error.compact { margin: var(--space-2) 0; font-size: .875rem; }

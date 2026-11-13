@@ -1,26 +1,24 @@
 import { useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { api } from '../../api'
 import { queryKeys } from '../../queryKeys'
+import { openLiveSocket } from '../../realtime/liveSocket'
 
 /**
  * One socket for the signed-in person. It only says "your Inbox changed" or "your channels changed"; the page then asks the
- * API, so nothing private travels on the socket. A missed notice heals on focus or the next poll.
+ * API, so nothing private travels on the socket. A missed notice heals on focus or the next poll. Connecting, waiting
+ * between attempts and stopping are `openLiveSocket`'s.
  */
 export function useUserSocket() {
   const queryClient = useQueryClient()
   useEffect(() => {
-    if (typeof WebSocket !== 'function') return
-    let socket: WebSocket | null = null
-    let closed = false
-    let timer = 0
     let connectedBefore = false
-    const connect = () => {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      socket = new WebSocket(`${protocol}//${window.location.host}/v1/ws/user`)
-      socket.onmessage = (event) => {
-        if (typeof event.data !== 'string') return
+    const live = openLiveSocket({
+      path: () => '/v1/ws/user',
+      probe: () => api.me(),
+      onFrame: (data) => {
         try {
-          const frame = JSON.parse(event.data) as { type?: string }
+          const frame = JSON.parse(data) as { type?: string }
           if (frame.type === 'inbox.changed') {
             void queryClient.invalidateQueries({ queryKey: queryKeys.all.inbox })
             void queryClient.invalidateQueries({ queryKey: queryKeys.all.inboxUnread })
@@ -42,17 +40,8 @@ export function useUserSocket() {
         } catch {
           // A malformed frame is ignored; the next poll catches up.
         }
-      }
-      socket.onclose = () => {
-        if (!closed) timer = window.setTimeout(connect, 3000)
-      }
-    }
-    const start = window.setTimeout(connect, 0)
-    return () => {
-      closed = true
-      window.clearTimeout(start)
-      window.clearTimeout(timer)
-      socket?.close()
-    }
+      },
+    })
+    return () => live.close()
   }, [queryClient])
 }

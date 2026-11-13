@@ -5,6 +5,7 @@ import { Dialog } from '../../design/ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { resultHref } from '../search/resultHref'
 import { queries } from '../../queries'
+import { isImeKey } from '../../ui/ime'
 
 type Entry = { id: string; label: string; hint?: string; go: () => void }
 
@@ -78,6 +79,8 @@ export function CommandPalette({ workspaceId }: { workspaceId: string }) {
           aria-label={t('palette.placeholder')}
           onChange={(event) => { setQuery(event.target.value); setActive(0) }}
           onKeyDown={(event) => {
+            // Enter that picks a candidate of an input method is not a choice in the list.
+            if (isImeKey(event)) return
             if (event.key === 'ArrowDown') { event.preventDefault(); setActive((value) => Math.min(entries.length - 1, value + 1)) }
             if (event.key === 'ArrowUp') { event.preventDefault(); setActive((value) => Math.max(0, value - 1)) }
             if (event.key === 'Enter') { event.preventDefault(); entries[active]?.go() }

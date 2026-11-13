@@ -81,7 +81,8 @@ impl<'a> Cache<'a> {
     }
 }
 
-/// Tickets that are live (not archived, trashed or purged), whose Project the person can read and
+/// Tickets the person may open: live or archived (an archived Ticket is read-only but readable, with
+/// its links and subscription), never trashed or purged; whose Project the person can read and
 /// whose origin channel, if private, the person may enter.
 pub async fn tickets(
     conn: &mut PgConnection,
@@ -93,7 +94,7 @@ pub async fn tickets(
     }
     let rows = sqlx::query(
         "SELECT id, project_id, channel_id FROM penfii.tickets
-         WHERE id = ANY($1) AND archived_at IS NULL AND trashed_at IS NULL AND purged_at IS NULL",
+         WHERE id = ANY($1) AND trashed_at IS NULL AND purged_at IS NULL",
     )
     .bind(ids)
     .fetch_all(&mut *conn)

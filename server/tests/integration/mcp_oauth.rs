@@ -2822,7 +2822,9 @@ async fn retention_purges_what_the_oauth_server_and_gateway_accumulate(pool: PgP
     .await
     .unwrap();
 
-    let report = purge(&env.pool, Retention::from_env()).await.unwrap();
+    let report = purge(&env.pool, Retention::from_env().unwrap())
+        .await
+        .unwrap();
     assert_eq!(report.call_log, 2, "{report:?}");
     assert_eq!(report.codes, 1, "{report:?}");
     assert_eq!(report.authorization_requests, 1, "{report:?}");
@@ -2845,7 +2847,7 @@ async fn retention_purges_what_the_oauth_server_and_gateway_accumulate(pool: PgP
         false
     );
     assert_eq!(
-        purge(&env.pool, Retention::from_env())
+        purge(&env.pool, Retention::from_env().unwrap())
             .await
             .unwrap()
             .total(),

@@ -1,0 +1,5 @@
+# `Row::get` panics when a column is missing or has another type than the one asked for; use `try_get(..)?`,
+# which turns that into an error (an HTTP 500 or a failed event) instead of a panic.
+disallowed-methods = [
+    { path = "sqlx::Row::get", reason = "panics on a missing or mistyped column: use `try_get(..)?`" },
+]

@@ -126,7 +126,9 @@ struct Shape {
 
 fn shape(ty: &str) -> Shape {
     let ty = ty.trim();
-    let ty = ty.strip_prefix("chrono::").unwrap_or(ty);
+    // `chrono::DateTime<chrono::Utc>` and `DateTime<Utc>` are the same type.
+    let ty = ty.replace("chrono::", "");
+    let ty = ty.as_str();
     if let Some(inner) = ty.strip_prefix("Option<").and_then(|t| t.strip_suffix('>')) {
         let mut inner = shape(inner);
         inner.nullable = true;

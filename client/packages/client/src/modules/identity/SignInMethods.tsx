@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { QueryError } from '../../ui/QueryError'
 import { isApiError } from '@penfii/api-client'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../api'
@@ -43,6 +44,7 @@ export function SignInMethods() {
       <h2>{t('methods.title')}</h2>
       {dialog}
       {error ? <p className="form-error">{error}</p> : null}
+      {identities.isError ? <QueryError query={identities} compact /> : null}
       <ul className="plain-list">
         <li>
           {t('methods.password')}: {view?.hasPassword ? t('methods.set') : t('methods.notSet')}
@@ -70,6 +72,7 @@ export function SignInMethods() {
     </section>
     <section className="card settings-card account-sessions">
       <h2>{t('sessions.title')}</h2>
+      {sessions.isError ? <QueryError query={sessions} compact /> : null}
       <ul className="plain-list">
         {sessions.data?.items.map((session) => (
           <li key={session.id} className={session.current ? 'is-current' : undefined}>

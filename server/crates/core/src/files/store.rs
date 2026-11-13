@@ -1,6 +1,7 @@
 //! S3-compatible object storage. Binary stays out of PostgreSQL.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use futures_util::stream::{BoxStream, StreamExt as _};
@@ -8,7 +9,9 @@ use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::signer::Signer as _;
-use object_store::{ClientOptions, GetOptions, GetRange, ObjectStoreExt as _, RetryConfig};
+use object_store::{
+    ClientOptions, GetOptions, GetRange, ObjectStoreExt as _, PutPayload, RetryConfig,
+};
 
 #[derive(Clone)]
 pub struct ObjectStore {
@@ -16,18 +19,38 @@ pub struct ObjectStore {
     /// The S3 client again, for the bucket request `object_store` does not make. Absent for the
     /// in-memory store used by tests.
     s3: Option<Arc<AmazonS3>>,
+    /// Test hook: the next this many `delete` calls fail before they touch the store. Shared by
+    /// clones. Production leaves it at zero.
+    delete_failures: Arc<AtomicU32>,
 }
 
 impl ObjectStore {
-    pub fn from_env() -> Option<Self> {
-        let endpoint = std::env::var("PENFII_S3_ENDPOINT").ok()?;
-        let bucket = std::env::var("PENFII_S3_BUCKET").ok()?;
-        let access_key = std::env::var("PENFII_S3_ACCESS_KEY").ok()?;
-        let secret_key = std::env::var("PENFII_S3_SECRET_KEY").ok()?;
-        let region = std::env::var("PENFII_S3_REGION").unwrap_or_else(|_| "us-east-1".into());
-        if endpoint.trim().is_empty() || bucket.trim().is_empty() {
-            return None;
-        }
+    /// The object store the environment describes. `PENFII_S3_ENDPOINT`, `_BUCKET`, `_ACCESS_KEY` and `_SECRET_KEY`
+    /// are set together or not at all: none is "no object storage" (`Ok(None)`), some is an error that names what
+    /// is missing. `PENFII_S3_REGION` is optional.
+    pub fn from_env() -> Result<Option<Self>, String> {
+        Self::from_lookup(&crate::config::process_env)
+    }
+
+    pub fn from_lookup(lookup: crate::config::Lookup<'_>) -> Result<Option<Self>, String> {
+        let Some(values) = crate::config::group(
+            lookup,
+            "object storage",
+            &[
+                "PENFII_S3_ENDPOINT",
+                "PENFII_S3_BUCKET",
+                "PENFII_S3_ACCESS_KEY",
+                "PENFII_S3_SECRET_KEY",
+            ],
+        )?
+        else {
+            return Ok(None);
+        };
+        let [endpoint, bucket, access_key, secret_key]: [String; 4] = values
+            .try_into()
+            .map_err(|_| "object storage: four settings are needed".to_owned())?;
+        let region =
+            crate::config::get(lookup, "PENFII_S3_REGION").unwrap_or_else(|| "us-east-1".into());
         let endpoint = endpoint.trim_end_matches('/').to_string();
         // Path-style requests (`{endpoint}/{bucket}/{key}`), which MinIO needs. The client default
         // timeouts stay (5 s connect, 30 s per request); retries are capped so a stuck store fails
@@ -50,15 +73,13 @@ impl ObjectStore {
             .build();
         let s3 = match s3 {
             Ok(s3) => Arc::new(s3),
-            Err(error) => {
-                tracing::warn!("object storage is not usable: {error}");
-                return None;
-            }
+            Err(error) => return Err(format!("object storage is not usable: {error}")),
         };
-        Some(Self {
+        Ok(Some(Self {
             inner: s3.clone(),
             s3: Some(s3),
-        })
+            delete_failures: Arc::new(AtomicU32::new(0)),
+        }))
     }
 
     /// An object store that keeps bytes in memory. Tests use it so file sharing can be checked end
@@ -67,6 +88,7 @@ impl ObjectStore {
         Self {
             inner: Arc::new(InMemory::new()),
             s3: None,
+            delete_failures: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -83,7 +105,14 @@ impl ObjectStore {
                 config,
             )),
             s3: None,
+            delete_failures: Arc::new(AtomicU32::new(0)),
         }
+    }
+
+    /// The next `count` calls to [`delete`] fail without touching the store. Tests use it. Clones
+    /// share the counter.
+    pub fn fail_next_deletes(&self, count: u32) {
+        self.delete_failures.store(count, Ordering::SeqCst);
     }
 
     pub async fn ensure_bucket(&self) -> Result<(), String> {
@@ -115,9 +144,11 @@ impl ObjectStore {
         Err(format!("bucket request failed: {status}"))
     }
 
-    pub async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), String> {
+    /// Writes an object. The payload is the caller's own buffers (`Bytes`, or a list of chunks), written as
+    /// they are: no copy of the content is made here.
+    pub async fn put(&self, key: &str, payload: impl Into<PutPayload>) -> Result<(), String> {
         self.inner
-            .put(&Path::from(key), bytes.to_vec().into())
+            .put(&Path::from(key), payload.into())
             .await
             .map(|_| ())
             .map_err(|error| format!("object write failed: {error}"))
@@ -170,6 +201,10 @@ impl ObjectStore {
 
     /// A missing object counts as deleted.
     pub async fn delete(&self, key: &str) -> Result<(), String> {
+        if self.delete_failures.load(Ordering::SeqCst) > 0 {
+            self.delete_failures.fetch_sub(1, Ordering::SeqCst);
+            return Err("object delete failed: injected".into());
+        }
         match self.inner.delete(&Path::from(key)).await {
             Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
             Err(error) => Err(format!("object delete failed: {error}")),

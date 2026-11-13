@@ -22,18 +22,21 @@ pub async fn comments(
     let moderator =
         can_moderate_comments(&mut tx, &access.role, access.channel_id, actor_id).await?;
     let rows=sqlx::query("SELECT c.id,c.ticket_id,c.author_id,u.display_name AS author_name,c.body,c.created_at,c.edited_at FROM penfii.ticket_comments c LEFT JOIN penfii.users u ON u.id=c.author_id WHERE c.ticket_id=$1 AND c.deleted_at IS NULL ORDER BY c.created_at,c.id").bind(ticket_id).fetch_all(&mut *tx).await?;
-    let comment_ids: Vec<Uuid> = rows.iter().map(|r| r.get("id")).collect();
+    let comment_ids: Vec<Uuid> = rows
+        .iter()
+        .map(|r| r.try_get("id"))
+        .collect::<Result<_, sqlx::Error>>()?;
     let mut attachments =
         crate::ticket_files::for_comments(&mut tx, ticket_id, &comment_ids).await?;
     let values = rows
         .into_iter()
         .map(|r| {
             let attachments = attachments
-                .remove(&r.get::<Uuid, _>("id"))
+                .remove(&r.try_get::<Uuid, _>("id")?)
                 .unwrap_or_default();
             comment_value(&r, attachments, actor_id, access.live, moderator)
         })
-        .collect();
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
     tx.commit().await?;
     Ok(values)
 }
@@ -85,7 +88,7 @@ pub async fn create_comment(
     }
     let id = Uuid::new_v4();
     let value=sqlx::query("INSERT INTO penfii.ticket_comments(id,ticket_id,author_id,body) VALUES($1,$2,$3,$4) RETURNING id,ticket_id,author_id,(SELECT display_name FROM penfii.users WHERE id=$3) AS author_name,body,created_at,edited_at").bind(id).bind(ticket_id).bind(actor_id).bind(body).fetch_one(&mut *tx).await?;
-    let mut comment = comment_value(&value, Vec::new(), actor_id, true, false);
+    let mut comment = comment_value(&value, Vec::new(), actor_id, true, false)?;
     crate::ticket_files::attach_to_comment(&mut tx, actor_id, workspace, ticket_id, id, file_ids)
         .await?;
     comment.attachments = crate::ticket_files::for_comments(&mut tx, ticket_id, &[id])
@@ -167,7 +170,7 @@ pub async fn edit_comment(
         .await?
         .remove(&comment_id)
         .unwrap_or_default();
-    let comment = comment_value(&r, attachments, actor_id, true, false);
+    let comment = comment_value(&r, attachments, actor_id, true, false)?;
     let notice = comment_change(&mut tx, project, ticket_id, "ticket.comment_edited").await?;
     tx.commit().await?;
     Ok((comment, notice))
@@ -181,20 +184,20 @@ fn comment_value(
     actor_id: Uuid,
     live: bool,
     moderator: bool,
-) -> TicketComment {
-    let author: Uuid = r.get("author_id");
-    TicketComment {
-        id: r.get("id"),
-        ticket_id: r.get("ticket_id"),
+) -> Result<TicketComment, sqlx::Error> {
+    let author: Uuid = r.try_get("author_id")?;
+    Ok(TicketComment {
+        id: r.try_get("id")?,
+        ticket_id: r.try_get("ticket_id")?,
         author_id: author,
-        author_name: r.get("author_name"),
-        body: r.get("body"),
-        created_at: r.get("created_at"),
-        edited_at: r.get("edited_at"),
+        author_name: r.try_get("author_name")?,
+        body: r.try_get("body")?,
+        created_at: r.try_get("created_at")?,
+        edited_at: r.try_get("edited_at")?,
         attachments,
         can_edit: live && author == actor_id,
         can_delete: live && (author == actor_id || moderator),
-    }
+    })
 }
 
 /// Who may remove other people's comments: a Project admin or a MANAGER of the Ticket's channel.
@@ -210,7 +213,18 @@ async fn can_moderate_comments(
     let Some(channel) = channel else {
         return Ok(false);
     };
-    Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM penfii.channel_members WHERE channel_id=$1 AND user_id=$2 AND role='MANAGER')").bind(channel).bind(actor_id).fetch_one(&mut *conn).await?)
+    // The role with effect: a Manager row of someone who no longer takes part in the Project does not count.
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT COALESCE((SELECT {role} = 'MANAGER'
+                          FROM penfii.channels ch
+                          LEFT JOIN penfii.channel_members cm ON cm.channel_id = ch.id AND cm.user_id = $2
+                          WHERE ch.id = $1), false)",
+        role = crate::access::CHANNEL_ROLE
+    ))
+    .bind(channel)
+    .bind(actor_id)
+    .fetch_one(&mut *conn)
+    .await?)
 }
 
 /// The author deletes their own comment; a Project admin or a MANAGER of the Ticket's channel may
@@ -242,7 +256,7 @@ pub async fn delete_comment(
         facts: json!({"commentId": comment_id, "projectId": project, "channelId": channel}),
         security_context: json!({"projectId": project.to_string(), "channelId": channel.map(|c| c.to_string())}),
     }).await?;
-    crate::files::delete_objects(store, &keys).await?;
+    let _ = (store, keys);
     let notice = comment_change(&mut tx, project, ticket_id, "ticket.comment_deleted").await?;
     tx.commit().await?;
     Ok(notice)

@@ -9,7 +9,8 @@ import { queries } from '../../queries'
 import { formatStamp } from '../../format'
 import { displayedMinute } from './group'
 import { useI18n } from '../../i18n/I18nProvider'
-import { isBlankDoc, plainText, RichTextEditor, RichTextView, type DisplayNames } from '../../richtext'
+import { isBlankDoc, mentionedUserIds, plainText, RichTextEditor, RichTextView, type DisplayNames } from '../../richtext'
+import { useMentionNameOf } from '../../richtext/env'
 import { errorText } from '../../ui/errorText'
 import { Avatar, Button, useConfirm } from '../../design/ui'
 import { AuthorCard } from '../people/AuthorCard'
@@ -74,6 +75,7 @@ export function MessageRow({
   compact?: boolean
 }) {
   const { locale, t } = useI18n()
+  const nameOf = useMentionNameOf(names)
   const ref = useShown(scrollRoot, message.streamSeq, onVisible)
   const [editDoc, setEditDoc] = useState<RichTextDoc | null>(null)
   const editBox = useRef<HTMLDivElement>(null)
@@ -120,7 +122,12 @@ export function MessageRow({
   /** Opens the Ticket form beside the chat, starting from this message's own text. */
   function makeTicket() {
     const channel = space.data?.channels.find((item) => item.conversationId === conversationId)
-    rememberPrefill(message.id, prefillFromMessage(message, names))
+    const known: Record<string, string> = { ...names }
+    for (const id of message.body ? mentionedUserIds(message.body) : []) {
+      const name = nameOf(id)
+      if (name) known[id] = name
+    }
+    rememberPrefill(message.id, prefillFromMessage(message, known))
     const next = new URLSearchParams(searchParams)
     for (const key of CREATE_KEYS) next.delete(key)
     next.set('panel', CREATE_PANEL)
@@ -175,7 +182,7 @@ export function MessageRow({
         return
       }
       if (isNotFound(caught)) onNotFound()
-      else setError(errorText(caught, t('error.generic')))
+      else setError(errorText(caught, t('error.generic'), t('error.dbUnavailable')))
     }
   }
 
@@ -187,7 +194,7 @@ export function MessageRow({
       onMessage({ ...message, deleted: true, body: null })
     } catch (caught) {
       if (isNotFound(caught)) onNotFound()
-      else setError(errorText(caught, t('error.generic')))
+      else setError(errorText(caught, t('error.generic'), t('error.dbUnavailable')))
     }
   }
 
@@ -206,14 +213,14 @@ export function MessageRow({
     } catch (caught) {
       onMessage(previous)
       if (isNotFound(caught)) onNotFound()
-      else setError(errorText(caught, t('error.generic')))
+      else setError(errorText(caught, t('error.generic'), t('error.dbUnavailable')))
     } finally {
       setBusyEmoji(null)
     }
   }
 
   async function copyText() {
-    const text = message.body ? plainText(message.body) : ''
+    const text = message.body ? plainText(message.body, nameOf) : ''
     try {
       await navigator.clipboard.writeText(text)
       closeMenu()
@@ -229,7 +236,7 @@ export function MessageRow({
       setHistory(versions.versions)
     } catch (caught) {
       if (isNotFound(caught)) onNotFound()
-      else setError(errorText(caught, t('error.generic')))
+      else setError(errorText(caught, t('error.generic'), t('error.dbUnavailable')))
     }
   }
 
@@ -336,7 +343,7 @@ export function MessageRow({
       </div>
       <div className="message-main">
       {compact ? null : <header className="message-meta">
-        <AuthorCard workspaceId={workspaceId} userId={message.authorId} name={names[message.authorId] || message.authorDisplayName || message.authorId} />
+        <AuthorCard workspaceId={workspaceId} userId={message.authorId} name={names[message.authorId] || message.authorDisplayName || message.authorId} authorKind={message.authorKind} />
         <span aria-hidden="true">·</span>
         <time dateTime={message.createdAt} title={formatStamp(message.createdAt, locale)}>
           {displayedMinute(message.createdAt) ?? message.createdAt}

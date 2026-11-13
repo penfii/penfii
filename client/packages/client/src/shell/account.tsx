@@ -113,7 +113,7 @@ export function StatusDialog({
           }).then(async () => {
             await queryClient.invalidateQueries({ queryKey: queryKeys.me })
             onClose()
-          }).catch((caught: unknown) => setError(errorText(caught, t('error.generic'))))
+          }).catch((caught: unknown) => setError(errorText(caught, t('error.generic'), t('error.dbUnavailable'))))
         }}
       >
         <Field label={t('profile.status')}>
@@ -168,7 +168,7 @@ export function WorkspaceCreate({ buttonClassName }: { buttonClassName?: string 
               await queryClient.invalidateQueries({ queryKey: queryKeys.workspaces })
               setOpen(false)
               void navigate(`/w/${created.id}`)
-            }).catch((caught: unknown) => setError(errorText(caught, t('error.generic'))))
+            }).catch((caught: unknown) => setError(errorText(caught, t('error.generic'), t('error.dbUnavailable'))))
           }}
         >
           <Field label={t('workspaces.name')}>

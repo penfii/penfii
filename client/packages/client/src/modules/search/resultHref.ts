@@ -41,6 +41,7 @@ export function resultHref(workspaceId: string, result: SearchResult): string | 
       const project = text('projectId')
       return project ? `${base}/projects/${project}/work?v=${result.id}` : null
     }
+    case 'person':
     default:
       return null
   }

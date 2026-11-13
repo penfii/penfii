@@ -1,17 +1,14 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { NavLink, useLocation, useParams } from 'react-router'
+import { useEffect, useRef, useState } from 'react'
+import { NavLink, useLocation } from 'react-router'
 import { Avatar, Button, useDismiss } from '../design/ui'
 import { useI18n } from '../i18n/I18nProvider'
 import { LogoutButton, useSession } from '../modules/identity'
-import { NotFoundState } from '../ui/NotFoundState'
 import { ContextSidebar } from './ContextSidebar'
 import { DETAIL_WIDTH, OVERLAY_MAX_WIDTH, THREAD_DEFAULT, THREAD_MIN, THREAD_WIDTH_KEY, readStoredWidth, shouldCollapseNav } from './paneWidth'
 import { usePaneWidth } from './usePaneWidth'
-import { CreateProvider, useCreate, type CreateKind } from './create'
-import { DetailPanel } from './DetailPanel'
-import { useUserSocket } from '../modules/attention/useUserSocket'
-import { CommandPalette } from '../modules/attention/CommandPalette'
-import { ShortcutHelpProvider } from '../modules/help/ShortcutHelp'
+import { useCreate, type CreateKind } from './create'
+import { HostSlot, type ShellSlots } from './stableSlots'
+import type { PaneControls } from './ResizeHandle'
 import { useUnread } from '../modules/attention/useUnread'
 import { IconSettings } from './icons'
 import { NAV_AREAS, activeArea } from './navAreas'
@@ -25,27 +22,25 @@ import { HelpDialog, StatusDialog, WorkspaceCreate, useActiveWorkspace, useSnooz
  */
 export type ShellSection = 'home' | 'inbox' | 'chat' | 'projects' | 'docs' | 'teams' | 'search' | 'settings' | 'account'
 
+/**
+ * The desktop frame: rail, Context Sidebar and the places for the page and the Detail Panel. What goes in those
+ * places is owned by `ResponsiveShell`, so it stays mounted when the window is resized into the phone layout.
+ */
 export function WorkspaceShell({
   section,
-  children,
-  workspaceId: workspaceIdProp,
+  workspaceId,
+  slots,
+  ticketPane,
 }: {
   section: ShellSection
-  children: ReactNode
-  workspaceId?: string
-}) {
-  const params = useParams()
-  const workspaceId = params.workspaceId ?? workspaceIdProp
-  const { t } = useI18n()
+  workspaceId: string
+  slots: ShellSlots
+  ticketPane: PaneControls
+}) {  const { t } = useI18n()
   const session = useSession()
   const location = useLocation()
   const panel = new URLSearchParams(location.search).get('panel')
   const ticketOpen = Boolean(panel?.startsWith('ticket'))
-  const closeDetail = useRef<() => void>(() => {})
-  const bindDetailClose = useCallback((close: () => void) => {
-    closeDetail.current = close
-  }, [])
-  const ticketPane = usePaneWidth('ticket', { threadOpen: false, detailOpen: false, onTooNarrow: () => closeDetail.current() })
   const threadOpen = location.pathname.includes('/t/')
   const navPane = usePaneWidth('nav', {
     threadOpen,
@@ -66,11 +61,8 @@ export function WorkspaceShell({
   const sideWidth = threadColumn + ticketColumn + detailColumn
   const navCollapsed = shouldCollapseNav(viewport, navPane.width, sideWidth)
   useEffect(() => { if (!navCollapsed) setNavRevealed(false) }, [navCollapsed])
-  useUserSocket()
-  const unread = useUnread(workspaceId ?? '')
-  const { workspaces, workspace, space, notFound } = useActiveWorkspace(workspaceId)
-
-  if (!workspaceId || notFound) return <NotFoundState escape />
+  const unread = useUnread(workspaceId)
+  const { workspaces, workspace } = useActiveWorkspace(workspaceId)
 
   const current = activeArea(section, location.pathname)
   // Settings sits at the foot of the rail; the other areas are its links.
@@ -83,7 +75,7 @@ export function WorkspaceShell({
   }))
 
   return (
-    <ShortcutHelpProvider><CreateProvider workspaceId={workspaceId} space={space.data}>
+    <>
       <div
         className={[
           'product-shell',
@@ -141,11 +133,10 @@ export function WorkspaceShell({
           </button>
         ) : null}
         {navCollapsed && navRevealed ? <button type="button" className="nav-backdrop" aria-label={t('close')} onClick={() => setNavRevealed(false)} /> : null}
-        <div className="product-main">{children}</div>
-        <CommandPalette workspaceId={workspaceId} />
-        <DetailPanel ticketPane={ticketPane} bindClose={bindDetailClose} />
+        <HostSlot host={slots.page} />
+        <HostSlot host={slots.detail} />
       </div>
-    </CreateProvider></ShortcutHelpProvider>
+    </>
   )
 }
 
@@ -213,12 +204,18 @@ function UserMenu({
   const [help, setHelp] = useState(false)
   const [statusOpen, setStatusOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const trigger = useRef<HTMLButtonElement>(null)
+  // The menu item that opened a dialog is gone when the dialog closes, so focus goes back to the button that opened the menu.
+  const closeDialog = (close: () => void) => () => {
+    close()
+    trigger.current?.focus()
+  }
   useDismiss(open, () => setOpen(false), ref)
   const status = [statusEmoji, statusText].filter(Boolean).join(' ')
   const snooze = useSnooze()
   return (
     <div className="popover" ref={ref}>
-      <button type="button" className="user-button" aria-label={name || t('account.title')} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
+      <button ref={trigger} type="button" className="user-button" aria-label={name || t('account.title')} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
         <Avatar name={name || t('account.title')} userId={userId} hasAvatar={hasAvatar} />
       </button>
       {open ? (
@@ -246,7 +243,7 @@ function UserMenu({
       ) : null}
       <StatusDialog
         open={statusOpen}
-        onClose={() => setStatusOpen(false)}
+        onClose={closeDialog(() => setStatusOpen(false))}
         displayName={name}
         jobTitle={jobTitle}
         timeZone={timeZone}
@@ -254,7 +251,7 @@ function UserMenu({
         statusText={statusText}
         statusClearAt={statusClearAt}
       />
-      <HelpDialog open={help} onClose={() => setHelp(false)} />
+      <HelpDialog open={help} onClose={closeDialog(() => setHelp(false))} />
     </div>
   )
 }

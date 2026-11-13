@@ -231,14 +231,14 @@ pub async fn fire_due(
 }
 
 pub fn spawn(pool: PgPool) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            match fire_due(&pool, 50, None).await {
-                Ok(0) => tokio::time::sleep(std::time::Duration::from_secs(15)).await,
+    crate::lifecycle::spawn_worker("reminder scheduler", async move {
+        while !crate::lifecycle::stopping() {
+            match crate::lifecycle::guarded("reminder scheduler", fire_due(&pool, 50, None)).await {
+                Ok(0) => crate::lifecycle::pause(std::time::Duration::from_secs(15)).await,
                 Ok(_) => {}
                 Err(error) => {
                     tracing::warn!(?error, "reminder scheduler failed");
-                    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                    crate::lifecycle::pause(std::time::Duration::from_secs(15)).await;
                 }
             }
         }

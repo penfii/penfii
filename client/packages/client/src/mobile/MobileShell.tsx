@@ -1,24 +1,19 @@
-import { useRef, type MouseEvent, type ReactNode } from 'react'
-import { useLocation, useNavigate, useParams } from 'react-router'
-import { VaultScreen } from './VaultScreen'
+import { useRef, type MouseEvent } from 'react'
+import { useLocation, useNavigate } from 'react-router'
 import { useOnline } from './useOnline'
 import { PushBar } from './PushBar'
 import { TabBar } from './TabBar'
-import { HomeShortcuts, ResumeBand, SearchRoot, SettingsRoot } from './RootScreens'
+import { RootBar } from './RootBar'
+import { useChromeCollapse, useKeyboardViewport } from './useChrome'
+import { ResumeBand, SearchRoot, SettingsRoot } from './RootScreens'
 import { pushTarget, resolveScreen, rootPath } from './routes'
 import { useScreenTitle } from './useScreenTitle'
 import { useDemotedHeadings } from './useDemotedHeadings'
 import { useLeaveOverlay, useTrackTrail } from '../shell/overlayTrail'
 import { useI18n } from '../i18n/I18nProvider'
-import { NotFoundState } from '../ui/NotFoundState'
 import { ContextSidebar } from '../shell/ContextSidebar'
-import { CreateProvider } from '../shell/create'
-import { DetailPanel } from '../shell/DetailPanel'
+import { HostSlot, type ShellSlots } from '../shell/stableSlots'
 import { NAV_AREAS } from '../shell/navAreas'
-import { useActiveWorkspace } from '../shell/account'
-import { ShortcutHelpProvider } from '../modules/help/ShortcutHelp'
-import { CommandPalette } from '../modules/attention/CommandPalette'
-import { useUserSocket } from '../modules/attention/useUserSocket'
 import type { ShellSection } from '../shell/WorkspaceShell'
 import './mobile.css'
 
@@ -27,13 +22,10 @@ import './mobile.css'
  * context list on a full screen; choosing an item pushes the content as another full screen with a
  * top bar (back, title). The desktop shell is untouched and is used above the phone width.
  */
-export function MobileShell({ section, children }: { section: ShellSection; children: ReactNode }) {
-  const { workspaceId = '' } = useParams()
+export function MobileShell({ section, workspaceId, slots }: { section: ShellSection; workspaceId: string; slots: ShellSlots }) {
   const { t } = useI18n()
   const location = useLocation()
   const navigate = useNavigate()
-  const { space, notFound } = useActiveWorkspace(workspaceId)
-  useUserSocket()
   const online = useOnline()
 
   const screen = resolveScreen(workspaceId, section, location.pathname, location.search)
@@ -42,6 +34,8 @@ export function MobileShell({ section, children }: { section: ShellSection; chil
   const title = useScreenTitle(workspaceId, screen.title, sectionLabel)
   const main = useRef<HTMLElement>(null)
   useDemotedHeadings(main)
+  const { collapsed, onScroll } = useChromeCollapse(location.pathname + location.search)
+  const keyboard = useKeyboardViewport()
   useTrackTrail()
   const leave = useLeaveOverlay()
   // A Thread is a detail of its channel: its bar says so and Back closes it (the channel's own bar is below it).
@@ -66,19 +60,18 @@ export function MobileShell({ section, children }: { section: ShellSection; chil
     void navigate(target)
   }
 
-  if (!workspaceId || notFound) return <NotFoundState escape />
-
   return (
-    <ShortcutHelpProvider><CreateProvider workspaceId={workspaceId} space={space.data}>
-      <div className={['mobile-shell', root ? 'is-root' : 'is-push', online ? '' : 'is-offline'].filter(Boolean).join(' ')} data-section={area} data-thread={threadBase ? '' : undefined}>
+    <>
+      <div className={['mobile-shell', root ? 'is-root' : 'is-push', online ? '' : 'is-offline'].filter(Boolean).join(' ')} data-section={area} data-thread={threadBase ? '' : undefined} data-chrome={collapsed || keyboard ? 'collapsed' : undefined} data-keyboard={keyboard ? '' : undefined}>
         {online ? null : <p className="mobile-offline" role="status">{t('mobile.offline')}</p>}
-        {root ? null : threadBase ? (
+        {root ? (
+          <RootBar workspaceId={workspaceId} area={area} title={sectionLabel} />
+        ) : threadBase ? (
           <PushBar fallback={threadBase} title={t('thread.title')} backLabel={title} onBack={() => leave(threadBase)} />
         ) : (
           <PushBar fallback={rootPath(workspaceId, vault ? 'home' : area)} title={title} backLabel={vault ? t('nav.home') : sectionLabel} />
         )}
-        <main ref={main} className="mobile-main" onClickCapture={onListClick}>
-          {root ? <h1 className="visually-hidden" aria-level={1}>{sectionLabel}</h1> : null}
+        <main ref={main} className="mobile-main" onClickCapture={onListClick} onScrollCapture={onScroll}>
           {showList && area === 'search' ? (
             <SearchRoot workspaceId={workspaceId} />
           ) : showList && area === 'settings' ? (
@@ -89,16 +82,12 @@ export function MobileShell({ section, children }: { section: ShellSection; chil
               <ContextSidebar workspaceId={workspaceId} section={area} />
             </>
           ) : (
-            <div className="product-main">
-              {root && area === 'home' ? <HomeShortcuts workspaceId={workspaceId} /> : null}
-              {vault ? <VaultScreen /> : children}
-            </div>
+            <HostSlot host={slots.page} />
           )}
         </main>
-        <DetailPanel />
-        <CommandPalette workspaceId={workspaceId} />
+        <HostSlot host={slots.detail} />
         {root ? <TabBar workspaceId={workspaceId} active={area} /> : null}
       </div>
-    </CreateProvider></ShortcutHelpProvider>
+    </>
   )
 }

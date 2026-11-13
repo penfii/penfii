@@ -29,6 +29,7 @@ export function savedLink(workspaceId: string, ref: SavedRef): string | null {
     case 'FILE':
       if (!ref.conversationId) return null
       return ref.threadRootId ? `${base}/c/${ref.conversationId}/t/${ref.threadRootId}` : `${base}/c/${ref.conversationId}`
+    case 'VIEW':
     default:
       if (ref.viewTarget === 'TEAM' && ref.teamId) return `${base}/teams/${ref.teamId}?v=${ref.targetId}`
       if (ref.viewTarget === 'WORKSPACE') return `${base}/my-work?v=${ref.targetId}`

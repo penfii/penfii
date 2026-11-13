@@ -543,8 +543,7 @@ pub async fn update_later(
         // Bringing a finished card back while the same object is saved again.
         if error
             .as_database_error()
-            .and_then(|e| e.code())
-            .is_some_and(|c| c == "23505")
+            .is_some_and(|db| db.is_unique_violation())
         {
             return Err(CoreError::conflict(
                 "later_exists",
@@ -794,7 +793,7 @@ pub async fn set_designation(
     .bind(user_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let grant_role: Option<String> = current.as_ref().map(|r| r.get("role"));
+    let grant_role: Option<String> = current.as_ref().map(|r| r.try_get("role")).transpose()?;
     if grant_role.as_deref() != Some("EDITOR") {
         return Err(CoreError::validation(
             "only a member who is directly an editor of the Project can be designated",
@@ -811,7 +810,13 @@ pub async fn set_designation(
     .await?;
     let (was_waive, was_pins): (bool, bool) = current
         .as_ref()
-        .map(|r| (r.get("can_waive_dependencies"), r.get("can_manage_pins")))
+        .map(|r| -> Result<_, sqlx::Error> {
+            Ok((
+                r.try_get("can_waive_dependencies")?,
+                r.try_get("can_manage_pins")?,
+            ))
+        })
+        .transpose()?
         .unwrap_or((false, false));
     // Every real change is recorded: who changed whose capability, from what to what.
     if (was_waive, was_pins) != (can_waive_dependencies, can_manage_pins) {
@@ -867,19 +872,22 @@ pub async fn permissions(
     .await?;
     let members: Vec<serde_json::Value> = members
         .iter()
-        .map(|row| {
-            let role = crate::project_role::normalize(row.get::<&str, _>("role")).to_owned();
-            serde_json::json!({
-                "userId": row.get::<Uuid, _>("user_id"),
-                "displayName": row.get::<String, _>("display_name"),
-                "role": role,
-                "source": "DIRECT",
-                "canWaiveDependencies": row.get::<bool, _>("can_waive_dependencies"),
-                "canManagePins": row.get::<bool, _>("can_manage_pins"),
-                "designatable": role == "EDITOR",
+        .map(|row| -> Result<_, sqlx::Error> {
+            Ok({
+                let role =
+                    crate::project_role::normalize(row.try_get::<&str, _>("role")?).to_owned();
+                serde_json::json!({
+                    "userId": row.try_get::<Uuid, _>("user_id")?,
+                    "displayName": row.try_get::<String, _>("display_name")?,
+                    "role": role,
+                    "source": "DIRECT",
+                    "canWaiveDependencies": row.try_get::<bool, _>("can_waive_dependencies")?,
+                    "canManagePins": row.try_get::<bool, _>("can_manage_pins")?,
+                    "designatable": role == "EDITOR",
+                })
             })
         })
-        .collect();
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
     let groups = sqlx::query(
         "SELECT g.id, g.name, pg.role,
                 (SELECT count(*) FROM penfii.group_members gm WHERE gm.group_id = g.id)
@@ -892,15 +900,17 @@ pub async fn permissions(
     .await?;
     let via_groups: Vec<serde_json::Value> = groups
         .iter()
-        .map(|row| {
-            serde_json::json!({
-                "groupId": row.get::<Uuid, _>("id"),
-                "name": row.get::<String, _>("name"),
-                "role": row.get::<String, _>("role"),
-                "memberCount": row.get::<i64, _>("member_count"),
+        .map(|row| -> Result<_, sqlx::Error> {
+            Ok({
+                serde_json::json!({
+                    "groupId": row.try_get::<Uuid, _>("id")?,
+                    "name": row.try_get::<String, _>("name")?,
+                    "role": row.try_get::<String, _>("role")?,
+                    "memberCount": row.try_get::<i64, _>("member_count")?,
+                })
             })
         })
-        .collect();
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
     let teams = sqlx::query(
         "SELECT t.id, t.name, t.archived_at, pt.access_role, (SELECT count(*) FROM penfii.team_members tm WHERE tm.team_id = t.id) AS member_count
          FROM penfii.project_teams pt JOIN penfii.teams t ON t.id = pt.team_id
@@ -911,16 +921,16 @@ pub async fn permissions(
     .await?;
     let via_teams: Vec<serde_json::Value> = teams
         .iter()
-        .map(|row| {
+        .map(|row| -> Result<_, sqlx::Error> { Ok({
             serde_json::json!({
-                "teamId": row.get::<Uuid, _>("id"),
-                "name": row.get::<String, _>("name"),
-                "role": row.get::<Option<String>, _>("access_role"),
-                "memberCount": row.get::<i64, _>("member_count"),
-                "archivedAt": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("archived_at"),
+                "teamId": row.try_get::<Uuid, _>("id")?,
+                "name": row.try_get::<String, _>("name")?,
+                "role": row.try_get::<Option<String>, _>("access_role")?,
+                "memberCount": row.try_get::<i64, _>("member_count")?,
+                "archivedAt": row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("archived_at")?,
             })
-        })
-        .collect();
+        }) })
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
     let changes = sqlx::query(
         "SELECT a.occurred_at, a.data, actor.display_name AS actor_name, target.display_name AS target_name
          FROM penfii.audit_entries a
@@ -934,17 +944,19 @@ pub async fn permissions(
     .await?;
     let recent: Vec<serde_json::Value> = changes
         .iter()
-        .map(|row| {
-            serde_json::json!({
-                "at": row.get::<chrono::DateTime<chrono::Utc>, _>("occurred_at"),
-                "actorName": row.get::<Option<String>, _>("actor_name"),
-                "userName": row.get::<Option<String>, _>("target_name"),
-                "userId": row.get::<serde_json::Value, _>("data")["userId"],
-                "before": row.get::<serde_json::Value, _>("data")["before"],
-                "after": row.get::<serde_json::Value, _>("data")["after"],
+        .map(|row| -> Result<_, sqlx::Error> {
+            Ok({
+                serde_json::json!({
+                    "at": row.try_get::<chrono::DateTime<chrono::Utc>, _>("occurred_at")?,
+                    "actorName": row.try_get::<Option<String>, _>("actor_name")?,
+                    "userName": row.try_get::<Option<String>, _>("target_name")?,
+                    "userId": row.try_get::<serde_json::Value, _>("data")?["userId"],
+                    "before": row.try_get::<serde_json::Value, _>("data")?["before"],
+                    "after": row.try_get::<serde_json::Value, _>("data")?["after"],
+                })
             })
         })
-        .collect();
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
     tx.commit().await?;
     Ok(serde_json::json!({
         "members": members,
@@ -1038,12 +1050,7 @@ pub async fn create_folder(
     .await;
     let row = match inserted {
         Ok(row) => row,
-        Err(error)
-            if error
-                .as_database_error()
-                .and_then(|e| e.code())
-                .is_some_and(|c| c == "23505") =>
-        {
+        Err(sqlx::Error::Database(db)) if db.is_unique_violation() => {
             return Err(CoreError::conflict(
                 "folder_name_taken",
                 "a folder with this name already exists",
@@ -1081,17 +1088,10 @@ pub async fn rename_folder(
             position: row.try_get("position")?,
         }),
         Ok(None) => Err(CoreError::NotFound),
-        Err(error)
-            if error
-                .as_database_error()
-                .and_then(|e| e.code())
-                .is_some_and(|c| c == "23505") =>
-        {
-            Err(CoreError::conflict(
-                "folder_name_taken",
-                "a folder with this name already exists",
-            ))
-        }
+        Err(sqlx::Error::Database(db)) if db.is_unique_violation() => Err(CoreError::conflict(
+            "folder_name_taken",
+            "a folder with this name already exists",
+        )),
         Err(error) => Err(error.into()),
     }
 }
