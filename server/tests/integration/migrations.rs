@@ -56,7 +56,7 @@ async fn exists(pool: &PgPool, table: &str) -> bool {
 async fn the_real_history_is_recorded_once_and_applying_again_changes_nothing(pool: PgPool) {
     let _turn = crate::common::MIGRATING.acquire().await.unwrap();
     apply_migrations(&pool).await.expect("first run");
-    assert_eq!(recorded(&pool, "penfii").await, vec![1]);
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2]);
     let tables: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM pg_tables WHERE schemaname = 'penfii' AND tablename <> '_sqlx_migrations'",
     )
@@ -71,7 +71,7 @@ async fn the_real_history_is_recorded_once_and_applying_again_changes_nothing(po
         .unwrap();
     apply_migrations(&pool).await.expect("second run");
     apply_migrations(&pool).await.expect("third run");
-    assert_eq!(recorded(&pool, "penfii").await, vec![1]);
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2]);
     let kept: i64 =
         sqlx::query_scalar("SELECT count(*) FROM penfii.foundation_state WHERE key = 'kept'")
             .fetch_one(&pool)
@@ -100,7 +100,7 @@ async fn instances_that_start_together_apply_each_migration_once(pool: PgPool) {
     for run in runs {
         run.await.unwrap().expect("every instance succeeds");
     }
-    assert_eq!(recorded(&pool, "penfii").await, vec![1]);
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2]);
 }
 
 #[sqlx::test(migrator = "crate::common::GUARD")]
@@ -329,4 +329,113 @@ async fn a_no_transaction_migration_can_build_an_index_concurrently_and_be_rerun
     .await
     .unwrap();
     assert_eq!(recorded(&pool, "mig_notx").await, vec![1, 2]);
+}
+
+/// v0.1.0 shipped `0001_initial.sql` alone. A database it made (history `[1]`, checksum of that file)
+/// takes `0002` in place: the history is accepted, the rows stay, and the data clean-ups of `0002` run
+/// (project channel rows of people no longer in the Project, piled-up open invitations).
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_v0_1_0_database_upgrades_in_place_and_keeps_its_rows(pool: PgPool) {
+    let _turn = crate::common::MIGRATING.acquire().await.unwrap();
+    // The history v0.1.0 recorded: version 1 with the checksum of the released file.
+    let v0_1_0 = Migrator {
+        migrations: Cow::Owned(vec![Migration::new(
+            1,
+            Cow::Borrowed("initial"),
+            MigrationType::Simple,
+            Cow::Borrowed(include_str!(
+                "../../../database/migrations/0001_initial.sql"
+            )),
+            false,
+        )]),
+        ..Migrator::DEFAULT
+    };
+    run_migrator(&pool, &v0_1_0, "penfii").await.unwrap();
+    assert_eq!(recorded(&pool, "penfii").await, vec![1]);
+
+    let (ws, project) = (Uuid::new_v4(), Uuid::new_v4());
+    let (owner, kept, gone) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let (private, public) = (Uuid::new_v4(), Uuid::new_v4());
+    let (older, newer, accepted) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    sqlx::raw_sql(&format!(
+        "INSERT INTO penfii.users (id, email, email_key, display_name) VALUES
+             ('{owner}', 'owner@example.com', 'owner@example.com', 'Owner'),
+             ('{kept}', 'kept@example.com', 'kept@example.com', 'Kept'),
+             ('{gone}', 'gone@example.com', 'gone@example.com', 'Gone');
+         INSERT INTO penfii.workspaces (id, name, time_zone) VALUES ('{ws}', 'Upgrade', 'Asia/Seoul');
+         INSERT INTO penfii.workspace_members (workspace_id, user_id, role) VALUES
+             ('{ws}', '{owner}', 'OWNER'), ('{ws}', '{kept}', 'MEMBER'), ('{ws}', '{gone}', 'MEMBER');
+         INSERT INTO penfii.projects (id, workspace_id, name, ticket_prefix) VALUES ('{project}', '{ws}', 'P', 'UPG');
+         INSERT INTO penfii.project_user_grants (project_id, user_id, role) VALUES
+             ('{project}', '{owner}', 'ADMIN'), ('{project}', '{kept}', 'EDITOR');
+         INSERT INTO penfii.conversations (id, workspace_id, kind) VALUES
+             ('{private}', '{ws}', 'CHANNEL'), ('{public}', '{ws}', 'CHANNEL');
+         INSERT INTO penfii.channels (id, project_id, name, visibility) VALUES
+             ('{private}', '{project}', 'private', 'PRIVATE'), ('{public}', '{project}', 'public', 'PUBLIC');
+         -- `gone` lost the Project's grant in v0.1.0, which left the channel rows behind.
+         INSERT INTO penfii.channel_members (channel_id, user_id, role) VALUES
+             ('{private}', '{owner}', 'MANAGER'), ('{private}', '{kept}', 'MEMBER'),
+             ('{private}', '{gone}', 'MANAGER'), ('{public}', '{gone}', 'MEMBER');
+         -- v0.1.0 let open invitations for one address pile up.
+         INSERT INTO penfii.workspace_invitations
+             (id, workspace_id, email_key, role, token_hash, expires_at, created_by, created_at) VALUES
+             ('{older}', '{ws}', 'new@example.com', 'MEMBER', '\\x01', now() + interval '7 days', '{owner}', now() - interval '2 days'),
+             ('{newer}', '{ws}', 'new@example.com', 'MEMBER', '\\x02', now() + interval '7 days', '{owner}', now() - interval '1 day');
+         INSERT INTO penfii.workspace_invitations
+             (id, workspace_id, email_key, role, token_hash, expires_at, created_by, accepted_user_id, accepted_at) VALUES
+             ('{accepted}', '{ws}', 'kept@example.com', 'MEMBER', '\\x03', now() + interval '7 days', '{owner}', '{kept}', now());"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // What admin-cli migrate does on the upgrade: only 0002 is applied, and the build accepts the result.
+    apply_migrations(&pool).await.expect("0002 over v0.1.0");
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2]);
+    penfii_core::require_current_schema(&pool)
+        .await
+        .expect("the history matches this build");
+
+    let users: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT id, kind FROM penfii.users ORDER BY email")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(users.len(), 3);
+    assert!(users.iter().all(|(_, kind)| kind == "HUMAN"), "{users:?}");
+    let members: Vec<(Uuid, Uuid, String)> = sqlx::query_as(
+        "SELECT channel_id, user_id, role FROM penfii.channel_members ORDER BY role, user_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let mut expected = vec![
+        (private, owner, "MANAGER".to_string()),
+        (private, kept, "MEMBER".to_string()),
+    ];
+    expected.sort_by(|a, b| (&a.2, a.1).cmp(&(&b.2, b.1)));
+    assert_eq!(members, expected, "only the rows of `gone` went");
+    let invitations: Vec<(Uuid, bool, Option<String>)> = sqlx::query_as(
+        "SELECT id, revoked_at IS NOT NULL, email_status FROM penfii.workspace_invitations ORDER BY created_at",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(invitations.len(), 3);
+    for (id, revoked, email_status) in &invitations {
+        assert_eq!(*revoked, *id == older, "{id}");
+        assert_eq!(*email_status, None);
+    }
+    // The new constraint holds from now on: a second open invitation for the address is refused.
+    let duplicate = sqlx::raw_sql(&format!(
+        "INSERT INTO penfii.workspace_invitations (id, workspace_id, email_key, role, token_hash, expires_at, created_by)
+         VALUES ('{}', '{ws}', 'new@example.com', 'MEMBER', '\\x04', now() + interval '1 day', '{owner}')",
+        Uuid::new_v4()
+    ))
+    .execute(&pool)
+    .await;
+    assert!(duplicate.is_err());
+    // Applying again changes nothing.
+    apply_migrations(&pool).await.expect("second run");
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2]);
 }

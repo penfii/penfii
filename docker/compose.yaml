@@ -22,8 +22,8 @@ services:
       POSTGRES_USER: penfii
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: penfii
-    ports:
-      - "127.0.0.1:5432:5432"
+    # Not published on the host: only the other services reach it. For psql, use
+    # `docker compose exec postgres psql -U penfii penfii` (docs/development.md has a local-only override).
     volumes:
       - penfii-pg:/var/lib/postgresql/data
     healthcheck:

@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Penfii is at v0.1.0. Only the latest release and the latest commit on the default branch are supported; fixes are not backported.
+Penfii is at v0.2.0. Only the latest release and the latest commit on the default branch are supported; fixes are not backported.
 
 ## Reporting a vulnerability
 

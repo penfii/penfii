@@ -116,7 +116,7 @@ File attachments need an S3-compatible bucket that accepts path-style requests. 
 | `PENFII_FILE_MAX_BYTES` | unset | Largest single file; unset makes uploads fail with `file_limit_unconfigured` |
 | `PENFII_MESSAGE_FILE_MAX_COUNT`, `PENFII_MESSAGE_FILE_MAX_BYTES` | unset | Attachments per message and their total size (ticket attachments are not limited by these) |
 | `PENFII_UNBOUND_UPLOAD_GRACE_SECONDS` | `86400` | How long an upload that was never attached may wait before it is removed |
-| `PENFII_TRASH_RETENTION_DAYS` | unset (off) | Days a ticket stays in the trash before it is purged automatically. Unset, `0` or anything that is not a positive whole number keeps the automatic purge **off**: trashed tickets stay until a Project admin restores or purges them. When set, the purge runs hourly and shortly after start (so a server that was down catches up); a ticket that still has children or dependencies is kept and tried again |
+| `PENFII_TRASH_RETENTION_DAYS` | unset (off) | Days a ticket stays in the trash before it is purged automatically. Unset, empty or `0` keeps the automatic purge **off** (anything else that is not a whole number of at least 0 stops the start): trashed tickets stay until a Project admin restores or purges them. When set, the purge runs hourly and shortly after start (so a server that was down catches up); a ticket that still has children or dependencies is kept and tried again |
 
 ### Search
 

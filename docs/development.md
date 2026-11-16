@@ -68,6 +68,14 @@ A build with `VITE_PREVIEW_CONTENT=1` fills some lists with demo content for scr
 
 The Docker Compose stack in `docker/` builds the server and web images from this checkout; see [Self-hosting](self-hosting.md). Use it to test the image build, the Caddy configuration or the stack as an operator sees it.
 
+Its PostgreSQL is not published on the host, as in a real installation. Open a shell in it with `docker compose exec postgres psql -U penfii penfii`. To reach it from a tool on your machine, put a `docker/compose.override.yaml` next to the Compose file (it is git-ignored and Compose reads it on its own) with a port other than 5432, which `penfii-pg` above uses:
+
+```yaml
+services:
+  postgres:
+    ports: ["127.0.0.1:55432:5432"]
+```
+
 ## Checks
 
 Run the checks of the part you changed before you open a pull request. CI (`.github/workflows/ci.yml`) runs all of them.
@@ -131,7 +139,7 @@ The accounts and their public password are test data (`apps/e2e/support/accounts
 
 The schema is `database/migrations/*.sql`, compiled into the server by `sqlx::migrate!` (`server/crates/core/src/migrate.rs`) and applied once each, in order, by `admin-cli migrate` (the migration credential). core-api does not migrate; it refuses to start when the recorded history is behind this build.
 
-- Add the next numbered file (`database/migrations/0002_<what>.sql`). Never edit a file that was already applied or released: its checksum is recorded and the server refuses to start on a changed file. One file, one change.
+- Add the next numbered file (`database/migrations/0003_<what>.sql`). Never edit a file that was already applied or released: its checksum is recorded and the server refuses to start on a changed file. One file, one change.
 - Each file runs in a transaction, so it needs no `IF NOT EXISTS` guards and may use `DO $$` blocks and functions. Qualify every name with the `penfii.` schema. A change that needs existing rows converted does it in the same file. Before writing a migration that updates or deletes rows, count how many rows it will touch. A change that would lock a large table for a long time is written in batches, or, for an index, outside a transaction.
 - `CREATE INDEX CONCURRENTLY` cannot run inside a transaction. Put `-- no-transaction` on the first line of that file. The runner does support it (sqlx 0.8): the same statement is refused in an ordinary file and applied in a no-transaction file. sqlx sends the file as one script, and PostgreSQL runs a multi-statement script as one transaction, so a script that fails does not keep its earlier statements. What does stay is a crash after the script has committed and before its history row is written, and an `INVALID` index left by a failed `CREATE INDEX CONCURRENTLY`. Write the file so a second run is safe (`IF NOT EXISTS`, and drop an invalid index before creating it again). There is no down migration: rolling back a release is restoring a backup ([Self-hosting](self-hosting.md#restore)).
 - A foreign key or an index that is added later is decided from a measurement on real data, and the reason is written in the migration's comment.
@@ -145,7 +153,7 @@ cargo sqlx prepare --workspace -- --locked
 ```
 
 `cargo sqlx prepare --check` fails when `.sqlx` is stale. `make integration` runs that check. Builds that set `DATABASE_URL` to a database without the schema (the test runner's empty `penfii` database, the Docker build) set `SQLX_OFFLINE=true` so they use `.sqlx` instead of asking the database. A query assembled with `format!` cannot use these macros; leave it as `sqlx::query`.
-- `0001_initial.sql` is the whole schema of v0.1.0 as one file; later changes are new files next to it.
+- `0001_initial.sql` is the whole schema of v0.1.0 as one file, byte for byte as released (a v0.1.0 database has its checksum recorded). `0002_after_v0_1_0.sql` is every change made before v0.2.0, so a v0.1.0 database upgrades in place. Later changes are new files next to them. `migrations.rs` checks that a database with the v0.1.0 history and data upgrades and keeps its rows.
 
 ## Changing the API
 

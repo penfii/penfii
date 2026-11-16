@@ -1,5 +1,7 @@
 # Self-hosting settings with real secrets in them
 docker/.env
+# Local-only Compose changes (Compose reads it next to compose.yaml), e.g. a PostgreSQL port for a dev machine
+docker/compose.override.yaml
 .claude
 .playwright-mcp
 .vscode

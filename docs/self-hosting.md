@@ -2,7 +2,7 @@
 
 `docker/compose.yaml` is the supported way to run Penfii. It starts PostgreSQL, OpenSearch (with the Korean analyzer), MinIO (S3-compatible file storage), the server (`core-api`) and the web app, and builds the server and web images from this checkout. There are no published images.
 
-Penfii is at v0.1.0, an early release: read [Known limitations](known-limitations.md) first.
+Penfii is at v0.2.0, an early release: read [Known limitations](known-limitations.md) first.
 
 ## What you need
 
@@ -15,13 +15,15 @@ Penfii is at v0.1.0, an early release: read [Known limitations](known-limitation
 
 ```sh
 git clone https://git.manglix.com/penfii/penfii.git
-cd penfii/docker
+cd penfii
+git checkout v0.2.0      # a release tag; leave this out to run the latest commit of the default branch
+cd docker
 cp .env.example .env
 ```
 
 Edit `.env`:
 
-- Replace every `CHANGE_ME`: the PostgreSQL password (letters and digits only, it is placed inside a connection URL) and the object storage key pair (8 or more characters).
+- Replace every `CHANGE_ME`: the PostgreSQL password and the passwords of the two database roles (`PENFII_DB_OWNER_PASSWORD`, `PENFII_DB_RUNTIME_PASSWORD`; letters and digits only, they are placed inside a connection URL) and the object storage key pair (8 or more characters).
 - Set `PENFII_PUBLIC_URL` to the address people will open, with no path (`https://penfii.example.com`). The default is `http://localhost:8080`.
 - Keep the limits in the file or change them; core-api needs each of them (see [Configuration](configuration.md)).
 
@@ -126,13 +128,30 @@ The MCP gateway lets AI clients work in Penfii as a signed-in person, after that
 
 ## Updating
 
+Back up first ([Backup](#backup)), then check out the release and rebuild:
+
 ```sh
-git pull
+git fetch --tags
+git checkout v0.2.0
 cd docker
 docker compose up -d --build
 ```
 
-`docker compose up` runs the one-shot `db-setup` service again before core-api starts (it is started again when its image is unchanged and re-created when the image changed), and `db-setup` applies pending database migrations with the schema owner's credential. core-api itself never migrates: it checks the history and refuses to start when it is behind. This update procedure has not been tested across releases, and there is no upgrade guarantee between 0.x releases, so back up first and read the [changelog](../CHANGELOG.md). A database made by a development build from before the schema was consolidated into `database/migrations/0001_initial.sql` cannot be upgraded in place and has to be recreated.
+`docker compose up` runs the one-shot `db-setup` service again before core-api starts (it is started again when its image is unchanged and re-created when the image changed), and `db-setup` applies pending database migrations with the schema owner's credential. core-api itself never migrates: it checks the history and refuses to start when it is behind. There is no upgrade guarantee between 0.x releases: read the [changelog](../CHANGELOG.md) of every release you move across before you start.
+
+### From v0.1.0 to v0.2.0
+
+v0.2.0 runs the database as two roles and adds the `db-setup` service, so `docker/.env` needs three more lines before the first `up`. The v0.1.0 database stays owned by `penfii`, the PostgreSQL user it was made with:
+
+```sh
+PENFII_DB_OWNER_USER=penfii
+PENFII_DB_OWNER_PASSWORD=<the value of POSTGRES_PASSWORD>
+PENFII_DB_RUNTIME_PASSWORD=<a new password, letters and digits only>
+```
+
+`db-setup` then makes the runtime role and applies migration `0002`, which keeps the data of v0.1.0 (see [Upgrading an installation that used one database role](#upgrading-an-installation-that-used-one-database-role)). Settings are checked strictly from v0.2.0 on: a value that is set but cannot be read stops core-api and `docker compose logs core-api` names it. The changelog lists what changed.
+
+A database made by a development build between v0.1.0 and v0.2.0 (migration history `0001` to `0008`), or from before the schema was consolidated into `database/migrations/0001_initial.sql`, cannot be upgraded in place and has to be recreated.
 
 ## Stopping and removing
 

@@ -23,21 +23,6 @@ CREATE FUNCTION penfii.in_share_scope(p_project uuid, p_team uuid, p_user uuid) 
     LANGUAGE sql STABLE
     AS $$ SELECT p_project IS NOT NULL AND (EXISTS (SELECT 1 FROM penfii.project_user_grants g WHERE g.project_id = p_project AND g.user_id = p_user) OR EXISTS (SELECT 1 FROM penfii.project_teams pt JOIN penfii.team_members tm ON tm.team_id = pt.team_id WHERE pt.project_id = p_project AND pt.access_role IS NOT NULL AND tm.user_id = p_user) OR EXISTS (SELECT 1 FROM penfii.project_group_grants pg JOIN penfii.groups gr ON gr.id = pg.group_id AND gr.deleted_at IS NULL LEFT JOIN penfii.group_members gm ON gm.group_id = gr.id LEFT JOIN penfii.team_members tm ON tm.team_id = gr.system_team_id WHERE pg.project_id = p_project AND (gm.user_id = p_user OR tm.user_id = p_user))) AND (p_team IS NULL OR EXISTS (SELECT 1 FROM penfii.team_members t WHERE t.team_id = p_team AND t.user_id = p_user)) $$;
 
-CREATE FUNCTION penfii.reject_integration_membership() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM penfii.users u
-        WHERE u.id = NEW.user_id AND u.kind = 'INTEGRATION'
-    ) THEN
-        RAISE EXCEPTION 'integration actors cannot be members'
-            USING ERRCODE = '23514';
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
 CREATE TABLE penfii.activity_entries (
     id uuid NOT NULL,
     workspace_id uuid NOT NULL,
@@ -508,7 +493,6 @@ CREATE TABLE penfii.inbox_items (
     snoozed_until timestamp with time zone,
     version bigint DEFAULT 1 NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    archived_at timestamp with time zone,
     CONSTRAINT inbox_items_state_check CHECK ((state = ANY (ARRAY['UNREAD'::text, 'READ'::text, 'ARCHIVED'::text])))
 );
 
@@ -516,14 +500,6 @@ CREATE TABLE penfii.instance_settings (
     singleton boolean DEFAULT true NOT NULL,
     default_locale text DEFAULT 'ko-KR'::text NOT NULL,
     CONSTRAINT instance_settings_singleton_chk CHECK (singleton)
-);
-
-CREATE TABLE penfii.integration_actors (
-    user_id uuid NOT NULL,
-    workspace_id uuid NOT NULL,
-    created_by uuid NOT NULL,
-    disabled_at timestamp with time zone,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 CREATE TABLE penfii.labels (
@@ -733,15 +709,6 @@ CREATE TABLE penfii.password_credentials (
     changed_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-CREATE TABLE penfii.password_reset_tokens (
-    id uuid NOT NULL,
-    user_id uuid NOT NULL,
-    token_hash bytea NOT NULL,
-    expires_at timestamp with time zone NOT NULL,
-    closed_at timestamp with time zone,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
 CREATE TABLE penfii.project_calendars (
     project_id uuid NOT NULL,
     version bigint DEFAULT 1 NOT NULL,
@@ -838,24 +805,6 @@ CREATE TABLE penfii.projects (
     CONSTRAINT projects_ticket_prefix_chk CHECK (((ticket_prefix IS NULL) OR (ticket_prefix ~ '^[A-Z][A-Z0-9]{1,9}$'::text)))
 );
 
-CREATE TABLE penfii.push_subscriptions (
-    id uuid NOT NULL,
-    user_id uuid NOT NULL,
-    endpoint text NOT NULL,
-    p256dh text NOT NULL,
-    auth text NOT NULL,
-    user_agent text,
-    label text,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    last_success_at timestamp with time zone,
-    last_failure_at timestamp with time zone,
-    CONSTRAINT push_subscriptions_agent_len CHECK (((user_agent IS NULL) OR (char_length(user_agent) <= 400))),
-    CONSTRAINT push_subscriptions_endpoint_len CHECK (((char_length(endpoint) >= 1) AND (char_length(endpoint) <= 2048))),
-    CONSTRAINT push_subscriptions_keys_len CHECK (((char_length(p256dh) <= 200) AND (char_length(auth) <= 100))),
-    CONSTRAINT push_subscriptions_label_len CHECK (((label IS NULL) OR (char_length(label) <= 100)))
-);
-
 CREATE TABLE penfii.reminders (
     id uuid NOT NULL,
     user_id uuid NOT NULL,
@@ -898,22 +847,6 @@ CREATE TABLE penfii.sessions (
     last_reauth_method text,
     auth_method text,
     last_seen_at timestamp with time zone
-);
-
-CREATE TABLE penfii.sprint_archive_schedules (
-    sprint_id uuid NOT NULL,
-    workspace_id uuid NOT NULL,
-    project_id uuid NOT NULL,
-    scheduled_by uuid NOT NULL,
-    due_at timestamp with time zone NOT NULL,
-    time_zone text NOT NULL,
-    state text DEFAULT 'SCHEDULED'::text NOT NULL,
-    version bigint DEFAULT 1 NOT NULL,
-    archived_count integer,
-    skipped_count integer,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    finished_at timestamp with time zone,
-    CONSTRAINT sprint_archive_schedules_state_check CHECK ((state = ANY (ARRAY['SCHEDULED'::text, 'DONE'::text, 'CANCELED'::text])))
 );
 
 CREATE TABLE penfii.sprint_assignments (
@@ -1128,7 +1061,6 @@ CREATE TABLE penfii.tickets (
     estimate_unit text,
     trashed_by uuid,
     purged_by uuid,
-    archived_by uuid,
     CONSTRAINT tickets_check CHECK (((parent_id IS NULL) OR (parent_id <> id))),
     CONSTRAINT tickets_check1 CHECK (((hierarchy_kind <> 'EPIC'::text) OR ((parent_id IS NULL) AND (channel_id IS NULL)))),
     CONSTRAINT tickets_check2 CHECK (((hierarchy_kind <> 'SUBTASK'::text) OR (parent_id IS NOT NULL))),
@@ -1157,40 +1089,12 @@ CREATE TABLE penfii.users (
     avatar_object_key text,
     avatar_mime text,
     avatar_revision bigint DEFAULT 0 NOT NULL,
-    kind text DEFAULT 'HUMAN'::text NOT NULL,
     CONSTRAINT users_avatar_key_len CHECK (((avatar_object_key IS NULL) OR (char_length(avatar_object_key) <= 200))),
     CONSTRAINT users_avatar_pair CHECK (((avatar_object_key IS NULL) = (avatar_mime IS NULL))),
     CONSTRAINT users_avatar_revision_nonneg CHECK ((avatar_revision >= 0)),
     CONSTRAINT users_job_title_len CHECK (((job_title IS NULL) OR (char_length(job_title) <= 80))),
-    CONSTRAINT users_kind_chk CHECK ((kind = ANY (ARRAY['HUMAN'::text, 'INTEGRATION'::text]))),
     CONSTRAINT users_status_emoji_len CHECK (((status_emoji IS NULL) OR (char_length(status_emoji) <= 16))),
     CONSTRAINT users_status_text_len CHECK (((status_text IS NULL) OR (char_length(status_text) <= 80)))
-);
-
-CREATE TABLE penfii.webhook_post_windows (
-    webhook_id uuid NOT NULL,
-    window_start timestamp with time zone DEFAULT now() NOT NULL,
-    posts integer DEFAULT 0 NOT NULL,
-    CONSTRAINT webhook_post_windows_posts_chk CHECK ((posts >= 0))
-);
-
-CREATE TABLE penfii.webhooks (
-    id uuid NOT NULL,
-    workspace_id uuid NOT NULL,
-    channel_id uuid NOT NULL,
-    actor_user_id uuid NOT NULL,
-    name text NOT NULL,
-    auth_mode text NOT NULL,
-    token_hash bytea,
-    secret_ciphertext bytea,
-    secret_nonce bytea,
-    created_by uuid NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    rotated_at timestamp with time zone,
-    revoked_at timestamp with time zone,
-    CONSTRAINT webhooks_auth_mode_chk CHECK ((auth_mode = ANY (ARRAY['URL_SECRET'::text, 'SIGNATURE'::text]))),
-    CONSTRAINT webhooks_credential_chk CHECK ((((auth_mode = 'URL_SECRET'::text) AND (token_hash IS NOT NULL) AND (secret_ciphertext IS NULL) AND (secret_nonce IS NULL)) OR ((auth_mode = 'SIGNATURE'::text) AND (token_hash IS NULL) AND (secret_ciphertext IS NOT NULL) AND (secret_nonce IS NOT NULL)))),
-    CONSTRAINT webhooks_name_len CHECK (((char_length(name) >= 1) AND (char_length(name) <= 200)))
 );
 
 CREATE TABLE penfii.workflow_status_history (
@@ -1258,11 +1162,7 @@ CREATE TABLE penfii.workspace_invitations (
     revoked_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     team_id uuid,
-    team_name text,
-    email_status text,
-    email_attempted_at timestamp with time zone,
-    email_error text,
-    CONSTRAINT workspace_invitations_email_status_chk CHECK (((email_status IS NULL) OR (email_status = ANY (ARRAY['NOT_CONFIGURED'::text, 'SENT'::text, 'FAILED'::text]))))
+    team_name text
 );
 
 CREATE TABLE penfii.workspace_mcp_policy (
@@ -1459,9 +1359,6 @@ ALTER TABLE ONLY penfii.inbox_items
 ALTER TABLE ONLY penfii.instance_settings
     ADD CONSTRAINT instance_settings_pkey PRIMARY KEY (singleton);
 
-ALTER TABLE ONLY penfii.integration_actors
-    ADD CONSTRAINT integration_actors_pkey PRIMARY KEY (user_id);
-
 ALTER TABLE ONLY penfii.labels
     ADD CONSTRAINT labels_pkey PRIMARY KEY (id);
 
@@ -1528,12 +1425,6 @@ ALTER TABLE ONLY penfii.outbox
 ALTER TABLE ONLY penfii.password_credentials
     ADD CONSTRAINT password_credentials_pkey PRIMARY KEY (user_id);
 
-ALTER TABLE ONLY penfii.password_reset_tokens
-    ADD CONSTRAINT password_reset_tokens_pkey PRIMARY KEY (id);
-
-ALTER TABLE ONLY penfii.password_reset_tokens
-    ADD CONSTRAINT password_reset_tokens_token_hash_key UNIQUE (token_hash);
-
 ALTER TABLE ONLY penfii.project_calendars
     ADD CONSTRAINT project_calendars_pkey PRIMARY KEY (project_id);
 
@@ -1564,12 +1455,6 @@ ALTER TABLE ONLY penfii.projects
 ALTER TABLE ONLY penfii.projects
     ADD CONSTRAINT projects_pkey PRIMARY KEY (id);
 
-ALTER TABLE ONLY penfii.push_subscriptions
-    ADD CONSTRAINT push_subscriptions_endpoint_key UNIQUE (endpoint);
-
-ALTER TABLE ONLY penfii.push_subscriptions
-    ADD CONSTRAINT push_subscriptions_pkey PRIMARY KEY (id);
-
 ALTER TABLE ONLY penfii.reminders
     ADD CONSTRAINT reminders_pkey PRIMARY KEY (id);
 
@@ -1581,9 +1466,6 @@ ALTER TABLE ONLY penfii.sessions
 
 ALTER TABLE ONLY penfii.sessions
     ADD CONSTRAINT sessions_token_hash_key UNIQUE (token_hash);
-
-ALTER TABLE ONLY penfii.sprint_archive_schedules
-    ADD CONSTRAINT sprint_archive_schedules_pkey PRIMARY KEY (sprint_id);
 
 ALTER TABLE ONLY penfii.sprint_assignments
     ADD CONSTRAINT sprint_assignments_pkey PRIMARY KEY (id);
@@ -1650,12 +1532,6 @@ ALTER TABLE ONLY penfii.users
 
 ALTER TABLE ONLY penfii.users
     ADD CONSTRAINT users_pkey PRIMARY KEY (id);
-
-ALTER TABLE ONLY penfii.webhook_post_windows
-    ADD CONSTRAINT webhook_post_windows_pkey PRIMARY KEY (webhook_id);
-
-ALTER TABLE ONLY penfii.webhooks
-    ADD CONSTRAINT webhooks_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY penfii.workflow_status_history
     ADD CONSTRAINT workflow_status_history_pkey PRIMARY KEY (id);
@@ -1766,11 +1642,7 @@ CREATE INDEX file_tasks_ready_idx ON penfii.file_processing_tasks USING btree (t
 
 CREATE INDEX groups_workspace_idx ON penfii.groups USING btree (workspace_id, id);
 
-CREATE INDEX inbox_items_archived_idx ON penfii.inbox_items USING btree (recipient_id, workspace_id, COALESCE(archived_at, created_at) DESC, id DESC) WHERE (state = 'ARCHIVED'::text);
-
 CREATE INDEX inbox_items_list_idx ON penfii.inbox_items USING btree (recipient_id, workspace_id, created_at DESC, id DESC) WHERE (state <> 'ARCHIVED'::text);
-
-CREATE INDEX integration_actors_workspace_idx ON penfii.integration_actors USING btree (workspace_id);
 
 CREATE UNIQUE INDEX later_items_active_idx ON penfii.later_items USING btree (user_id, kind, target_id) WHERE (state = 'ACTIVE'::text);
 
@@ -1804,10 +1676,6 @@ CREATE INDEX oauth_tokens_grant_idx ON penfii.oauth_tokens USING btree (grant_id
 
 CREATE INDEX outbox_pending_idx ON penfii.outbox USING btree (available_at, event_id) WHERE (dispatched_at IS NULL);
 
-CREATE INDEX password_reset_tokens_expires_idx ON penfii.password_reset_tokens USING btree (expires_at);
-
-CREATE UNIQUE INDEX password_reset_tokens_one_live_idx ON penfii.password_reset_tokens USING btree (user_id) WHERE (closed_at IS NULL);
-
 CREATE INDEX project_pins_project_idx ON penfii.project_pins USING btree (project_id, "position", id);
 
 CREATE UNIQUE INDEX project_pins_ticket_idx ON penfii.project_pins USING btree (project_id, ticket_id) WHERE (ticket_id IS NOT NULL);
@@ -1834,8 +1702,6 @@ CREATE UNIQUE INDEX projects_ticket_prefix_ci_idx ON penfii.projects USING btree
 
 CREATE INDEX projects_workspace_idx ON penfii.projects USING btree (workspace_id, id);
 
-CREATE INDEX push_subscriptions_user_idx ON penfii.push_subscriptions USING btree (user_id);
-
 CREATE INDEX reminders_due_idx ON penfii.reminders USING btree (due_at, id) WHERE (state = 'SCHEDULED'::text);
 
 CREATE INDEX reminders_later_idx ON penfii.reminders USING btree (later_id, created_at DESC);
@@ -1843,8 +1709,6 @@ CREATE INDEX reminders_later_idx ON penfii.reminders USING btree (later_id, crea
 CREATE UNIQUE INDEX reminders_one_scheduled_idx ON penfii.reminders USING btree (later_id) WHERE (state = 'SCHEDULED'::text);
 
 CREATE INDEX sessions_user_live_idx ON penfii.sessions USING btree (user_id, created_at DESC, id) WHERE (revoked_at IS NULL);
-
-CREATE INDEX sprint_archive_schedules_due_idx ON penfii.sprint_archive_schedules USING btree (due_at, sprint_id) WHERE (state = 'SCHEDULED'::text);
 
 CREATE INDEX sprint_assignments_history_idx ON penfii.sprint_assignments USING btree (sprint_id, ticket_id, assigned_at);
 
@@ -1884,15 +1748,9 @@ CREATE INDEX tickets_trash_idx ON penfii.tickets USING btree (project_id, trashe
 
 CREATE UNIQUE INDEX users_username_key_idx ON penfii.users USING btree (username_key) WHERE (username_key IS NOT NULL);
 
-CREATE INDEX webhooks_channel_idx ON penfii.webhooks USING btree (channel_id, created_at);
-
-CREATE UNIQUE INDEX webhooks_token_hash_uidx ON penfii.webhooks USING btree (token_hash) WHERE (token_hash IS NOT NULL);
-
 CREATE UNIQUE INDEX workflow_one_initial_idx ON penfii.workflow_statuses USING btree (project_id) WHERE is_initial;
 
 CREATE INDEX workflow_status_history_status_idx ON penfii.workflow_status_history USING btree (status_id, effective_from, id);
-
-CREATE UNIQUE INDEX workspace_invitations_open_uq ON penfii.workspace_invitations USING btree (workspace_id, email_key) WHERE ((accepted_at IS NULL) AND (revoked_at IS NULL));
 
 CREATE INDEX workspace_invitations_workspace_idx ON penfii.workspace_invitations USING btree (workspace_id, created_at DESC, id DESC);
 
@@ -1900,27 +1758,9 @@ CREATE INDEX workspace_members_user_active_idx ON penfii.workspace_members USING
 
 CREATE INDEX workspace_members_workspace_idx ON penfii.workspace_members USING btree (workspace_id, state, role);
 
-CREATE TRIGGER channel_members_reject_integration BEFORE INSERT OR UPDATE ON penfii.channel_members FOR EACH ROW EXECUTE FUNCTION penfii.reject_integration_membership();
-
-CREATE TRIGGER dm_members_reject_integration BEFORE INSERT OR UPDATE ON penfii.dm_members FOR EACH ROW EXECUTE FUNCTION penfii.reject_integration_membership();
-
 CREATE TRIGGER doc_pages_title_required BEFORE INSERT OR UPDATE OF title ON penfii.doc_pages FOR EACH ROW EXECUTE FUNCTION penfii.doc_pages_title_required();
 
 CREATE TRIGGER doc_versions_immutable BEFORE DELETE OR UPDATE ON penfii.doc_versions FOR EACH ROW EXECUTE FUNCTION penfii.doc_versions_immutable();
-
-CREATE TRIGGER external_identities_reject_integration BEFORE INSERT OR UPDATE ON penfii.external_identities FOR EACH ROW EXECUTE FUNCTION penfii.reject_integration_membership();
-
-CREATE TRIGGER group_members_reject_integration BEFORE INSERT OR UPDATE ON penfii.group_members FOR EACH ROW EXECUTE FUNCTION penfii.reject_integration_membership();
-
-CREATE TRIGGER password_credentials_reject_integration BEFORE INSERT OR UPDATE ON penfii.password_credentials FOR EACH ROW EXECUTE FUNCTION penfii.reject_integration_membership();
-
-CREATE TRIGGER project_user_grants_reject_integration BEFORE INSERT OR UPDATE ON penfii.project_user_grants FOR EACH ROW EXECUTE FUNCTION penfii.reject_integration_membership();
-
-CREATE TRIGGER sessions_reject_integration BEFORE INSERT OR UPDATE ON penfii.sessions FOR EACH ROW EXECUTE FUNCTION penfii.reject_integration_membership();
-
-CREATE TRIGGER team_members_reject_integration BEFORE INSERT OR UPDATE ON penfii.team_members FOR EACH ROW EXECUTE FUNCTION penfii.reject_integration_membership();
-
-CREATE TRIGGER workspace_members_reject_integration BEFORE INSERT OR UPDATE ON penfii.workspace_members FOR EACH ROW EXECUTE FUNCTION penfii.reject_integration_membership();
 
 ALTER TABLE ONLY penfii.activity_entries
     ADD CONSTRAINT activity_entries_actor_user_id_fkey FOREIGN KEY (actor_user_id) REFERENCES penfii.users(id);
@@ -2189,15 +2029,6 @@ ALTER TABLE ONLY penfii.inbox_items
 ALTER TABLE ONLY penfii.inbox_items
     ADD CONSTRAINT inbox_items_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES penfii.workspaces(id);
 
-ALTER TABLE ONLY penfii.integration_actors
-    ADD CONSTRAINT integration_actors_created_by_fkey FOREIGN KEY (created_by) REFERENCES penfii.users(id);
-
-ALTER TABLE ONLY penfii.integration_actors
-    ADD CONSTRAINT integration_actors_user_id_fkey FOREIGN KEY (user_id) REFERENCES penfii.users(id);
-
-ALTER TABLE ONLY penfii.integration_actors
-    ADD CONSTRAINT integration_actors_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES penfii.workspaces(id);
-
 ALTER TABLE ONLY penfii.labels
     ADD CONSTRAINT labels_project_id_fkey FOREIGN KEY (project_id) REFERENCES penfii.projects(id);
 
@@ -2291,9 +2122,6 @@ ALTER TABLE ONLY penfii.outbox
 ALTER TABLE ONLY penfii.password_credentials
     ADD CONSTRAINT password_credentials_user_id_fkey FOREIGN KEY (user_id) REFERENCES penfii.users(id);
 
-ALTER TABLE ONLY penfii.password_reset_tokens
-    ADD CONSTRAINT password_reset_tokens_user_id_fkey FOREIGN KEY (user_id) REFERENCES penfii.users(id);
-
 ALTER TABLE ONLY penfii.project_calendars
     ADD CONSTRAINT project_calendars_project_id_fkey FOREIGN KEY (project_id) REFERENCES penfii.projects(id);
 
@@ -2357,9 +2185,6 @@ ALTER TABLE ONLY penfii.project_views
 ALTER TABLE ONLY penfii.projects
     ADD CONSTRAINT projects_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES penfii.workspaces(id);
 
-ALTER TABLE ONLY penfii.push_subscriptions
-    ADD CONSTRAINT push_subscriptions_user_id_fkey FOREIGN KEY (user_id) REFERENCES penfii.users(id) ON DELETE CASCADE;
-
 ALTER TABLE ONLY penfii.reminders
     ADD CONSTRAINT reminders_later_id_fkey FOREIGN KEY (later_id) REFERENCES penfii.later_items(id) ON DELETE CASCADE;
 
@@ -2371,15 +2196,6 @@ ALTER TABLE ONLY penfii.reminders
 
 ALTER TABLE ONLY penfii.sessions
     ADD CONSTRAINT sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES penfii.users(id);
-
-ALTER TABLE ONLY penfii.sprint_archive_schedules
-    ADD CONSTRAINT sprint_archive_schedules_project_fkey FOREIGN KEY (project_id) REFERENCES penfii.projects(id);
-
-ALTER TABLE ONLY penfii.sprint_archive_schedules
-    ADD CONSTRAINT sprint_archive_schedules_sprint_fkey FOREIGN KEY (sprint_id) REFERENCES penfii.sprints(id);
-
-ALTER TABLE ONLY penfii.sprint_archive_schedules
-    ADD CONSTRAINT sprint_archive_schedules_user_fkey FOREIGN KEY (scheduled_by) REFERENCES penfii.users(id);
 
 ALTER TABLE ONLY penfii.sprint_assignments
     ADD CONSTRAINT sprint_assignments_assigned_by_fkey FOREIGN KEY (assigned_by) REFERENCES penfii.users(id);
@@ -2508,9 +2324,6 @@ ALTER TABLE ONLY penfii.ticket_types
     ADD CONSTRAINT ticket_types_project_id_fkey FOREIGN KEY (project_id) REFERENCES penfii.projects(id);
 
 ALTER TABLE ONLY penfii.tickets
-    ADD CONSTRAINT tickets_archived_by_fkey FOREIGN KEY (archived_by) REFERENCES penfii.users(id);
-
-ALTER TABLE ONLY penfii.tickets
     ADD CONSTRAINT tickets_channel_id_fkey FOREIGN KEY (channel_id) REFERENCES penfii.channels(id);
 
 ALTER TABLE ONLY penfii.tickets
@@ -2539,21 +2352,6 @@ ALTER TABLE ONLY penfii.tickets
 
 ALTER TABLE ONLY penfii.tickets
     ADD CONSTRAINT tickets_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES penfii.workspaces(id);
-
-ALTER TABLE ONLY penfii.webhook_post_windows
-    ADD CONSTRAINT webhook_post_windows_webhook_id_fkey FOREIGN KEY (webhook_id) REFERENCES penfii.webhooks(id);
-
-ALTER TABLE ONLY penfii.webhooks
-    ADD CONSTRAINT webhooks_actor_user_id_fkey FOREIGN KEY (actor_user_id) REFERENCES penfii.integration_actors(user_id);
-
-ALTER TABLE ONLY penfii.webhooks
-    ADD CONSTRAINT webhooks_channel_id_fkey FOREIGN KEY (channel_id) REFERENCES penfii.channels(id);
-
-ALTER TABLE ONLY penfii.webhooks
-    ADD CONSTRAINT webhooks_created_by_fkey FOREIGN KEY (created_by) REFERENCES penfii.users(id);
-
-ALTER TABLE ONLY penfii.webhooks
-    ADD CONSTRAINT webhooks_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES penfii.workspaces(id);
 
 ALTER TABLE ONLY penfii.workflow_status_history
     ADD CONSTRAINT workflow_status_history_status_id_fkey FOREIGN KEY (status_id) REFERENCES penfii.workflow_statuses(id);

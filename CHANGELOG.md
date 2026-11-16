@@ -1,13 +1,48 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
+Penfii is still early software: the HTTP API, the database schema and the settings can change between 0.x releases. Back up before you upgrade.
+
+### Upgrading from 0.1.0
+
+- **A v0.1.0 database upgrades in place.** `0001_initial.sql` is the file v0.1.0 shipped, unchanged, and every schema and data change since is `0002_after_v0_1_0.sql`, applied by `admin-cli migrate` (the Compose `db-setup` service). It also removes the channel memberships of people who no longer take part in the channel's Project, and revokes all but the newest open invitation per e-mail address. A database made by a development build between v0.1.0 and this release (migration history `0001` to `0008`) cannot take this history and has to be recreated.
+- **The database runs as two roles, and core-api no longer migrates.** The new one-shot `db-setup` service makes a schema owner and a runtime role (`admin-cli db-provision`) and applies the migrations (`admin-cli migrate`) before core-api starts; core-api and `admin-cli` connect as the runtime role and refuse to start on a schema behind the build. `docker/.env` needs `PENFII_DB_OWNER_PASSWORD` and `PENFII_DB_RUNTIME_PASSWORD`; for a v0.1.0 volume also set `PENFII_DB_OWNER_USER=penfii` and `PENFII_DB_OWNER_PASSWORD` to `POSTGRES_PASSWORD`. See [Self-hosting](docs/self-hosting.md#from-v010-to-v020).
 - **Settings that cannot be read now stop the start.** Before, a value that was set but wrong was ignored or replaced by a default: a limit such as `PENFII_FILE_MAX_BYTES=100MB`, `PENFII_WEBHOOK_KEK`, the day counts of the trash and MCP retention, the MCP lifetimes, and `PENFII_REAUTH_WINDOW_SECONDS` became "not set", a `PENFII_MCP_DEFAULT_POLICY` that was not `read_only` or `closed` (a typo included) became `standard`, which allows writes, and a switch other than its one accepted spelling was off. core-api now refuses to start and names the variable. Empty values still count as not set. Check `docker/.env` (and any other environment) before updating; see [Configuration](docs/configuration.md#how-the-server-reads-its-settings).
 - **Settings that belong together must be set together.** The four `PENFII_S3_*` settings, `PENFII_OPENSEARCH_USER` with `_PASSWORD`, and a sign-in provider's client id with its secret used to switch the feature off quietly when one was missing; now one without the others stops the start. A Microsoft provider that is multi-tenant and has no `PENFII_AUTH_MICROSOFT_ALLOWED_TENANTS`, and a generic OIDC provider listed without its issuer or pair, are refused too (they were skipped with a warning).
 - **Switches take `1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off`** in any case, everywhere (`PENFII_COOKIE_SECURE=true` now works); other words stop the start. An empty `PENFII_ALLOWED_ORIGINS` now means "not set" (the dev server origins), as for every other setting, instead of "no extra origin".
 - **A JSON request body that names the same key twice in one object, anywhere in it (inside a free-form value too), is refused with `400 validation`.** The last one used to win silently. Handlers now read the body straight into their type, so the wording of a JSON error can differ (it may carry a line and column); the code and status are the same. The conversation commands (messages, reactions, read state), whose idempotency key is a hash of the body as sent, still read the body as a document, with the same refusal of a repeated key.
+- `PENFII_DEV_RETURN_INVITE_TOKEN` is removed: the inviter always gets the invitation link.
+- Channel access follows the current Project participation. A person who stops taking part in a Project (grant removed, Team unlinked or left) loses its channels, and taking part again restores none.
+
+### Added
+
+- Incoming webhooks that post into a channel as an integration actor, with a URL secret or an HMAC signature (`PENFII_WEBHOOK_KEK` for the signature mode).
+- Ticket archive, archiving a Sprint's finished work when the Sprint is completed (now or at a chosen time), bulk archive and trash on the Board, and an automatic trash purge (`PENFII_TRASH_RETENTION_DAYS`, off by default).
+- Optional e-mail (`PENFII_SMTP_*`): invitation links are mailed, and people reset a forgotten password from the login page. One open invitation per address; inviting again issues a new link.
+- Web Push (`PENFII_VAPID_*`, `admin-cli vapid-keys`): mentions, direct messages, replies in followed threads, Task assignments and due reminders reach the browser while Penfii is closed. The push settings show each device's last delivery.
+- A phone layout (640 px and below) with tabs, sheets, and a list view of Work with bulk changes.
+- Recovery for a Project without an active admin and a private channel without an active manager; removing a member or disabling an account warns which ones lose their last one.
+- Private channel management for Project admins without reading the channel.
+- `admin-cli`: `db-provision`, `migrate`, `vapid-keys`, `create-user` into an existing workspace, `workspace-list`, `workspace-add-member`, `workspace-set-role`. Passwords are read from a hidden prompt or `--password-stdin`.
+- `docker/scripts/restore-check.sh`, a restore check against a scratch server, and backup/restore notes for the two roles.
+
+### Changed
+
 - `/readyz` also reports the event consumers' backlog (`checks.workers`, `receipts`) and is `degraded` when a delivery waits more than 5 minutes or is `DEAD`; the status code stays `200`. A panic in a background worker's loop ends core-api so the container is restarted; a panic inside one event or pass is that unit's failure (see [Operations](docs/operations.md#background-workers)).
 - Board sockets now carry archive, trash, restore and purge of a ticket and a Sprint's archive; a request handler that panics answers `500 internal`.
+- A lock, deadlock or pool timeout is answered `503 db_unavailable` instead of `500 internal`.
+- One result notice (with Undo where it applies) for every flow; a reworked ticket panel; Administration split into pages; save states and Retry for documents.
+- Ticket descriptions use the documents editor (slash menu, mentions, references).
+- Offline, the web app only reads: no write is queued or replayed.
+- The first load of the web app is about 0.7 MB instead of 1.6 MB.
+
+### Fixed
+
+- Transactions hold only database work; uploaded files are deleted after the commit through the outbox, never inside a transaction.
+- External event consumers are fenced by their lease, so a stale worker cannot overwrite a newer result.
+- Push subscriptions on Safari and Home Screen apps are no longer ended by the browser after notifications that were not shown.
+- Focus, IME Enter and dialog fixes in the web app.
 
 ## 0.1.0
 
