@@ -37,8 +37,16 @@ export class Api {
     return this.call('POST', `/v1/workspaces/${workspaceId}/projects`, { name, teamIds: [], ticketPrefix: prefix })
   }
 
-  async createTicket(projectId: string, title: string): Promise<{ id: string; key: string; revisionNo: number; statusId: string }> {
-    return this.call('POST', `/v1/projects/${projectId}/tickets`, { title })
+  async createTicket(projectId: string, title: string, description?: unknown): Promise<{ id: string; key: string; revisionNo: number; statusId: string }> {
+    return this.call('POST', `/v1/projects/${projectId}/tickets`, { title, ...(description === undefined ? {} : { description }) })
+  }
+
+  async updateTicket(ticketId: string, expectedRevision: number, description: unknown): Promise<{ revisionNo: number; description: unknown }> {
+    return this.call('PATCH', `/v1/tickets/${ticketId}`, { expectedRevision, description })
+  }
+
+  async ticket(ticketId: string): Promise<{ revisionNo: number; description: unknown }> {
+    return this.call('GET', `/v1/tickets/${ticketId}`)
   }
 
   async board(projectId: string): Promise<{ columns: Array<{ id: string; name: string; stateId: string; tickets: Array<{ id: string; title: string; statusId: string }> }> }> {
@@ -66,9 +74,13 @@ export class Api {
     return this.call('POST', `/v1/sprints/${sprintId}/commands/${command}`, { expectedVersion: version, ...extra })
   }
 
-  async createChannel(workspaceId: string, name: string): Promise<{ id: string; name: string; conversationId: string }> {
-    const channel = await this.call<{ id: string; conversationId?: string }>('POST', `/v1/workspaces/${workspaceId}/channels`, { name, visibility: 'PUBLIC' })
+  async createChannel(workspaceId: string, name: string, visibility: 'PUBLIC' | 'PRIVATE' = 'PUBLIC'): Promise<{ id: string; name: string; conversationId: string }> {
+    const channel = await this.call<{ id: string; conversationId?: string }>('POST', `/v1/workspaces/${workspaceId}/channels`, { name, visibility })
     return { id: channel.id, name, conversationId: channel.conversationId ?? channel.id }
+  }
+
+  async addChannelMember(channelId: string, userId: string): Promise<unknown> {
+    return this.call('PUT', `/v1/channels/${channelId}/members/${userId}`, {})
   }
 
   async messages(conversationId: string): Promise<{ items?: Array<{ body: Json | null }> } & Json> {

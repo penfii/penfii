@@ -66,6 +66,18 @@ export function canSetChannelRoles(
   return channel.role === 'MANAGER' || Boolean(channel.projectId && project?.canManage === true)
 }
 
+/**
+ * Channel Settings holds what managing a channel means: its webhooks, its visibility and, in a private channel,
+ * running its people. Someone who may do none of it gets no way into the panel.
+ */
+export function canManageChannelSettings(
+  channel: { role?: string | null; projectId?: string | null; visibility: string },
+  workspaceRole: string | undefined,
+  project?: { canManage?: boolean } | null,
+): boolean {
+  return canChangeChannel(channel, workspaceRole, project) || canChangeVisibility(channel, workspaceRole, project) || canRunChannelPeople(channel, project)
+}
+
 /** A member of a private channel may leave it. The server keeps the last manager in. */
 export function canLeaveChannel(channel: { role?: string | null; visibility: string }): boolean {
   return channel.visibility === 'PRIVATE' && Boolean(channel.role)

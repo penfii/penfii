@@ -11,6 +11,19 @@
   overflow: hidden;
 }
 
+.channel-settings-layer { position: fixed; inset: 0; z-index: 100; }
+.channel-settings-backdrop { position: absolute; inset: 0; border: 0; background: rgb(0 0 0 / .22); }
+.channel-settings-panel { position: absolute; inset-block: 0; right: 0; width: min(30rem, 94vw); display: flex; flex-direction: column; background: var(--bg-elevated); border-left: 1px solid var(--border); box-shadow: var(--shadow-md); outline: none; }
+.channel-settings-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); padding: var(--space-4); border-bottom: 1px solid var(--border); }
+.channel-settings-head h2, .channel-settings-head p { margin: 0; }
+.channel-settings-head p { margin-top: var(--space-1); color: var(--text-muted); }
+.channel-settings-body { overflow: auto; padding: var(--space-4); display: grid; align-content: start; gap: var(--space-5); }
+.channel-settings-body section { display: grid; gap: var(--space-2); }
+.channel-settings-body h3 { margin: 0; font-size: .85rem; }
+@media (max-width: 640px) {
+  .channel-settings-panel { inset: 0; width: 100%; border: 0; }
+}
+
 .conversation {
   position: relative;
   flex: 1;

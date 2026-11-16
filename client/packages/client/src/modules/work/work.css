@@ -799,6 +799,17 @@
 /* Ticket panel (frame 2.2): subtasks and dependencies are bordered cards, the comment tabs are a line with an amber underline. */
 .ticket-main > #ticket-children > .ticket-section, .ticket-main > #ticket-deps > .ticket-section { padding: 12px; border: 1px solid var(--border); border-radius: 12px; gap: 6px; }
 .ticket-main .ticket-section.description > h3, .ticket-main .ticket-section.hierarchy > h3, .ticket-main .ticket-section.dependencies > h3 { color: var(--text); font-size: 0.8rem; font-weight: 700; letter-spacing: 0; }
+.ticket-description-read-row { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); }
+.ticket-description-read { cursor: default; min-width: 0; }
+.ticket-description-read[role="button"] { cursor: pointer; }
+.ticket-description-read[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: var(--radius-sm); }
+.ticket-description-read.clamped { max-height: 13rem; overflow: hidden; mask-image: linear-gradient(#000 88%, transparent); }
+.ticket-description-read.empty { color: var(--text-muted); font-style: italic; }
+.ticket-description-blocknote .bn-editor { padding: 0; min-height: 2.5rem; }
+.ticket-description-blocknote .bn-block-outer { max-width: none; }
+.ticket-description-blocknote .bn-editor[contenteditable="false"] { cursor: inherit; }
+.ticket-description-blocknote .bn-editor[contenteditable="false"] .ProseMirror { cursor: inherit; }
+.ticket-description-read .bn-side-menu, .ticket-description-read .bn-drag-handle { display: none !important; }
 .comment-composer { border: 1px solid var(--border-strong); border-radius: 12px; margin: var(--space-3); }
 
 /* At the default width the order is the frame's: properties, description, subtasks, dependencies, comments, and the

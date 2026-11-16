@@ -94,6 +94,8 @@ export const en: Record<MessageKey, string> = {
   'channel.create': 'Create channel',
   'channel.name': 'Channel name',
   'channel.visibility': 'Visibility',
+  'channel.settings': 'Channel settings',
+  'channel.settingsReadOnly': 'Read only: you do not have permission to change the settings of this channel.',
   'channel.webhooks': 'Webhooks',
   'channel.webhooks.title': 'Incoming webhooks',
   'channel.webhooks.empty': 'This channel has no webhooks.',

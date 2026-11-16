@@ -1,6 +1,19 @@
 import { cleanup, configure } from '@testing-library/react'
 import { afterEach } from 'vitest'
 
+if (typeof window.matchMedia !== 'function') {
+  window.matchMedia = (query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    dispatchEvent: () => false,
+  }) as MediaQueryList
+}
+
 // jsdom has no modal dialogs; an open attribute is all the tests need to see the content.
 if (typeof HTMLDialogElement !== 'undefined' && typeof HTMLDialogElement.prototype.showModal !== 'function') {
   HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {

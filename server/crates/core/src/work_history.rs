@@ -48,6 +48,13 @@ pub struct FieldView {
 }
 
 pub fn description_text(doc: &Value) -> String {
+    // The web editor saves descriptions in the Docs format; older ones are ProseMirror JSON.
+    if doc.get("schema").and_then(Value::as_str) == Some(crate::docs::content::SCHEMA) {
+        return crate::docs::content::plain_text(doc, usize::MAX)
+            .0
+            .trim()
+            .to_owned();
+    }
     fn walk(node: &Value, out: &mut String) {
         match node {
             Value::Object(map) => {
@@ -284,6 +291,18 @@ mod tests {
             {"type":"paragraph","content":[{"type":"text","text":"second"}]}]});
         assert_eq!(description_text(&value), "first\nsecond");
         assert_eq!(description_text(&json!({})), "");
+    }
+
+    #[test]
+    fn description_text_reads_the_docs_format() {
+        let value = json!({"schema":"penfii.doc","version":1,"blocks":[
+            {"type":"heading","props":{"level":2},"content":[{"type":"text","text":"Plan","styles":{}}],"children":[]},
+            {"type":"paragraph","props":{},"content":[
+                {"type":"text","text":"see ","styles":{}},
+                {"type":"link","href":"https://example.com","content":[{"type":"text","text":"the link","styles":{}}]},
+                {"type":"mention","props":{"userId":"11111111-1111-1111-1111-111111111111"}}],
+             "children":[{"type":"bulletListItem","props":{},"content":[{"type":"text","text":"nested","styles":{}}],"children":[]}]}]});
+        assert_eq!(description_text(&value), "Plan\nsee the link\nnested");
     }
 
     #[test]

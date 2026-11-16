@@ -1,6 +1,7 @@
-import { createContext,useContext,useEffect,useRef,useState,type ReactNode } from 'react'
+import { createContext,useContext,useEffect,useLayoutEffect,useRef,useState,type KeyboardEvent as ReactKeyboardEvent,type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type { Channel,Dm,Space } from '@penfii/contracts'
-import { NavLink } from 'react-router'
+import { NavLink, useNavigate } from 'react-router'
 import { Avatar,Button,Dialog,useDismiss } from '../../design/ui'
 import {
 createSection,
@@ -18,9 +19,10 @@ type ChatSections,
 } from '../chatGroups'
 import { formatMessageTime } from '../../format'
 import { useI18n } from '../../i18n/I18nProvider'
-import { canCreateChannel } from '../../modules/spaces/capabilities'
+import { canCreateChannel, canManageChannelSettings } from '../../modules/spaces/capabilities'
 import { useWorkspaceRole } from '../../modules/spaces/useWorkspaceRole'
 import { useCreate } from '../create'
+import { floatingMenuPosition } from './floatingMenuPosition'
 
 function historyDms(space: Space | undefined): Dm[] {
   return (space?.dms ?? []).filter((dm) => dm.lastMessageSeq == null || dm.lastMessageSeq > 0)
@@ -161,6 +163,7 @@ export function ChatNav(props: { workspaceId: string; space: Space | undefined }
 function ChatNavBody({ workspaceId, space }: { workspaceId: string; space: Space | undefined }) {
   const { t, locale } = useI18n()
   const drag = useDrag()
+  const workspaceRole = useWorkspaceRole(workspaceId)
   const channels = (space?.channels ?? []).filter((channel) => !channel.projectId)
   // A Project's channels are the same conversations the Project screen shows; Chat lists them too,
   // under the Project they belong to, so no chat history is reachable from only one of the two.
@@ -283,7 +286,7 @@ function ChatNavBody({ workspaceId, space }: { workspaceId: string; space: Space
                     onDrop={() => { if (drag.current?.kind === 'conversation') place(drag.current.id, section.id, index) }}
                   >
                     {row.kind === 'channel' ? (
-                      <ChannelLink workspaceId={workspaceId} channel={row.channel} context={row.channel.projectId ? projectName(row.channel.projectId) : undefined} />
+                      <ChannelLink workspaceId={workspaceId} channel={row.channel} context={row.channel.projectId ? projectName(row.channel.projectId) : undefined} canManageSettings={canManageChannelSettings(row.channel, workspaceRole, space?.projects.find((item) => item.id === row.channel.projectId))} />
                     ) : (
                       <DmLink workspaceId={workspaceId} dm={row.dm} locale={locale} fallback={t('dm.short')} />
                     )}
@@ -303,7 +306,7 @@ function ChatNavBody({ workspaceId, space }: { workspaceId: string; space: Space
           onMore={() => setExpandedLists((current) => ({ ...current, channels: !current.channels }))}
           render={(channel) => (
             <ConversationSlot key={channel.id} conversationId={channel.conversationId} onDrop={() => { if (drag.current?.kind === 'conversation') place(drag.current.id, null) }}>
-              <ChannelLink workspaceId={workspaceId} channel={channel} />
+              <ChannelLink workspaceId={workspaceId} channel={channel} canManageSettings={canManageChannelSettings(channel, workspaceRole, space?.projects.find((item) => item.id === channel.projectId))} />
               <MoveMenu sections={layout.sections} current={null} onMove={(target) => place(channel.conversationId, target)} />
             </ConversationSlot>
           )}
@@ -317,7 +320,7 @@ function ChatNavBody({ workspaceId, space }: { workspaceId: string; space: Space
             onMore={() => setExpandedLists((current) => ({ ...current, projects: !current.projects }))}
             render={(channel) => (
               <ConversationSlot key={channel.id} conversationId={channel.conversationId} onDrop={() => { if (drag.current?.kind === 'conversation') place(drag.current.id, null) }}>
-                <ChannelLink workspaceId={workspaceId} channel={channel} context={projectName(channel.projectId)} />
+                <ChannelLink workspaceId={workspaceId} channel={channel} context={projectName(channel.projectId)} canManageSettings={canManageChannelSettings(channel, workspaceRole, space?.projects.find((item) => item.id === channel.projectId))} />
                 <MoveMenu sections={layout.sections} current={null} onMove={(target) => place(channel.conversationId, target)} />
               </ConversationSlot>
             )}
@@ -426,18 +429,73 @@ function MoveMenu({ sections, current, onMove }: { sections: ChatSection[]; curr
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
-  useDismiss(open, () => setOpen(false), ref)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const menu = useRef<HTMLDivElement>(null)
+  const [position, setPosition] = useState<{ top: number; left: number; maxHeight: number; maxWidth: number } | null>(null)
+  const positioned = position !== null
+  useEffect(() => {
+    if (!open) return
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target as Node
+      if (!ref.current?.contains(target) && !menu.current?.contains(target)) {
+        setOpen(false)
+        trigger.current?.focus()
+      }
+    }
+    const closeEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setOpen(false)
+        trigger.current?.focus()
+      }
+    }
+    document.addEventListener('pointerdown', closeOutside, true)
+    document.addEventListener('keydown', closeEscape, true)
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside, true)
+      document.removeEventListener('keydown', closeEscape, true)
+    }
+  }, [open])
+  useLayoutEffect(() => {
+    if (!open) { setPosition(null); return }
+    const update = () => {
+      const anchor = trigger.current?.getBoundingClientRect()
+      const popup = menu.current?.getBoundingClientRect()
+      if (!anchor || !popup) return
+      setPosition(floatingMenuPosition(anchor, popup, { width: window.innerWidth, height: window.innerHeight }))
+    }
+    update()
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update)
+    if (menu.current) observer?.observe(menu.current)
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    return () => { observer?.disconnect(); window.removeEventListener('resize', update); window.removeEventListener('scroll', update, true) }
+  }, [open, sections.length])
+  // The first render is visibility:hidden until its fixed position is measured. Browsers refuse to
+  // focus a hidden menu item, so wait for the measured/visible render before moving focus.
+  useEffect(() => { if (open && positioned) menu.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus() }, [open, positioned])
+  function navigateItems(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const items = [...(menu.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? [])]
+    if (!items.length) return
+    const currentIndex = items.indexOf(document.activeElement as HTMLElement)
+    let next: number | null = null
+    if (event.key === 'ArrowDown') next = (currentIndex + 1 + items.length) % items.length
+    if (event.key === 'ArrowUp') next = (currentIndex - 1 + items.length) % items.length
+    if (event.key === 'Home') next = 0
+    if (event.key === 'End') next = items.length - 1
+    if (next !== null) { event.preventDefault(); items[next]?.focus() }
+  }
   return (
     <div className="popover row-menu" ref={ref}>
-      <button type="button" className="icon-add" aria-label={t('shell.chat.rowMenu')} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen((value) => !value)}>⋯</button>
-      {open ? (
-        <div className="menu-panel left" role="menu">
+      <button ref={trigger} type="button" className="icon-add" aria-label={t('shell.chat.rowMenu')} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen((value) => !value)}>⋯</button>
+      {open ? createPortal(
+        <div ref={menu} className="menu-panel floating-nav-menu" style={position ? { top: position.top, left: position.left, maxHeight: position.maxHeight, maxWidth: position.maxWidth, minWidth: 0, visibility: 'visible' } : { visibility: 'hidden' }} role="menu" onKeyDown={navigateItems}>
           <p className="menu-label">{t('shell.chat.moveTo')}</p>
-          <button type="button" role="menuitem" disabled={current == null} onClick={() => { setOpen(false); onMove(null) }}>{t('shell.chat.defaultSection')}</button>
+          <button type="button" role="menuitem" disabled={current == null} onClick={() => { setOpen(false); trigger.current?.focus(); onMove(null) }}>{t('shell.chat.defaultSection')}</button>
           {sections.map((section) => (
-            <button key={section.id} type="button" role="menuitem" disabled={section.id === current} onClick={() => { setOpen(false); onMove(section.id) }}>{section.name}</button>
+            <button key={section.id} type="button" role="menuitem" disabled={section.id === current} onClick={() => { setOpen(false); trigger.current?.focus(); onMove(section.id) }}>{section.name}</button>
           ))}
-        </div>
+        </div>, document.body,
       ) : null}
     </div>
   )
@@ -508,13 +566,19 @@ function NewConversationMenu({ workspaceId, onNewSection }: { workspaceId: strin
   )
 }
 
-export function ChannelLink({ workspaceId, channel, to, context }: { workspaceId: string; channel: Channel; to?: string; context?: string }) {
+export function ChannelLink({ workspaceId, channel, to, context, canManageSettings = false }: { workspaceId: string; channel: Channel; to?: string; context?: string; canManageSettings?: boolean }) {
+  const { t } = useI18n()
+  const navigate = useNavigate()
+  const destination = to ?? `/w/${workspaceId}/c/${channel.conversationId}`
   return (
-    <NavLink className="tree-link" to={to ?? `/w/${workspaceId}/c/${channel.conversationId}`}>
-      <span className="hash">#</span> {channel.name}
-      {context && context !== channel.name ? <small className="tree-context"> · {context}</small> : null}
-      {channel.unreadCount > 0 ? <span className="unread-count">{channel.unreadCount}</span> : null}
-    </NavLink>
+    <>
+      <NavLink className="tree-link" to={destination}>
+        <span className="hash">#</span> {channel.name}
+        {context && context !== channel.name ? <small className="tree-context"> · {context}</small> : null}
+        {channel.unreadCount > 0 ? <span className="unread-count">{channel.unreadCount}</span> : null}
+      </NavLink>
+      {canManageSettings ? <button type="button" className="channel-settings-trigger" aria-label={t('channel.settings')} title={t('channel.settings')} onClick={() => { void navigate(`${destination}?settings=1`) }}>⚙</button> : null}
+    </>
   )
 }
 

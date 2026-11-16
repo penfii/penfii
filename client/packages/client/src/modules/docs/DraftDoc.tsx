@@ -1,7 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import type { DocContent, ReferenceKind } from '@penfii/contracts'
+import type { DocContent } from '@penfii/contracts'
 import { api } from '../../api'
 import { Button, Dialog } from '../../design/ui'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -12,6 +11,7 @@ import { ShareScopePicker, type ShareScope } from './ShareScopePicker'
 import { useScopeLabel } from './useScopeLabel'
 import { clearNewDocDraft, isBlankDraft, readNewDocDraft, writeNewDocDraft } from './newDocDraft'
 import type { EditorController } from './DocEditor'
+import { useOpenReference } from './docContext'
 
 const DocEditor = lazy(() => import('./DocEditor'))
 
@@ -37,15 +37,10 @@ export function DraftDoc({
   onDiscard: () => void
 }) {
   const { t } = useI18n()
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const session = useSession()
   const userId = session.data?.id
-  const open = useCallback((kind: ReferenceKind, id: string, hints: { projectId?: string }) => {
-    const base = `/w/${workspaceId}`
-    if (kind === 'TICKET' && hints.projectId) void navigate(`${base}/projects/${hints.projectId}/work?panel=ticket:${id}`)
-    else if (kind === 'DOC') void navigate(`${base}/docs?doc=${id}`)
-  }, [navigate, workspaceId])
+  const open = useOpenReference(workspaceId)
   const [ready, setReady] = useState(false)
   const [title, setTitle] = useState('')
   const [initial, setInitial] = useState<DocContent>(EMPTY)

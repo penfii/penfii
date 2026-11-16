@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canChangeChannel, canChangeVisibility, canRunChannelPeople, canCreateChannel, canDeleteMessage, canDetachAttachment, canInviteToChannel, canLeaveChannel, canSetChannelRoles, isWorkspaceManager } from './capabilities'
+import { canChangeChannel, canChangeVisibility, canRunChannelPeople, canCreateChannel, canDeleteMessage, canDetachAttachment, canInviteToChannel, canLeaveChannel, canManageChannelSettings, canSetChannelRoles, isWorkspaceManager } from './capabilities'
 
 describe('capabilities', () => {
   it('offers a Workspace-wide channel to the Workspace owner or admin only', () => {
@@ -81,5 +81,16 @@ describe('capabilities', () => {
     expect(canRunChannelPeople({ role: null, projectId: 'p', visibility: 'PRIVATE' }, { canManage: true })).toBe(true)
     expect(canRunChannelPeople({ role: 'MEMBER', projectId: 'p', visibility: 'PRIVATE' }, { canManage: false })).toBe(false)
     expect(canRunChannelPeople({ role: 'MANAGER', visibility: 'PUBLIC' })).toBe(false)
+  })
+
+  it('opens Channel Settings only to someone who may manage something in it', () => {
+    // Channel manager, Project admin, Workspace admin of a public global channel.
+    expect(canManageChannelSettings({ role: 'MANAGER', visibility: 'PRIVATE' }, 'MEMBER')).toBe(true)
+    expect(canManageChannelSettings({ projectId: 'p', visibility: 'PRIVATE' }, 'MEMBER', { canManage: true })).toBe(true)
+    expect(canManageChannelSettings({ visibility: 'PUBLIC' }, 'ADMIN')).toBe(true)
+    // A plain member, a member of a private channel (even one that may invite), a Workspace owner of a Project channel.
+    expect(canManageChannelSettings({ visibility: 'PUBLIC' }, 'MEMBER')).toBe(false)
+    expect(canManageChannelSettings({ role: 'MEMBER', visibility: 'PRIVATE' }, 'OWNER')).toBe(false)
+    expect(canManageChannelSettings({ projectId: 'p', visibility: 'PUBLIC' }, 'OWNER', { canManage: false })).toBe(false)
   })
 })

@@ -8,26 +8,63 @@ type Watch = {
 }
 
 /**
- * `test` with a watch on the browser: a console error, an uncaught error in the page or a 5xx answer fails the
- * test, so a screen that works but logs a problem (or a request the server could not serve) does not go unseen.
+ * `test` with a watch on the browser: console errors/warnings, uncaught errors, failed requests and HTTP errors fail
+ * the test, so a screen that looks right cannot hide a browser or server problem.
  */
 export const test = base.extend<Watch>({
   watchPage: [
     async ({ page }, provide) => {
-      // WebKit does not know the `interactive-widget` viewport hint (it only tunes the on-screen keyboard elsewhere) and logs it.
-      const allowed: RegExp[] = [/Viewport argument key "interactive-widget" not recognized/]
+      // WebKit does not know the `interactive-widget` viewport hint (it only tunes the on-screen keyboard elsewhere).
+      const allowed: RegExp[] = [
+        /Viewport argument key "interactive-widget" not recognized/,
+        /Service Worker registration blocked by Playwright/,
+        /^navigation cancellation:/,
+        /^navigation WebSocket close:/,
+        /scroll-linked positioning effect/,
+      ]
       const problems: string[] = []
+      let lastMainNavigationAt = 0
       const note = (text: string) => {
-        if (!allowed.some((pattern) => pattern.test(text))) problems.push(text)
+        if (!allowed.some((pattern) => pattern.test(text))) {
+          problems.push(text)
+          console.log(`[browser observation] ${text}`)
+        } else {
+          console.log(`[browser warning reviewed] ${text}`)
+        }
       }
       const watch = (target: Page) => {
+        // A navigation (goto, reload, a link) ends the old document's requests and sockets before the new one
+        // commits, so its start counts as well as its commit.
+        target.on('request', (request) => {
+          if (request.isNavigationRequest() && request.frame() === target.mainFrame()) lastMainNavigationAt = Date.now()
+        })
+        target.on('framenavigated', (frame) => {
+          if (frame === target.mainFrame()) lastMainNavigationAt = Date.now()
+        })
         target.on('console', (message) => {
-          if (message.type() === 'error') note(`console.error: ${message.text()}`)
+          if (message.type() === 'error' || message.type() === 'warning') note(`console.${message.type()}: ${message.text()}`)
         })
         target.on('pageerror', (error) => note(`page error: ${error.message}`))
-        target.on('response', (response) => {
-          if (response.status() >= 500) note(`${response.status()} ${response.request().method()} ${response.url()}`)
+        target.on('requestfailed', (request) => {
+          const reason = request.failure()?.errorText ?? 'unknown'
+          const recentNavigation = Date.now() - lastMainNavigationAt < 2_000
+          if (recentNavigation && /Load request cancelled|NS_BINDING_ABORTED|ERR_ABORTED/.test(reason)) {
+            note(`navigation cancellation: ${request.method()} ${request.url()} (${reason})`)
+          } else {
+            note(`request failed: ${request.method()} ${request.url()} (${reason})`)
+          }
         })
+        target.on('response', (response) => {
+          if (response.status() >= 400) note(`${response.status()} ${response.request().method()} ${response.url()}`)
+        })
+        target.on('websocket', (socket) => socket.on('socketerror', (error) => {
+          const recentNavigation = Date.now() - lastMainNavigationAt < 2_000
+          if (recentNavigation && String(error).includes('CLOSE_ABNORMAL')) {
+            note(`navigation WebSocket close: ${socket.url()} (${error}) at ${target.url()}`)
+          } else {
+            note(`WebSocket error: ${socket.url()} (${error}) at ${target.url()}`)
+          }
+        }))
       }
       watch(page)
       allowedPatterns.set(page, allowed)

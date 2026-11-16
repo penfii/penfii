@@ -190,6 +190,48 @@ describe('Ticket panel', () => {
     expect(screen.getByText('Fix login', { selector: '.ticket-card-title' })).toBeTruthy()
   })
 
+  it('keeps the description in read mode on body click and enters the Docs editor only from Edit', async () => {
+    const legacyDescription = { type: 'doc', content: Array.from({ length: 12 }, (_, index) => ({ type: 'paragraph', content: [{ type: 'text', text: `Legacy paragraph ${index + 1}` }] })) }
+    const described = { ...task, description: legacyDescription }
+    api.getProjectBoard.mockResolvedValue(boardOf([described, epic]))
+    api.getTicket.mockResolvedValue(described)
+    mount(`${BOARD_PATH}?panel=ticket:task`)
+    const panel = await screen.findByRole('complementary', { name: 'Ticket detail' })
+    await within(panel).findByText('Collect logs')
+    await waitFor(() => expect(panel.querySelector('.ticket-description-read')).toBeTruthy())
+    const read = panel.querySelector('.ticket-description-read') as HTMLElement
+    expect(read.getAttribute('aria-label')).toBe('Show more')
+    expect(within(panel).queryByRole('textbox', { name: 'Description' })).toBeNull()
+    fireEvent.click(read)
+    expect(read.getAttribute('aria-expanded')).toBe('true')
+    expect(within(panel).queryByRole('textbox', { name: 'Description' })).toBeNull()
+
+    fireEvent.click(within(panel).getByRole('button', { name: 'Edit description' }))
+    await waitFor(() => expect(panel.querySelector('[contenteditable="true"]')).toBeTruthy())
+    fireEvent.click(within(panel).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(panel.querySelector('[contenteditable="true"]')).toBeNull())
+    expect(within(panel).getByRole('button', { name: 'Edit description' })).toBeTruthy()
+  })
+
+  it('does not expand or collapse the description when a link inside it is clicked', async () => {
+    const paragraph = (text: string) => ({ type: 'paragraph', props: {}, content: [{ type: 'text', text, styles: {} }], children: [] })
+    const description = { schema: 'penfii.doc', version: 1, blocks: [
+      { type: 'paragraph', props: {}, content: [{ type: 'link', href: 'https://example.com', content: [{ type: 'text', text: 'the spec', styles: {} }] }], children: [] },
+      ...Array.from({ length: 12 }, (_, index) => paragraph(`Line ${index + 1}`)),
+    ] }
+    const described = { ...task, description }
+    api.getProjectBoard.mockResolvedValue(boardOf([described, epic]))
+    api.getTicket.mockResolvedValue(described)
+    mount(`${BOARD_PATH}?panel=ticket:task`)
+    const panel = await screen.findByRole('complementary', { name: 'Ticket detail' })
+    await waitFor(() => expect(panel.querySelector('.ticket-description-read a[href="https://example.com"]')).toBeTruthy())
+    const read = panel.querySelector('.ticket-description-read') as HTMLElement
+    fireEvent.click(panel.querySelector('.ticket-description-read a') as HTMLElement)
+    expect(read.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(within(read).getByText('Line 3'))
+    expect(read.getAttribute('aria-expanded')).toBe('true')
+  })
+
   it('saves a title edit against the revision that was read', async () => {
     api.updateTicket.mockResolvedValue({ ...task, title: 'Fix login now', revisionNo: 4 })
     mount(`${BOARD_PATH}?panel=ticket:task`)

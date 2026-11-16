@@ -113,6 +113,9 @@
 }
 
 .menu-panel.left { left: 0; right: auto; }
+.floating-nav-menu { position: fixed; right: auto; z-index: 120; overflow-y: auto; overscroll-behavior: contain; }
+.channel-settings-trigger { border: 0; background: transparent; color: var(--text-muted); border-radius: var(--radius-sm); padding: .2rem .45rem; cursor: pointer; }
+.channel-settings-trigger:hover, .channel-settings-trigger:focus-visible { background: var(--bg-muted); color: var(--text); }
 
 .menu-panel button, .menu-panel a, .popover-panel button, .popover-panel a {
   display: flex;

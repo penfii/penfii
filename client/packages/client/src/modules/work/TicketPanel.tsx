@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { Link, useParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { isApiError } from '@penfii/api-client'
-import type { Ticket } from '@penfii/contracts'
+import type { DocContent, Ticket } from '@penfii/contracts'
 import { Button, Tabs } from '../../design/ui'
 import { ResizeHandle, type PaneControls } from '../../shell/ResizeHandle'
 import { formatStamp } from '../../format'
@@ -26,7 +26,8 @@ import { WatchButton } from '../attention/WatchButton'
 import { TicketPlanning, TicketProperties } from './TicketProperties'
 import { useProjectContext } from './useProjectContext'
 import type { ProjectContext } from './projectContext'
-import { descriptionText, formatDue, isPriority, textToDescription } from './ticketModel'
+import { descriptionText, formatDue, isPriority } from './ticketModel'
+import { ticketDescriptionToDocContent } from './ticketDescriptionContent'
 import { FileDropZone } from '../files/FileDropZone'
 import { TicketAttachments, type TicketAttachmentHandle } from './TicketAttachments'
 import { useTicketEditor } from './useTicketEditor'
@@ -35,6 +36,8 @@ import { TicketActionsMenu } from './TicketActionsMenu'
 
 /** Below this panel width Favorite, Later and Pin fold into one More menu; Watch and Previous / Next stay. */
 const NARROW_PANEL = 600
+const TicketDescriptionEditor = lazy(() => import('./TicketDescriptionEditor').then((module) => ({ default: module.TicketDescriptionEditor })))
+const TicketDescriptionRead = lazy(() => import('./TicketDescriptionEditor').then((module) => ({ default: module.TicketDescriptionRead })))
 
 /** True while the element is narrower than `limit`; a DOM without ResizeObserver counts as wide. */
 function useNarrowWidth(ref: React.RefObject<HTMLElement | null>, limit: number): boolean {
@@ -63,6 +66,8 @@ export function TicketPanel({ ticketId, onClose, onOpenTicket, pane }: { ticketI
   const enabled = projectId.length > 0
 
   function onKeyDown(event: KeyboardEvent<HTMLElement>) {
+    // Escape in a dialog opened from the panel (the description's reference picker) closes that dialog only.
+    if (event.target instanceof Element && event.target.closest('dialog[open]')) return
     if (event.key === 'Escape' && !event.defaultPrevented) onClose()
   }
 
@@ -246,7 +251,7 @@ function TicketBody({ ticket, ctx, onClose, onOpenTicket }: { ticket: Ticket; ct
   const [tab, setTab] = useState<TabId>('comments')
   const [titleDraft, setTitleDraft] = useState(ticket.title)
   const lastTitle = useRef(ticket.title)
-  const [discards, setDiscards] = useState(0)
+  const [descriptionResets, setDescriptionResets] = useState(0)
   const [propsOpen, setPropsOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const [commentView, setCommentView] = useState<{ total: number; shown: number } | null>(null)
@@ -316,9 +321,14 @@ function TicketBody({ ticket, ctx, onClose, onOpenTicket }: { ticket: Ticket; ct
       <div className="ticket-title-block">
       {ticket.archivedAt ? <p className="board-note" role="note">{t('archive.banner')}</p> : !canEdit ? <p className="board-note" role="note">{t('work.panel.readOnly')}</p> : null}
       {editor.conflict ? (
-        <ConflictBanner conflict={editor.conflict} ticket={ticket} ctx={ctx} busy={editor.busy} onReapply={() => void editor.reapply()} onDiscard={() => {
+        <ConflictBanner conflict={editor.conflict} ticket={ticket} ctx={ctx} busy={editor.busy} onReapply={() => {
+          // The server stores the description in its canonical form, so the echo never equals the draft: a
+          // description that went through starts the section over from what was saved.
+          const description = editor.conflict !== null && 'description' in editor.conflict.patch
+          void editor.reapply().then((ok) => { if (ok && description) setDescriptionResets((count) => count + 1) })
+        }} onDiscard={() => {
           setTitleDraft(ticket.title)
-          setDiscards((count) => count + 1)
+          setDescriptionResets((count) => count + 1)
           editor.discard()
         }} />
       ) : null}
@@ -365,7 +375,7 @@ function TicketBody({ ticket, ctx, onClose, onOpenTicket }: { ticket: Ticket; ct
         <div className="ticket-main">
           <FileDropZone className="ticket-file-surface" disabled={!canEdit} onFiles={(files) => attachmentsRef.current?.addFiles(files)}>
             <div id="ticket-description">
-              <DescriptionSection key={`description-${String(discards)}`} ticket={ticket} canEdit={canEdit} busy={editor.busy} save={editor.save} conflicting={editor.conflict !== null} />
+              <DescriptionSection key={`description-${String(descriptionResets)}`} ticket={ticket} canEdit={canEdit} busy={editor.busy} save={editor.save} conflicting={editor.conflict !== null} />
             </div>
             <TicketAttachments ref={attachmentsRef} ticket={ticket} canEdit={canEdit} canManageProject={ctx.board.canManageWorkflow} />
           </FileDropZone>
@@ -425,6 +435,12 @@ function TicketBody({ ticket, ctx, onClose, onOpenTicket }: { ticket: Ticket; ct
   )
 }
 
+/** A click on a link or reference inside the description, or one that ends a text selection, is not a request to expand. */
+function clickTogglesDescription(target: EventTarget): boolean {
+  if (target instanceof Element && target.closest('a, button, [role="link"]')) return false
+  return window.getSelection()?.isCollapsed ?? true
+}
+
 function DescriptionSection({
   ticket,
   canEdit,
@@ -440,65 +456,62 @@ function DescriptionSection({
 }) {
   const { t } = useI18n()
   const text = descriptionText(ticket.description)
-  const [draft, setDraft] = useState<string | null>(null)
+  const savedContent = ticketDescriptionToDocContent(ticket.description)
+  const savedContentKey = JSON.stringify(savedContent)
+  const [draft, setDraft] = useState<DocContent | null>(null)
   const [expanded, setExpanded] = useState(false)
+  const [editorSeed, setEditorSeed] = useState(0)
   // Kept open while a conflict is unresolved so what was typed is never lost.
   const editing = draft !== null
 
-  // Once the saved description matches what was typed, the edit is finished.
+  // A server echo that matches the saved blocks ends the edit session.
   useEffect(() => {
-    setDraft((current) => (current !== null && current.trim() === text.trim() ? null : current))
-  }, [text])
+    setDraft((current) => current !== null && JSON.stringify(current) === savedContentKey ? null : current)
+  }, [savedContentKey])
 
   async function commit() {
     if (draft === null) return
-    if (draft.trim() === text.trim()) {
+    if (JSON.stringify(draft) === JSON.stringify(savedContent)) {
       setDraft(null)
       return
     }
-    const ok = await save({ description: textToDescription(draft) })
+    const ok = await save({ description: draft })
     if (ok) setDraft(null)
   }
+
+  const long = text.split('\n').length > 8 || text.length > 600
+  const changeDraft = useCallback((next: DocContent) => setDraft(next), [])
 
   return (
     <section className="ticket-section description">
       <h3>{t('work.field.description')}</h3>
       {editing ? (
         <div className="description-edit">
-          <textarea
-            autoFocus
-            rows={6}
-            aria-label={t('work.field.description')}
-            placeholder={t('work.description.placeholder')}
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') {
-                event.preventDefault()
-                event.stopPropagation()
-                if (!conflicting) setDraft(null)
-              } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing) {
-                event.preventDefault()
-                void commit()
-              }
-            }}
-          />
+          <Suspense fallback={<p className="hint">{t('loading')}</p>}>
+            <TicketDescriptionEditor key={editorSeed} content={draft} workspaceId={ticket.workspaceId} projectId={ticket.projectId} onChange={changeDraft} editable={!busy} onCancel={() => { if (!conflicting) setDraft(null) }} onSave={() => void commit()} />
+          </Suspense>
           <div className="dialog-actions">
-            <Button type="button" variant="secondary" disabled={busy} onClick={() => setDraft(null)}>{t('work.description.cancel')}</Button>
+            <Button type="button" variant="secondary" disabled={busy || conflicting} onClick={() => setDraft(null)}>{t('work.description.cancel')}</Button>
             <Button type="button" disabled={busy} onClick={() => void commit()}>{t('work.description.save')}</Button>
           </div>
         </div>
-      ) : canEdit ? (
-        <>
-          <button type="button" className={`${text ? 'description-view editable' : 'description-view editable empty'}${expanded ? '' : ' clamped'}`} aria-label={t('work.description.edit')} onClick={() => setDraft(text)}>
-            {text || t('work.description.placeholder')}
-          </button>
-          {text.split('\n').length > 8 || text.length > 600 ? <button type="button" className="more-button" aria-expanded={expanded} onClick={() => setExpanded((open) => !open)}>{expanded ? t('work.less') : t('work.more')}</button> : null}
-        </>
       ) : (
         <>
-          <p className={`${text ? 'description-view' : 'description-view empty'}${expanded ? '' : ' clamped'}`}>{text || t('work.value.empty')}</p>
-          {text.split('\n').length > 8 || text.length > 600 ? <button type="button" className="more-button" aria-expanded={expanded} onClick={() => setExpanded((open) => !open)}>{expanded ? t('work.less') : t('work.more')}</button> : null}
+          <div className="ticket-description-read-row">
+            {canEdit ? <Button type="button" variant="secondary" disabled={busy} onClick={() => { setEditorSeed((seed) => seed + 1); setDraft(savedContent) }}>{t('work.description.edit')}</Button> : null}
+            {long ? <button type="button" className="more-button" aria-expanded={expanded} onClick={() => setExpanded((open) => !open)}>{expanded ? t('work.less') : t('work.more')}</button> : null}
+          </div>
+          <div
+            className={`ticket-description-read${long && !expanded ? ' clamped' : ''}${text ? '' : ' empty'}`}
+            role={long ? 'button' : undefined}
+            tabIndex={long ? 0 : undefined}
+            aria-expanded={long ? expanded : undefined}
+            aria-label={long ? t(expanded ? 'work.less' : 'work.more') : undefined}
+            onClick={(event) => { if (long && clickTogglesDescription(event.target)) setExpanded((open) => !open) }}
+            onKeyDown={(event) => { if (long && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setExpanded((open) => !open) } }}
+          >
+            {text ? <Suspense fallback={<p className="hint">{text}</p>}><TicketDescriptionRead key={`${ticket.id}-${ticket.revisionNo}`} content={savedContent} workspaceId={ticket.workspaceId} /></Suspense> : <p className="description-view empty">{t('work.value.empty')}</p>}
+          </div>
         </>
       )}
     </section>

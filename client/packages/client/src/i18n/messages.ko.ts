@@ -93,6 +93,8 @@ export const ko = {
   'channel.create': '채널 만들기',
   'channel.name': '채널 이름',
   'channel.visibility': '공개 범위',
+  'channel.settings': '채널 설정',
+  'channel.settingsReadOnly': '읽기 전용: 이 채널의 설정을 변경할 권한이 없습니다.',
   'channel.webhooks': '웹훅',
   'channel.webhooks.title': '수신 웹훅',
   'channel.webhooks.empty': '이 채널에 웹훅이 없습니다.',

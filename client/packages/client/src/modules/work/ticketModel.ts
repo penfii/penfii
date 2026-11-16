@@ -1,4 +1,5 @@
 import type { ChildSummary, HierarchyKind, ProjectBoard, Ticket, TicketField } from '@penfii/contracts'
+import { docContentText, ticketDescriptionToDocContent } from './ticketDescriptionContent'
 
 export const PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'] as const
 export type Priority = (typeof PRIORITIES)[number]
@@ -25,6 +26,9 @@ const TEXT_BLOCKS = new Set(['paragraph', 'heading', 'codeBlock'])
 
 /** Text of a rich text document, one line per text block. */
 export function descriptionText(value: unknown): string {
+  if (value && typeof value === 'object' && (value as { schema?: unknown }).schema === 'penfii.doc') {
+    return docContentText(ticketDescriptionToDocContent(value))
+  }
   const lines: string[] = []
   const walk = (node: unknown, line: string[]) => {
     if (!node || typeof node !== 'object') return

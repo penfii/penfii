@@ -112,6 +112,18 @@ pub(super) fn document_is_valid(value: &Value, allow_null: bool) -> bool {
     value.is_object() || (allow_null && value.is_null())
 }
 
+/// A description in the Docs format (`penfii.doc` v1, what the web editor saves) is checked and
+/// canonicalised the way a page is, so a link or block a page would refuse is not stored on a ticket
+/// either. The older ProseMirror shape is kept as it is.
+fn clean_description(value: Value) -> Result<Value, CoreError> {
+    if value.get("schema").and_then(Value::as_str) != Some(crate::docs::content::SCHEMA) {
+        return Ok(value);
+    }
+    crate::docs::content::sanitize(&value, usize::MAX)
+        .map(|(clean, _)| clean)
+        .map_err(|error| CoreError::validation(format!("description: {}", error.0)))
+}
+
 fn priority_is_valid(priority: Option<&str>) -> bool {
     priority.is_none_or(|value| matches!(value, "LOW" | "MEDIUM" | "HIGH" | "URGENT"))
 }
@@ -284,6 +296,7 @@ pub async fn create_ticket(
     if !document_is_valid(&input.description, true) {
         return Err(CoreError::validation("description must be a JSON object"));
     }
+    let description = clean_description(input.description.clone())?;
     let body = json!({"title":title,"description":input.description,"hierarchyKind":input.hierarchy_kind,"parentId":input.parent_id,"channelId":input.channel_id,"statusId":input.status_id,"assigneeId":input.assignee_id,"priority":input.priority,"dueOn":input.due_on,"labelIds":input.label_ids,"typeId":input.type_id,"estimate":input.estimate.as_ref().map(|e| json!([e.value, e.unit])),"schedule":input.schedule.as_ref().map(|s| json!([s.planned_start_at, s.duration_minutes, s.is_schedule_milestone])),"fileIds":input.file_ids});
     let mut tx = pool.begin().await?;
     let (workspace, role) = require_project_role(&mut tx, project_id, actor_id, true).await?;
@@ -363,7 +376,7 @@ pub async fn create_ticket(
     let sequence: i64 = counter.try_get("ticket_seq")?;
     let public_key = crate::ticket_key::format_key(&prefix, sequence);
     sqlx::query("INSERT INTO penfii.tickets(id,workspace_id,project_id,channel_id,public_key,title,hierarchy_kind,parent_id,status_id,assignee_id,created_by,priority,due_on,description,ticket_type_id,project_sequence,estimate_value,estimate_unit) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::text::numeric,$18)")
-        .bind(id).bind(workspace).bind(project_id).bind(input.channel_id).bind(&public_key).bind(title).bind(&input.hierarchy_kind).bind(input.parent_id).bind(status_id).bind(input.assignee_id).bind(actor_id).bind(&input.priority).bind(input.due_on).bind(&input.description).bind(input.type_id).bind(sequence).bind(estimate.as_ref().map(|e| e.value.clone())).bind(estimate.as_ref().map(|e| e.unit.clone())).execute(&mut *tx).await?;
+        .bind(id).bind(workspace).bind(project_id).bind(input.channel_id).bind(&public_key).bind(title).bind(&input.hierarchy_kind).bind(input.parent_id).bind(status_id).bind(input.assignee_id).bind(actor_id).bind(&input.priority).bind(input.due_on).bind(&description).bind(input.type_id).bind(sequence).bind(estimate.as_ref().map(|e| e.value.clone())).bind(estimate.as_ref().map(|e| e.unit.clone())).execute(&mut *tx).await?;
     plan_fields::write_schedule(&mut tx, id, schedule.as_ref()).await?;
     replace_labels(&mut tx, id, &input.label_ids).await?;
     crate::ticket_files::attach_to_new_ticket(&mut tx, actor_id, workspace, id, &input.file_ids)
@@ -455,7 +468,7 @@ pub async fn update_ticket(
         return Err(CoreError::validation("description must be a JSON object"));
     }
     let title = update.title.as_deref().map(str::trim).unwrap_or(&old.title);
-    let description = update.description;
+    let description = update.description.map(clean_description).transpose()?;
     let assignee = update.assignee_id.unwrap_or(old.assignee_id);
     if let Some(user) = assignee {
         // Only a new assignee must take part now; a ticket keeps the person it already has.
@@ -891,4 +904,35 @@ pub async fn children(
     }
     tx.commit().await?;
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_legacy_description_is_kept_as_it_is() {
+        let legacy = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"x"}]}]});
+        assert_eq!(clean_description(legacy.clone()).unwrap(), legacy);
+    }
+
+    #[test]
+    fn a_docs_description_is_canonicalised_and_an_unsafe_link_refused() {
+        let doc = json!({"schema":"penfii.doc","version":1,"blocks":[
+            {"type":"paragraph","props":{"textAlignment":"left"},"content":[{"type":"text","text":"hi","styles":{}}],"children":[]}]});
+        let clean = clean_description(doc).unwrap();
+        assert_eq!(clean["blocks"][0]["props"], json!({}));
+        assert!(
+            clean["blocks"][0]["id"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty())
+        );
+
+        let unsafe_link = json!({"schema":"penfii.doc","version":1,"blocks":[
+            {"type":"paragraph","content":[{"type":"link","href":"javascript:alert(1)","content":[{"type":"text","text":"x","styles":{}}]}]}]});
+        assert!(matches!(
+            clean_description(unsafe_link),
+            Err(CoreError::Validation(_))
+        ));
+    }
 }

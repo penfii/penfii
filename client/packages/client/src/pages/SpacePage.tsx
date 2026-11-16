@@ -1,7 +1,9 @@
 import { MuteButton } from '../modules/attention/MuteButton'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { Channel } from '@penfii/contracts'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate, useParams } from 'react-router'
+import { useNavigate, useParams, useSearchParams } from 'react-router'
+import { createPortal } from 'react-dom'
 import { api } from '../api'
 import { useI18n } from '../i18n/I18nProvider'
 import { useSession } from '../modules/identity'
@@ -21,6 +23,7 @@ import { useWorkspaceRole } from '../modules/spaces/useWorkspaceRole'
 export function ConversationFrame() {
   const { t } = useI18n()
   const params = useParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const workspaceId = params.workspaceId
   const conversationId = params.conversationId
   const rootId = params.rootId
@@ -66,32 +69,23 @@ export function ConversationFrame() {
           <div className="context-actions">
             <MemberStack members={projectMembers.data ?? []} />
             <MuteButton channelId={channel.id} />
-            {channel.visibility === 'PRIVATE' ? (
-              <ChannelPeopleButton workspaceId={workspaceId} channelId={channel.id} canAdd={canInviteToChannel(channel, project)} canSetRoles={canSetChannelRoles(channel, project)} canRemove={canRunChannelPeople(channel, project)} canSetInvites={canRunChannelPeople(channel, project)} allowMemberInvites={channel.allowMemberInvites} open={peopleOpen} onOpenChange={setPeopleOpen} />
+            {/* A member who does not run the channel's people still sees them here, and invites when the channel allows it. */}
+            {channel.visibility === 'PRIVATE' && !canRunChannelPeople(channel, project) ? (
+              <ChannelPeopleButton workspaceId={workspaceId} channelId={channel.id} canAdd={canInviteToChannel(channel, project)} canSetRoles={false} canRemove={false} canSetInvites={false} allowMemberInvites={channel.allowMemberInvites} open={peopleOpen} onOpenChange={setPeopleOpen} />
             ) : null}
             {canLeaveChannel(channel) ? (
               <LeaveChannelButton
                 channelId={channel.id}
                 channelName={channel.name}
                 userId={session.data.id}
-                onChooseManager={() => setPeopleOpen(true)}
+                onChooseManager={() => {
+                  setSearchParams((current) => { const next = new URLSearchParams(current); next.set('settings', '1'); next.set('members', '1'); return next })
+                }}
                 onLeft={() => {
                   // Go first: the channel is no longer in the list, and a page for it would say "not found".
                   void navigate(params.projectId ? `/w/${workspaceId}/projects/${params.projectId}/chat` : `/w/${workspaceId}/chat`)
                   void queryClient.invalidateQueries({ queryKey: queryKeys.space(workspaceId) })
                 }}
-              />
-            ) : null}
-            {canChangeChannel(channel, workspaceRole, project) ? (
-              <ChannelWebhooksButton channelId={channel.id} />
-            ) : null}
-            {canChangeVisibility(channel, workspaceRole, project) ? (
-              <VisibilitySelect
-                channelId={channel.id}
-                visibility={channel.visibility}
-            inProject={Boolean(channel.projectId)}
-            publicLabel={channelScopeLabel(t, 'PUBLIC', project?.name, team?.name)}
-                onChanged={() => void queryClient.invalidateQueries({ queryKey: queryKeys.space(workspaceId) })}
               />
             ) : null}
           </div>
@@ -107,9 +101,75 @@ export function ConversationFrame() {
         heading={title}
         threadBase={threadBase}
       />
+      {channel && searchParams.get('settings') === '1' ? createPortal(
+        <ChannelSettingsPanel
+          workspaceId={workspaceId}
+          channel={channel}
+          project={project}
+          team={team}
+          workspaceRole={workspaceRole}
+          peopleOpen={searchParams.get('members') === '1'}
+          onPeopleOpenChange={(open) => setSearchParams((current) => { const next = new URLSearchParams(current); if (open) next.set('members', '1'); else next.delete('members'); return next })}
+          onChanged={() => void queryClient.invalidateQueries({ queryKey: queryKeys.space(workspaceId) })}
+          onClose={() => setSearchParams((current) => { const next = new URLSearchParams(current); next.delete('settings'); next.delete('members'); return next })}
+        />, document.body,
+      ) : null}
     </div>
   )
 }
+
+function ChannelSettingsPanel({ workspaceId, channel, project, team, workspaceRole, peopleOpen, onPeopleOpenChange, onChanged, onClose }: {
+  workspaceId: string
+  channel: Channel
+  project: { id: string; name: string; canManage?: boolean } | undefined
+  team: { id: string; name: string } | undefined
+  workspaceRole: string | undefined
+  peopleOpen: boolean
+  onPeopleOpenChange: (open: boolean) => void
+  onChanged: () => void
+  onClose: () => void
+}) {
+  const { t } = useI18n()
+  const panel = useRef<HTMLElement>(null)
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    panel.current?.focus()
+    const onKey = (event: KeyboardEvent) => {
+      if (event.target instanceof Element && event.target.closest('dialog[open]')) return
+      if (event.key === 'Escape') { event.stopPropagation(); closeRef.current(); return }
+      if (event.key === 'Tab') {
+        const focusable = [...(panel.current?.querySelectorAll<HTMLElement>('button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])') ?? [])]
+        if (!focusable.length) { event.preventDefault(); panel.current?.focus(); return }
+        const first = focusable[0]
+        const last = focusable[focusable.length - 1]
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+      }
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => { document.removeEventListener('keydown', onKey, true); if (previous?.isConnected) previous.focus() }
+  }, [])
+  const canManage = canChangeChannel(channel, workspaceRole, project)
+  const canVisibility = canChangeVisibility(channel, workspaceRole, project)
+  const canPeople = channel.visibility === 'PRIVATE' && canRunChannelPeople(channel, project)
+  return (
+    <div className="channel-settings-layer">
+      <button className="channel-settings-backdrop" type="button" aria-label={t('close')} onClick={onClose} />
+      <aside ref={panel} className="channel-settings-panel" role="dialog" aria-modal="true" aria-label={t('channel.settings')} tabIndex={-1}>
+        <header className="channel-settings-head"><div><h2>{t('channel.settings')}</h2><p># {channel.name}</p></div><Button type="button" variant="secondary" onClick={onClose}>{t('close')}</Button></header>
+        <div className="channel-settings-body">
+          {canManage ? <section><h3>{t('channel.webhooks')}</h3><ChannelWebhooksButton channelId={channel.id} /></section> : null}
+          {canVisibility ? <section><h3>{t('channel.visibility')}</h3><VisibilitySelect channelId={channel.id} visibility={channel.visibility} inProject={Boolean(channel.projectId)} publicLabel={channelScopeLabel(t, 'PUBLIC', project?.name, team?.name)} onChanged={onChanged} /></section> : null}
+          {canPeople ? <section><h3>{t('channel.addPeople')}</h3><ChannelPeopleButton workspaceId={workspaceId} channelId={channel.id} canAdd={canInviteToChannel(channel, project)} canSetRoles={canSetChannelRoles(channel, project)} canRemove={canRunChannelPeople(channel, project)} canSetInvites={canRunChannelPeople(channel, project)} allowMemberInvites={channel.allowMemberInvites} open={peopleOpen} onOpenChange={onPeopleOpenChange} /></section> : null}
+          {!canManage && !canVisibility && !canPeople ? <p className="hint">{t('channel.settingsReadOnly')}</p> : null}
+        </div>
+      </aside>
+    </div>
+  )
+}
+
 
 function ChannelPeopleButton({
   workspaceId,

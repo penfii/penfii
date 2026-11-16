@@ -1,8 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { isApiError, isNotFound } from '@penfii/api-client'
-import type { DocContent, DocPage, ReferenceKind } from '@penfii/contracts'
+import type { DocContent, DocPage } from '@penfii/contracts'
 import { formatMessageTime } from '../../format'
 import { api } from '../../api'
 import { Button, Dialog, EmptyState } from '../../design/ui'
@@ -20,6 +19,7 @@ import { UnsavedBlocker } from './UnsavedBlocker'
 import { Popover } from '../work/Popover'
 import { useScopeLabel } from './useScopeLabel'
 import type { EditorController } from './DocEditor'
+import { useOpenReference } from './docContext'
 
 // BlockNote is large: it loads only when a page is opened.
 const DocEditor = lazy(() => import('./DocEditor'))
@@ -67,7 +67,6 @@ export function DocPageView({
   onEditStarted?: () => void
 }) {
   const { t, locale } = useI18n()
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const session = useSession()
   const page = useQuery({ ...queries.doc(docId), retry: false })
@@ -104,14 +103,7 @@ export function DocPageView({
     controller.current = next
   }, [])
 
-  const open = useCallback(
-    (kind: ReferenceKind, id: string, hints: { projectId?: string }) => {
-      const base = `/w/${workspaceId}`
-      if (kind === 'TICKET' && hints.projectId) void navigate(`${base}/projects/${hints.projectId}/work?panel=ticket:${id}`)
-      else if (kind === 'DOC') void navigate(`${base}/docs?doc=${id}`)
-    },
-    [navigate, workspaceId],
-  )
+  const open = useOpenReference(workspaceId)
 
   /** Starts a draft from the page as it is now on the server, or from a Version's content. */
   const beginEdit = useCallback(

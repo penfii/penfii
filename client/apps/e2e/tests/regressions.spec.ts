@@ -11,6 +11,8 @@ const column = (page: Page, name: string) => page.getByRole('region', { name, ex
 test.describe('FEA-088: a person never sees another person\'s data', () => {
   test('an expired session, then another person signing in on the same tab', async ({ browser, watchPage, allowProblem }) => {
     allowProblem(/status of 401/)
+    // The expired session is the point of this test: the inbox requests made after the cookie is cleared are refused.
+    allowProblem(/^401 GET .*\/inbox\?/)
     const { context, page } = await signedInContext(browser, accountA.email, watchPage)
     await expect(page.getByRole('button', { name: accountA.name })).toBeVisible()
     // Something the first person left on this device that belongs to them (a draft, say).

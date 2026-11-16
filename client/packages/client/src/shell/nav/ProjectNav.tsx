@@ -6,7 +6,7 @@ import {
 visibleSlice
 } from '../chatGroups'
 import { useI18n } from '../../i18n/I18nProvider'
-import { isWorkspaceManager } from '../../modules/spaces/capabilities'
+import { canManageChannelSettings, isWorkspaceManager } from '../../modules/spaces/capabilities'
 import { useWorkspaceRole } from '../../modules/spaces/useWorkspaceRole'
 import { useCreate } from '../create'
 import { ChannelLink } from './ChatNav'
@@ -81,17 +81,20 @@ export function ProjectNav({
   projectId,
   channels,
   canCreate,
+  projectCanManage,
   participating,
 }: {
   workspaceId: string
   projectId: string
   channels: Channel[]
   canCreate: boolean
+  projectCanManage: boolean
   participating: boolean
 }) {
   const { t } = useI18n()
   const open = useCreate()
   const navigate = useNavigate()
+  const workspaceRole = useWorkspaceRole(workspaceId)
   const location = useLocation()
   const [params] = useSearchParams()
   const docsHere = location.pathname.includes(`/projects/${projectId}/docs`)
@@ -158,7 +161,7 @@ export function ProjectNav({
                     <ul>
                       {visibleSlice(projectChannels, channelsExpanded, (channel) => channel.unreadCount > 0).shown.map((channel) => (
                         <li key={channel.id}>
-                          <ChannelLink workspaceId={workspaceId} channel={channel} to={`/w/${workspaceId}/projects/${projectId}/chat/${channel.conversationId}`} />
+                          <ChannelLink workspaceId={workspaceId} channel={channel} to={`/w/${workspaceId}/projects/${projectId}/chat/${channel.conversationId}`} canManageSettings={canManageChannelSettings(channel, workspaceRole, { canManage: projectCanManage })} />
                         </li>
                       ))}
                     </ul>

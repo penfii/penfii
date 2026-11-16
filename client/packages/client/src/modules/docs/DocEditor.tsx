@@ -1,19 +1,7 @@
-import '@blocknote/mantine/style.css'
 import './docEditor.css'
 import { useShortcutHelp } from '../help/ShortcutHelp'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { MantineProvider } from '@mantine/core'
-import { filterSuggestionItems } from '@blocknote/core'
-import { en as enDictionary, ko as koDictionary } from '@blocknote/core/locales'
-import {
-  FormattingToolbar,
-  FormattingToolbarController,
-  SuggestionMenuController,
-  getDefaultReactSlashMenuItems,
-  useCreateBlockNote,
-  type DefaultReactSuggestionItem,
-} from '@blocknote/react'
-import { BlockNoteView } from '@blocknote/mantine'
+import { SuggestionMenuController, useCreateBlockNote } from '@blocknote/react'
 import type { DocContent } from '@penfii/contracts'
 import { api } from '../../api'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -24,8 +12,9 @@ import { DocContext, type DocEditorContext } from './docContext'
 import { toBlocks, toContent } from './draftModel'
 import { ReferencePicker } from './ReferencePicker'
 import { ReferenceResolver } from './referenceCache'
-import { FormatButtons, PhoneFormatBar } from './FormatBar'
 import { docSchema, type DocReferenceKind } from './schema'
+import { BlockNoteSurface, blockNoteDictionary } from './BlockNoteSurface'
+import { mentionMenuItems, slashMenuItems } from './suggestionItems'
 
 /** What the page asks of the editor: the draft as DocContent, and whether it differs from the start. */
 export type EditorController = {
@@ -68,7 +57,7 @@ export default function DocEditor({ docId, projectId, workspaceId, content, edit
   const editor = useCreateBlockNote(
     {
       schema: docSchema,
-      dictionary: locale === 'ko-KR' ? koDictionary : enDictionary,
+      dictionary: blockNoteDictionary(locale),
       initialContent: toBlocks(content) as any,
       uploadFile: files ? uploads.uploadFile : undefined,
       extensions: [uploadsExtension],
@@ -122,54 +111,12 @@ export default function DocEditor({ docId, projectId, workspaceId, content, edit
 
   const context = useMemo<DocEditorContext>(() => ({ workspaceId, resolver, open }), [workspaceId, resolver, open])
 
-  function slashItems(query: string): DefaultReactSuggestionItem[] {
-    const fileKeys = new Set(['image', 'video', 'audio', 'file'])
-    const base = getDefaultReactSlashMenuItems(editor).filter((item) => {
-      const key = (item as { key?: string }).key
-      if (key === 'emoji') return false
-      return files || !key || !fileKeys.has(key)
-    })
-    const refItem = (kind: DocReferenceKind, title: string, aliases: string[]): DefaultReactSuggestionItem => ({
-      title,
-      aliases,
-      group: t('docs.menu.references'),
-      onItemClick: () => {
-        setPicker({
-          kind,
-          insert: (id) => {
-            editor.focus()
-            editor.insertInlineContent([{ type: 'reference', props: { kind, id } }, ' '])
-          },
-        })
-      },
-    })
-    return filterSuggestionItems(
-      [
-        ...base,
-        refItem('TICKET', t('docs.menu.ticket'), ['ticket', 'task', '티켓', '작업']),
-        refItem('DOC', t('docs.menu.doc'), ['doc', 'page', '문서', '페이지']),
-      ],
-      query,
-    )
-  }
-
-  async function mentionItems(query: string): Promise<DefaultReactSuggestionItem[]> {
-    const found = await api.searchDirectory(workspaceId, { q: query, types: 'person', limit: 8 })
-    return found.results.flatMap((hit) => {
-      const person = hit.type === 'person' ? hit.person : undefined
-      if (!person) return []
-      const item: DefaultReactSuggestionItem = {
-        title: person.displayName,
-        subtext: person.organizationName,
-        onItemClick: () => editor.insertInlineContent([{ type: 'mention', props: { userId: person.id } }, ' ']),
-      }
-      return [item]
-    })
-  }
+  const slashItems = (query: string) => slashMenuItems(editor, query, { files, t, pickReference: (kind, insert) => setPicker({ kind, insert }) })
+  const mentionItems = (query: string) => mentionMenuItems(editor, workspaceId, query)
 
   return (
     <DocContext.Provider value={context}>
-      <MantineProvider withGlobalClasses={false} withCssVariables={false}>
+      <>
         {editable ? (
           <div className="doc-help-bar">
             <span className="hint">{t('editor.helpBar')}</span>
@@ -178,21 +125,13 @@ export default function DocEditor({ docId, projectId, workspaceId, content, edit
         ) : null}
         <div className="doc-editor" data-doc-editor data-editable={editable}>
           <FileDropZone className="doc-drop" disabled={!editable || !files} onFiles={(dropped) => void insertFiles(editor, uploads, dropped)}>
-          <BlockNoteView editor={editor} theme="light" slashMenu={false} formattingToolbar={false} editable={editable}>
-            <FormattingToolbarController
-              formattingToolbar={() => (
-                <FormattingToolbar>
-                  <FormatButtons />
-                </FormattingToolbar>
-              )}
-            />
-            {editable ? <PhoneFormatBar /> : null}
+          <BlockNoteSurface editor={editor} editable={editable}>
             {editable ? <SuggestionMenuController triggerCharacter="/" getItems={async (query) => slashItems(query)} /> : null}
             {editable ? <SuggestionMenuController triggerCharacter="@" getItems={mentionItems} /> : null}
-          </BlockNoteView>
+          </BlockNoteSurface>
           </FileDropZone>
         </div>
-      </MantineProvider>
+      </>
       {picker ? (
         <ReferencePicker
           kind={picker.kind}

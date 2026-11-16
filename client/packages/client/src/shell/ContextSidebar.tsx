@@ -93,6 +93,7 @@ export function ContextSidebar({
           projectId={projectId}
           channels={space.data?.channels ?? []}
           canCreate={canCreateChannel(undefined, space.data?.projects.find((project) => project.id === projectId))}
+          projectCanManage={space.data?.projects.find((project) => project.id === projectId)?.canManage === true}
           participating={space.data?.projects.find((project) => project.id === projectId)?.participating !== false}
         />
       ) : null}
