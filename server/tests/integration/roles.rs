@@ -45,7 +45,7 @@ async fn a_non_superuser_owner_applies_every_migration_and_the_runtime_role_cann
         assert!(!superuser && !createdb && !createrole, "{role}");
     }
 
-    // Migration 0001..0008, applied by the owner and nobody else. Nothing needs a superuser.
+    // Migration 0001, applied by the owner and nobody else. Nothing needs a superuser.
     let owner_pool = pool_as(&pool, &owner, "owner-pass").await;
     apply_migrations(&owner_pool)
         .await
@@ -56,7 +56,7 @@ async fn a_non_superuser_owner_applies_every_migration_and_the_runtime_role_cann
             .fetch_one(&owner_pool)
             .await
             .unwrap();
-    assert_eq!(applied, 8);
+    assert_eq!(applied, 1);
     // Again: nothing to do.
     apply_migrations(&owner_pool).await.unwrap();
 

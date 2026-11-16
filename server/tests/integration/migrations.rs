@@ -56,10 +56,7 @@ async fn exists(pool: &PgPool, table: &str) -> bool {
 async fn the_real_history_is_recorded_once_and_applying_again_changes_nothing(pool: PgPool) {
     let _turn = crate::common::MIGRATING.acquire().await.unwrap();
     apply_migrations(&pool).await.expect("first run");
-    assert_eq!(
-        recorded(&pool, "penfii").await,
-        vec![1, 2, 3, 4, 5, 6, 7, 8]
-    );
+    assert_eq!(recorded(&pool, "penfii").await, vec![1]);
     let tables: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM pg_tables WHERE schemaname = 'penfii' AND tablename <> '_sqlx_migrations'",
     )
@@ -74,10 +71,7 @@ async fn the_real_history_is_recorded_once_and_applying_again_changes_nothing(po
         .unwrap();
     apply_migrations(&pool).await.expect("second run");
     apply_migrations(&pool).await.expect("third run");
-    assert_eq!(
-        recorded(&pool, "penfii").await,
-        vec![1, 2, 3, 4, 5, 6, 7, 8]
-    );
+    assert_eq!(recorded(&pool, "penfii").await, vec![1]);
     let kept: i64 =
         sqlx::query_scalar("SELECT count(*) FROM penfii.foundation_state WHERE key = 'kept'")
             .fetch_one(&pool)
@@ -106,10 +100,7 @@ async fn instances_that_start_together_apply_each_migration_once(pool: PgPool) {
     for run in runs {
         run.await.unwrap().expect("every instance succeeds");
     }
-    assert_eq!(
-        recorded(&pool, "penfii").await,
-        vec![1, 2, 3, 4, 5, 6, 7, 8]
-    );
+    assert_eq!(recorded(&pool, "penfii").await, vec![1]);
 }
 
 #[sqlx::test(migrator = "crate::common::GUARD")]

@@ -768,39 +768,6 @@ async fn the_last_manager_losing_the_project_leaves_a_channel_to_recover(pool: P
     assert!(env.without_manager().await.is_empty());
 }
 
-/// Rows left by older versions go once, and nothing comes back with the participation.
-#[sqlx::test(migrator = "crate::common::GUARD")]
-async fn rows_left_behind_are_cleaned_once(pool: PgPool) {
-    let (env, pat) = setup(pool).await;
-    env.ungrant(&pat).await;
-    env.plant(&pat, &env.private, "MANAGER").await;
-    env.plant(&pat, &env.public, "MEMBER").await;
-    // The rows of someone who still takes part stay: the owner's.
-    let owner_rows: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM penfii.channel_members WHERE user_id = $1")
-            .bind(env.owner.id)
-            .fetch_one(&env.pool)
-            .await
-            .unwrap();
-    sqlx::raw_sql(include_str!(
-        "../../../database/migrations/0006_project_channel_membership_cleanup.sql"
-    ))
-    .execute(&env.pool)
-    .await
-    .unwrap();
-    assert_eq!(env.row(&pat, &env.private).await, None);
-    assert_eq!(env.row(&pat, &env.public).await, None);
-    let after: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM penfii.channel_members WHERE user_id = $1")
-            .bind(env.owner.id)
-            .fetch_one(&env.pool)
-            .await
-            .unwrap();
-    assert_eq!(after, owner_rows);
-    env.grant(&pat, "EDITOR").await;
-    assert_eq!(env.pair(&pat).await, [SHUT, OPEN_WITHOUT_ROW]);
-}
-
 /// Channels of no Project are not touched by any of it.
 #[sqlx::test(migrator = "crate::common::GUARD")]
 async fn channels_of_no_project_keep_their_members(pool: PgPool) {
