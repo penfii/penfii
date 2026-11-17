@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '../../i18n/I18nProvider'
@@ -127,5 +127,41 @@ describe('the webhook dialog as a modal', () => {
     expect(dialog.tagName).toBe('DIALOG')
     fireEvent(dialog, new Event('cancel', { cancelable: true }))
     await waitFor(() => expect(container.ownerDocument.querySelector('dialog[open]')).toBeNull())
+  })
+})
+
+describe('revoking and replacing a secret', () => {
+  const hook = { id: 'w1', channelId: 'channel-1', name: 'deploys', authMode: 'URL_SECRET' as const, actorId: 'a1', actorDisplayName: 'Deploy Bot', revoked: false, createdAt: '2026-11-09T00:00:00Z', rotatedAt: null }
+  const revoke = vi.mocked(api.revokeWebhook)
+  const rotate = vi.mocked(api.rotateWebhook)
+  beforeEach(() => {
+    revoke.mockReset()
+    rotate.mockReset()
+    list.mockResolvedValue({ items: [hook] })
+  })
+
+  it('asks before revoking, and Cancel revokes nothing', async () => {
+    revoke.mockResolvedValue({ ...hook, revoked: true })
+    renderWebhooks()
+    fireEvent.click(screen.getByRole('button', { name: 'Webhooks' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Revoke' }))
+    expect(await screen.findByText('Revoke the webhook "deploys"? Posts with its secret are refused from now on, and it cannot be turned back on.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(revoke).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke' }))
+    const asked = await screen.findByRole('dialog', { name: 'Revoke' })
+    fireEvent.click(within(asked).getByRole('button', { name: 'Revoke' }))
+    await waitFor(() => expect(revoke).toHaveBeenCalledWith('w1'))
+  })
+
+  it('asks before replacing the secret', async () => {
+    rotate.mockResolvedValue({ secret: 'new-one', webhook: { ...hook, rotatedAt: '2026-11-10T00:00:00Z' } })
+    renderWebhooks()
+    fireEvent.click(screen.getByRole('button', { name: 'Webhooks' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Rotate secret' }))
+    const asked = await screen.findByRole('dialog', { name: 'Rotate secret' })
+    expect(rotate).not.toHaveBeenCalled()
+    fireEvent.click(within(asked).getByRole('button', { name: 'Rotate secret' }))
+    expect(await screen.findByText('new-one')).toBeTruthy()
   })
 })

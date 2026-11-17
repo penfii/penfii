@@ -111,6 +111,8 @@ export const en: Record<MessageKey, string> = {
   'channel.webhooks.done': 'Done',
   'channel.webhooks.rotate': 'Rotate secret',
   'channel.webhooks.revoke': 'Revoke',
+  'channel.webhooks.revokeConfirm': 'Revoke the webhook "{name}"? Posts with its secret are refused from now on, and it cannot be turned back on.',
+  'channel.webhooks.rotateConfirm': 'Replace the secret of "{name}"? The current secret stops working at once; whatever posts with it needs the new one.',
   'channel.webhooks.revoked': 'Revoked',
   'channel.webhooks.active': 'Active',
   'channel.addPeople': 'Add people',

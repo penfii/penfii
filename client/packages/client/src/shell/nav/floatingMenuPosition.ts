@@ -8,9 +8,11 @@ export function floatingMenuPosition(anchor: Rect, popup: Pick<Rect, 'width' | '
   const below = viewport.height - anchor.bottom - gap - margin
   const above = anchor.top - gap - margin
   const openBelow = popup.height <= below || below >= above
-  const top = openBelow
-    ? Math.min(anchor.bottom + gap, viewport.height - margin - Math.min(popup.height, maxHeight))
-    : Math.max(margin, anchor.top - gap - Math.min(popup.height, maxHeight))
+  const height = Math.min(popup.height, maxHeight)
+  // Kept inside on both sides, also when the trigger itself has left the viewport (the list scrolled, the window
+  // shrank while the menu was open).
+  const wanted = openBelow ? anchor.bottom + gap : anchor.top - gap - height
+  const top = Math.max(margin, Math.min(wanted, viewport.height - margin - height))
   const left = Math.max(margin, Math.min(anchor.right - width, viewport.width - width - margin))
   return { top, left, maxHeight, maxWidth }
 }

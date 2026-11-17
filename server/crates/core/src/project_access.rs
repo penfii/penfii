@@ -219,7 +219,17 @@ pub async fn remove_grant(
     )
     .await?;
     tx.commit().await?;
-    Ok(lost.notices())
+    Ok(lost.notices(&[user_id]))
+}
+
+/// The people of a Team, who may all have lost a Project its link or participation gave them.
+async fn team_people(conn: &mut PgConnection, team_id: Uuid) -> Result<Vec<Uuid>, CoreError> {
+    Ok(
+        sqlx::query_scalar("SELECT user_id FROM penfii.team_members WHERE team_id = $1")
+            .bind(team_id)
+            .fetch_all(&mut *conn)
+            .await?,
+    )
 }
 
 async fn team_of(conn: &mut PgConnection, workspace: Uuid, team_id: Uuid) -> Result<(), CoreError> {
@@ -293,6 +303,7 @@ pub async fn unlink_team(
     }
     lock_project_channels(&mut tx, project_id).await?;
     let lost = clear_lost_participation(&mut tx, workspace, Some(project_id), None, actor).await?;
+    let people = team_people(&mut tx, team_id).await?;
     audit(
         &mut tx,
         workspace,
@@ -304,7 +315,7 @@ pub async fn unlink_team(
     )
     .await?;
     tx.commit().await?;
-    Ok(lost.notices())
+    Ok(lost.notices(&people))
 }
 
 /// Lets the members of a linked Team into the Project with `role`, or (`None`) ends the participation and
@@ -353,9 +364,12 @@ pub async fn set_team_participation(
         ));
     }
     // Only ending the participation can take someone out; a changed role keeps them in.
-    let lost = if role.is_none() {
+    let (lost, people) = if role.is_none() {
         lock_project_channels(&mut tx, project_id).await?;
-        clear_lost_participation(&mut tx, workspace, Some(project_id), None, actor).await?
+        (
+            clear_lost_participation(&mut tx, workspace, Some(project_id), None, actor).await?,
+            team_people(&mut tx, team_id).await?,
+        )
     } else {
         Default::default()
     };
@@ -370,7 +384,7 @@ pub async fn set_team_participation(
     )
     .await?;
     tx.commit().await?;
-    Ok(lost.notices())
+    Ok(lost.notices(&people))
 }
 
 /// The active members of a Team linked to the Project, for a Project admin choosing people to give a direct

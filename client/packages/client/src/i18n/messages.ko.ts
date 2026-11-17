@@ -110,6 +110,8 @@ export const ko = {
   'channel.webhooks.done': '확인',
   'channel.webhooks.rotate': '비밀 교체',
   'channel.webhooks.revoke': '폐기',
+  'channel.webhooks.revokeConfirm': '웹훅 "{name}"을(를) 폐기할까요? 이제부터 이 비밀로 보내는 요청은 거부되며, 다시 켤 수 없습니다.',
+  'channel.webhooks.rotateConfirm': '"{name}"의 비밀을 교체할까요? 지금 비밀은 바로 쓸 수 없게 되므로, 이 웹훅으로 보내는 곳에 새 비밀을 넣어야 합니다.',
   'channel.webhooks.revoked': '폐기됨',
   'channel.webhooks.active': '사용 중',
   'channel.addPeople': '사람 추가',

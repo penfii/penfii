@@ -34,8 +34,13 @@ export function ConversationFrame() {
   const [peopleOpen, setPeopleOpen] = useState(false)
   const space = useQuery({ ...queries.space(workspaceId ?? ''), enabled: Boolean(workspaceId) })
 
-  const memberProjectId = space.data?.channels.find((item) => item.conversationId === conversationId)?.projectId
-  const projectMembers = useQuery({ ...queries.projectMembers(memberProjectId ?? ''), enabled: Boolean(memberProjectId) })
+  const listed = space.data?.channels.find((item) => item.conversationId === conversationId)
+  const memberProjectId = listed?.projectId
+  // Everyone in the Project reads its public channels; a private one is read by its own members only.
+  const privateChannelId = memberProjectId && listed?.visibility === 'PRIVATE' ? listed.id : undefined
+  const projectMembers = useQuery({ ...queries.projectMembers(memberProjectId ?? ''), enabled: Boolean(memberProjectId) && !privateChannelId })
+  const channelMembers = useQuery({ ...queries.channelMembers(privateChannelId ?? ''), enabled: Boolean(privateChannelId) })
+  const members = privateChannelId ? channelMembers.data : projectMembers.data
 
   if (!workspaceId || !conversationId || !session.data) return <NotFoundState />
   const channel = space.data?.channels.find((item) => item.conversationId === conversationId)
@@ -48,7 +53,7 @@ export function ConversationFrame() {
   const title = channel ? `# ${channel.name}` : peerName || (dm ? t('dm.short') : t('loading'))
   const scopeText = channel ? channelScopeLabel(t, channel.visibility, project?.name, team?.name) : null
   const namesProject = channel?.visibility === 'PUBLIC' && team && project
-  const subtitle = [namesProject ? null : project?.name, scopeText, projectMembers.data ? t('conversation.memberCount', { count: String(projectMembers.data.length) }) : null]
+  const subtitle = [namesProject ? null : project?.name, scopeText, members ? t('conversation.memberCount', { count: String(members.length) }) : null]
     .filter((item): item is string => Boolean(item))
     .join(' · ')
   // Threads stay in the part of the app the conversation was opened from (Chat or its Project).
@@ -67,7 +72,7 @@ export function ConversationFrame() {
         </div>
         {channel ? (
           <div className="context-actions">
-            <MemberStack members={projectMembers.data ?? []} />
+            <MemberStack members={members ?? []} />
             <MuteButton channelId={channel.id} />
             {/* A member who does not run the channel's people still sees them here, and invites when the channel allows it. */}
             {channel.visibility === 'PRIVATE' && !canRunChannelPeople(channel, project) ? (

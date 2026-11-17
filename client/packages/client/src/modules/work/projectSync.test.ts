@@ -34,6 +34,23 @@ describe('applying the frames of a Project socket', () => {
     expect(state.lastSeq).toBe(7)
   })
 
+  it('also reads the Tickets of the Project this tab holds when the first connection is ready (a change between the read and the socket is not replayed), and no Ticket of another Project', () => {
+    const { client, keys } = spy()
+    client.setQueryData(queryKeys.ticket('t1'), { id: 't1', projectId: 'p', parentId: null })
+    client.setQueryData(queryKeys.ticket('t2'), { id: 't2', projectId: 'other', parentId: null })
+    const state = newSyncState()
+    handleProjectFrame(client, 'p', state, { type: 'project.ready', projectId: 'p', headSeq: 7 })
+    expect(keys()).toContain(key(queryKeys.ticket('t1')))
+    expect(keys()).toContain(key(queryKeys.ticketComments('t1')))
+    expect(keys()).not.toContain(key(queryKeys.ticket('t2')))
+    // A later connection continues from its position: the replay carries the changes, nothing is read as a whole.
+    const later = spy()
+    later.client.setQueryData(queryKeys.ticket('t1'), { id: 't1', projectId: 'p', parentId: null })
+    helloFor(state)
+    handleProjectFrame(later.client, 'p', state, { type: 'project.ready', projectId: 'p', headSeq: 7 })
+    expect(later.keys()).toEqual([])
+  })
+
   it('refreshes the Ticket a change names, moves its position forward, and ignores a change it already holds', () => {
     const { client, keys, reset } = spy()
     const state = newSyncState()

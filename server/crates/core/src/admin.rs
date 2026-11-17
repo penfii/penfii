@@ -1100,7 +1100,7 @@ pub async fn remove_team_member(
             lost.audit_with(json!({"userId": user_id})),
         )
         .await?;
-        notices = lost.notices();
+        notices = lost.notices(&[user_id]);
     }
     tx.commit().await?;
     Ok(notices)

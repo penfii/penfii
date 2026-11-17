@@ -41,3 +41,34 @@ describe('Dialog mounted on demand', () => {
     expect(document.activeElement).toBe(trigger)
   })
 })
+
+function Nested({ onOuterClose }: { onOuterClose: () => void }) {
+  const [inner, setInner] = useState(false)
+  return (
+    <I18nProvider>
+      <Dialog open title="Outer" onClose={onOuterClose}>
+        <button type="button" onClick={() => setInner(true)}>ask</button>
+        <Dialog open={inner} title="Inner" onClose={() => setInner(false)}><p>inner body</p></Dialog>
+      </Dialog>
+    </I18nProvider>
+  )
+}
+
+describe('a dialog opened from inside another', () => {
+  it('closes alone: its close and Escape (cancel) do not close the dialog around it', () => {
+    let outerClosed = 0
+    render(<Nested onOuterClose={() => { outerClosed += 1 }} />)
+    fireEvent.click(screen.getByText('ask'))
+    const inner = screen.getByText('inner body').closest('dialog') as HTMLDialogElement
+    // The browser's Escape: a cancel event on the inner dialog.
+    fireEvent(inner, new Event('cancel', { cancelable: true }))
+    expect(outerClosed).toBe(0)
+    // The inner one closing (answered, or closed by its owner) fires close on it.
+    fireEvent(inner, new Event('close'))
+    expect(outerClosed).toBe(0)
+    // The outer one's own events still close it.
+    const outer = screen.getByText('ask').closest('dialog') as HTMLDialogElement
+    fireEvent(outer, new Event('cancel', { cancelable: true }))
+    expect(outerClosed).toBe(1)
+  })
+})

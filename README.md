@@ -2,7 +2,7 @@
 
 Penfii is a self-hosted workspace that keeps **chat, projects and tickets, and documents** in one place, under one permission model.
 
-> **Status: v0.2.0, an early release.** Penfii is early software. The HTTP API, the database schema and the settings can still change between 0.x releases. Read the [changelog](CHANGELOG.md) before you upgrade. Read [Known limitations](docs/known-limitations.md) before you run it for other people.
+> **Status: v0.2.1, an early release.** Penfii is early software. The HTTP API, the database schema and the settings can still change between 0.x releases. Read the [changelog](CHANGELOG.md) before you upgrade. Read [Known limitations](docs/known-limitations.md) before you run it for other people.
 
 ## What it does
 

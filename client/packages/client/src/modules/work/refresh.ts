@@ -120,6 +120,20 @@ export function refreshTicketChanges(queryClient: QueryClient, projectId: string
   return Promise.all([...keys.values()].map((queryKey) => queryClient.invalidateQueries({ queryKey })))
 }
 
+/**
+ * Marks stale every Ticket of the Project this tab holds, with what hangs off each (comments, files, children,
+ * history). A Ticket read before the Project socket was ready may have changed in between, and the socket replays
+ * nothing on its first connection.
+ */
+export function refreshProjectTickets(queryClient: QueryClient, projectId: string): Promise<unknown> {
+  const keys = new Map<string, readonly unknown[]>()
+  for (const [, ticket] of queryClient.getQueriesData<Ticket>({ queryKey: queryKeys.all.ticket })) {
+    if (ticket?.projectId !== projectId) continue
+    for (const key of ticketQueries(queryClient, { ticketId: ticket.id })) keys.set(JSON.stringify(key), key)
+  }
+  return Promise.all([...keys.values()].map((queryKey) => queryClient.invalidateQueries({ queryKey })))
+}
+
 /** Marks everything that shows this Ticket as stale after this tab changed it. */
 export function refreshTicket(queryClient: QueryClient, ticketId: string, projectId: string): Promise<unknown> {
   return refreshTicketChanges(queryClient, projectId, [{ ticketId }])

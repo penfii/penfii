@@ -193,9 +193,14 @@ impl LostParticipation {
         base
     }
 
-    /// People whose open channels and Space list have to be read again.
-    pub fn notices(&self) -> Vec<ChangeNotice> {
+    /// People whose open channels, sockets and Space list have to be read again: everyone who lost a
+    /// membership, and `others`, the people the change may have taken out of the Project. Someone who
+    /// reached the Project's channels only through participation (a Project-members channel needs no
+    /// membership row) loses no row, yet their open screens are out of date all the same. Telling
+    /// someone who is still in costs one read of their Space and one reconnect.
+    pub fn notices(&self, others: &[Uuid]) -> Vec<ChangeNotice> {
         let mut users: Vec<Uuid> = self.cleared.iter().map(|(_, user, _)| *user).collect();
+        users.extend_from_slice(others);
         users.sort();
         users.dedup();
         users

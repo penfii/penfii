@@ -3,7 +3,7 @@ import { queryKeys } from '../../queryKeys'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Webhook, WebhookCreated } from '@penfii/contracts'
 import { api } from '../../api'
-import { Button, Dialog } from '../../design/ui'
+import { Button, Dialog, useConfirm } from '../../design/ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { useReauth } from '../identity/reauth'
 import { errorText } from '../../ui/errorText'
@@ -25,6 +25,7 @@ function ChannelWebhooks({ channelId, canIssue, onClose }: { channelId: string; 
   const { t } = useI18n()
   const queryClient = useQueryClient()
   const reauth = useReauth()
+  const { confirm, dialog: confirmDialog } = useConfirm()
   const list = useQuery({
     queryKey: queryKeys.channelWebhooks(channelId),
     queryFn: () => api.listChannelWebhooks(channelId),
@@ -68,7 +69,9 @@ function ChannelWebhooks({ channelId, canIssue, onClose }: { channelId: string; 
     })
   }
 
-  function rotate(webhook: Webhook) {
+  // Both stop the current secret at once, so whatever posts with it breaks: asked first, like revoking an invitation.
+  async function rotate(webhook: Webhook) {
+    if (!(await confirm({ title: t('channel.webhooks.rotate'), body: t('channel.webhooks.rotateConfirm', { name: webhook.name }), confirmLabel: t('channel.webhooks.rotate') }))) return
     return act(async () => {
       const created = await reauth.run(() => api.rotateWebhook(webhook.id))
       if (!created) return
@@ -77,7 +80,8 @@ function ChannelWebhooks({ channelId, canIssue, onClose }: { channelId: string; 
     })
   }
 
-  function revoke(webhook: Webhook) {
+  async function revoke(webhook: Webhook) {
+    if (!(await confirm({ title: t('channel.webhooks.revoke'), body: t('channel.webhooks.revokeConfirm', { name: webhook.name }), confirmLabel: t('channel.webhooks.revoke') }))) return
     return act(async () => {
       const revoked = await reauth.run(() => api.revokeWebhook(webhook.id))
       if (!revoked) return
@@ -150,6 +154,7 @@ function ChannelWebhooks({ channelId, canIssue, onClose }: { channelId: string; 
           </>
         )}
         {reauth.dialog}
+        {confirmDialog}
       </div>
     </Dialog>
   )

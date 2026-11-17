@@ -44,7 +44,12 @@ export const test = base.extend<Watch>({
         target.on('console', (message) => {
           if (message.type() === 'error' || message.type() === 'warning') note(`console.${message.type()}: ${message.text()}`)
         })
-        target.on('pageerror', (error) => note(`page error: ${error.message}`))
+        target.on('pageerror', (error) => {
+          // WebKit reports a fetch that a navigation cut off as "... due to access control checks"; the app's query
+          // handles the rejection. Only right after a navigation does it count as that.
+          const recentNavigation = Date.now() - lastMainNavigationAt < 2_000
+          note(recentNavigation && /due to access control checks/.test(error.message) ? `navigation cancellation: page error: ${error.message}` : `page error: ${error.message}`)
+        })
         target.on('requestfailed', (request) => {
           const reason = request.failure()?.errorText ?? 'unknown'
           const recentNavigation = Date.now() - lastMainNavigationAt < 2_000

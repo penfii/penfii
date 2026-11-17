@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.1
+
+A fix release. Penfii is still early software: back up before you upgrade.
+
+### Upgrading from 0.2.0
+
+- No database migration and no new or changed setting. Check out `v0.2.1` and rebuild with the same `docker/.env` (see [Self-hosting](docs/self-hosting.md#from-v020-to-v021)); `db-setup` finds the schema current.
+
+### Fixed
+
+- Creating or replacing an incoming webhook secret after the "Confirm it is you" step closed the webhook dialog, so the secret, shown only once, was lost. A dialog opened from inside another no longer closes its parent when it closes or when Escape is pressed.
+- Revoking an incoming webhook or replacing its secret now asks first; both stop the current secret at once.
+- A person removed from a Project (direct role removed, Team unlinked or its participation ended, removed from the Team) who read its channels only through that participation kept the channel open on screen, and messages written there were refused as "Not sent". Their sockets are now closed and their channel list read again, so the page says they no longer have access.
+- An open Ticket did not show a change made while its Project's live connection was being opened (the Board beside it did). The first connection now reads the Project's open Tickets again.
+- The header of a private Project channel counted and pictured the Project's members instead of the channel's.
+- The chat sidebar's "Move to section" menu could run past the bottom of the window when the window became shorter while it was open.
+
+### Development
+
+- End-to-end tests for several people at once on Chromium, Firefox and WebKit (`tests/multi-user.spec.ts`, opt-in), and for invitations and password reset by e-mail, recovery, a Ticket's archive and trash, webhooks, the Web Push switch and the phone layout (`tests/release-flows.spec.ts`). See [Development](docs/development.md#end-to-end-tests-clientappse2e).
+- The verification of this release: [docs/audits/v0.2.1-release-audit.md](docs/audits/v0.2.1-release-audit.md).
+
 ## 0.2.0
 
 Penfii is still early software: the HTTP API, the database schema and the settings can change between 0.x releases. Back up before you upgrade.

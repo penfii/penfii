@@ -128,6 +128,19 @@ docker run --rm --user "$(id -u):$(id -g)" --network host --ipc=host -v "$PWD":/
   -e E2E_BROWSERS=webkit -e E2E_BASE_URL=http://127.0.0.1:8080 -e HOME=/tmp mcr.microsoft.com/playwright:v1.65.0-noble npx playwright test -c apps/e2e
 ```
 
+**Several people at once.** `tests/multi-user.spec.ts` signs five people in at the same time, each in a browser context of their own and on different engines: a workspace owner who administers the Project (Chromium), a member in the private channel (Firefox), a member outside it (WebKit), a member outside the Project (WebKit) and a workspace admin outside the Project (Chromium). It checks what each of them sees, what is refused to them, and what happens when two of them act at the same moment (chat, ticket fields, title, description, a document, archive, channel membership, Project participation, sign-out). It is opt-in, needs its own accounts and all three engines, so run it in the official image:
+
+```sh
+E2E_WORKSPACE_ID=<id> apps/e2e/seed-multi-user.sh   # once: mu-owner, mu-admin, mu-member, mu-member2, mu-outsider @example.test
+docker run --rm --user "$(id -u):$(id -g)" --network host --ipc=host -v "$PWD":/work -w /work/apps/e2e -e HOME=/tmp \
+  -e E2E_MULTI_USER=1 -e E2E_BASE_URL=http://127.0.0.1:8080 mcr.microsoft.com/playwright:v1.65.0-noble \
+  npx playwright test tests/multi-user.spec.ts
+```
+
+Every action, console message, refused request and socket error is written with the person, the engine and the time to `apps/e2e/test-results/multi-user/*.jsonl` (`E2E_MU_LOG` names another file); match it against `docker compose logs core-api` by time. `E2E_MU_ENGINES=owner=webkit,member=chromium,member2=firefox` moves people to other engines, to tell an engine's problem from the application's. The findings MU-1 to MU-4 named in its comments are explained in [the v0.2.1 audit](audits/v0.2.1-release-audit.md).
+
+**Mail, recovery and the phone layout.** `tests/release-flows.spec.ts` covers what the other specs leave out: an invitation and a password reset through the mailed link, recovering a private channel nobody manages, a Ticket's archive, trash, restore and purge, a channel's incoming webhook (with the sign-in check in between), the Web Push switch, the phone layout and a menu whose trigger leaves the window. The mail tests need an SMTP catcher the stack sends to: add a [Mailpit](https://mailpit.axllent.org/) service to the stack, point `PENFII_SMTP_HOST`/`PENFII_SMTP_PORT` at it with `PENFII_SMTP_SECURITY=none`, and give the tests its HTTP API as `E2E_MAILPIT=http://127.0.0.1:8025`; without it they are skipped. The Web Push test is skipped while the stack has no VAPID key. `E2E_EMAIL_MEMBER` (a plain MEMBER) runs the read-only Channel Settings check in `channel-ticket-ux.spec.ts`.
+
 The accounts and their public password are test data (`apps/e2e/support/accounts.ts`, override with `E2E_EMAIL_A`, `E2E_EMAIL_B`, `E2E_PASSWORD`). Each test makes its own Project, channel or document, so runs can be repeated; a test fails on any console error, uncaught page error or 5xx answer it did not announce (`allowProblem`). Wait for a condition, never a fixed time.
 
 ### Repository-level

@@ -134,12 +134,17 @@ export function Dialog({
       className="dialog"
       data-presentation={presentation}
       aria-labelledby={titleId}
-      onClose={onClose}
+      // `close` and `cancel` do not bubble in the page, but React passes them on to the dialogs around this one: a
+      // dialog opened from inside another (signing in again, a confirmation) closing must not close its parent.
+      onClose={(event) => {
+        if (event.target === ref.current) onClose()
+      }}
       // A sheet closes when its dimmed backdrop is tapped (the click lands on the dialog element itself).
       onClick={(event) => {
         if (mobile && presentation === 'sheet' && event.target === ref.current) onClose()
       }}
       onCancel={(event) => {
+        if (event.target !== ref.current) return
         event.preventDefault()
         onClose()
       }}

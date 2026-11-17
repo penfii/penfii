@@ -1,5 +1,5 @@
 import type { QueryClient } from '@tanstack/react-query'
-import { isOwnEcho, refreshProject, refreshTicketChanges, type TicketChange } from './refresh'
+import { isOwnEcho, refreshProject, refreshProjectTickets, refreshTicketChanges, type TicketChange } from './refresh'
 import { queryKeys } from '../../queryKeys'
 
 /**
@@ -105,11 +105,13 @@ export function handleProjectFrame(queryClient: QueryClient, projectId: string, 
   } else if (frame.type === 'project.ready') {
     const head = typeof frame.headSeq === 'number' ? frame.headSeq : null
     if (!state.connectedBefore) {
-      // The page read its data before the socket opened, and a Sprint, Milestone or workflow change in between has no
-      // record to replay: read what the Project's screens show once more, so nothing in between is missed.
+      // The page read its data before the socket opened, and the first connection replays nothing (a Sprint, Milestone
+      // or workflow change has no record at all): read what the Project's screens and its open Tickets show once
+      // more, so nothing in between is missed.
       for (const key of [queryKeys.projectBoard(projectId), queryKeys.projectPlanning(projectId), queryKeys.projectSchedule(projectId), queryKeys.projectCalendar(projectId), queryKeys.projectWorkflow(projectId)]) {
         void queryClient.invalidateQueries({ queryKey: key })
       }
+      void refreshProjectTickets(queryClient, projectId)
     } else if (state.askedAfter === 0 && !state.rebaseline) {
       // Reconnected without a position to continue from: nothing was replayed, so read the Project again.
       void refreshProject(queryClient, projectId)

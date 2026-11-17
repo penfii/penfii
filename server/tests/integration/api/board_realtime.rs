@@ -757,3 +757,114 @@ async fn changes_no_ticket_record_carries_tell_the_board_to_read_the_project_aga
     expect_resync(&mut ws, "workflow state").await;
     live.stop();
 }
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn losing_the_project_tells_someone_who_held_no_channel_membership(pool: PgPool) {
+    // A person who reads the Project only through their role holds no channel membership row, so the
+    // memberships the removal takes are none of theirs; their open screens must still be told: the
+    // user socket closes, and the client reads its Space again when it reconnects.
+    let world = &World::new(pool).await;
+    let s = setup(world, "brl").await;
+    let live = Live::start(world, 64).await;
+    let viewer_id = user_id_of(world, "brl-viewer@penfii.test").await;
+    let mut user = open_user(&live, &s.viewer).await;
+
+    let (status, body, _) = call(
+        &live.app,
+        "DELETE",
+        &format!("/v1/projects/{}/grants/{viewer_id}", s.project),
+        Some(&world.owner_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    // A notice the user socket would pass on if it were still open, published after the removal.
+    live.changes
+        .send(ChangeNotice::Inbox { user_id: viewer_id })
+        .unwrap();
+    let user_frame = next_frame(&mut user).await;
+    assert!(
+        user_frame.is_none(),
+        "the user socket closes: {user_frame:?}"
+    );
+
+    // Opened again, the board socket is refused.
+    let mut request = format!("ws://{}/v1/ws/projects/{}", live.addr, s.project)
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("cookie", s.viewer.parse().unwrap());
+    assert!(tokio_tungstenite::connect_async(request).await.is_err());
+    live.stop();
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn losing_the_project_through_its_team_tells_the_teams_people(pool: PgPool) {
+    // The same for someone who takes part only through a Team, in each way the Team can stop
+    // giving them the Project: its participation ended, its link removed, or they left the Team.
+    let world = &World::new(pool).await;
+    let (project, _) = new_project(world, world.workspace_id, "brt").await;
+    let cookie = viewer_cookie(world, world.workspace_id, "brt-member@penfii.test").await;
+    let member = user_id_of(world, "brt-member@penfii.test").await;
+    let live = Live::start(world, 64).await;
+    let ws = world.workspace_id;
+    let owner = &world.owner_cookie;
+    let app = &live.app;
+    let run = |method: &'static str, path: String, body: Option<Value>| async move {
+        let (status, value, _) = call(app, method, &path, Some(owner), None, body).await;
+        assert!(status.is_success(), "{method} {path}: {status} {value}");
+        value
+    };
+    let team = run(
+        "POST",
+        format!("/v1/workspaces/{ws}/teams"),
+        Some(json!({"name": "Crew", "members": [{"userId": world.owner_id, "role": "MANAGER"}]})),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let join_team = format!("/v1/workspaces/{ws}/teams/{team}/members/{member}");
+    let link = format!("/v1/projects/{project}/teams/{team}");
+    let participation = format!("/v1/projects/{project}/teams/{team}/participation");
+    run("PUT", join_team.clone(), Some(json!({"role": "MEMBER"}))).await;
+    run("PUT", link.clone(), None).await;
+    run(
+        "PUT",
+        participation.clone(),
+        Some(json!({"role": "EDITOR"})),
+    )
+    .await;
+
+    let losses: [(&str, &str, String, Option<Value>); 3] = [
+        (
+            "participation ended",
+            "PUT",
+            participation.clone(),
+            Some(json!({"role": null})),
+        ),
+        ("link removed", "DELETE", link.clone(), None),
+        ("left the Team", "DELETE", join_team.clone(), None),
+    ];
+    for (what, method, path, body) in losses {
+        let mut user = open_user(&live, &cookie).await;
+        run(method, path, body).await;
+        live.changes
+            .send(ChangeNotice::Inbox { user_id: member })
+            .unwrap();
+        let frame = next_frame(&mut user).await;
+        assert!(frame.is_none(), "{what}: the user socket closes: {frame:?}");
+        // In again for the next way out.
+        run("PUT", join_team.clone(), Some(json!({"role": "MEMBER"}))).await;
+        run("PUT", link.clone(), None).await;
+        run(
+            "PUT",
+            participation.clone(),
+            Some(json!({"role": "EDITOR"})),
+        )
+        .await;
+    }
+    live.stop();
+}
