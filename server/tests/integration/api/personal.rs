@@ -1208,7 +1208,14 @@ async fn two_first_saves_of_one_box_at_once_leave_one_draft(pool: PgPool) {
     };
     let ((first, a, _), (second, b, _)) =
         tokio::join!(send(session(50), "one"), send(session(60), "two"));
-    assert!(matches!(first, StatusCode::CREATED | StatusCode::OK), "{a}");
+    // Which one the database takes first is not fixed. The older session is stored and then
+    // replaced, or, arriving after the newer one, refused as over.
+    if first == StatusCode::CONFLICT {
+        assert_eq!(a["code"], "draft_closed", "{a}");
+        assert_eq!(a["currentGeneration"], json!(session(60)), "{a}");
+    } else {
+        assert!(matches!(first, StatusCode::CREATED | StatusCode::OK), "{a}");
+    }
     assert!(
         matches!(second, StatusCode::CREATED | StatusCode::OK),
         "{b}"

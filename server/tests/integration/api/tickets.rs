@@ -2562,6 +2562,75 @@ async fn the_same_bulk_request_sent_twice_at_once_changes_each_ticket_once(pool:
 }
 
 #[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_bulk_copy_arriving_between_the_change_and_its_record_answers_with_the_record(
+    pool: PgPool,
+) {
+    let world = &World::new(pool).await;
+    let workspace_id = world.workspace_id;
+    let (project_id, _) = new_project(world, workspace_id, "Bulk window").await;
+    let (_, t) = make_ticket(world, &project_id, "p6bw-0", json!({"title":"Window"})).await;
+    let id = t["id"].as_str().unwrap().to_owned();
+    let bulk = format!("/v1/workspaces/{workspace_id}/tickets/bulk");
+    let body = json!({"ticketIds":[id],"change":{"type":"PRIORITY","priority":"URGENT"}});
+    let (s, first) = post_as(world, &world.owner_cookie, &bulk, "p6bw-key", body.clone()).await;
+    assert_eq!(s, StatusCode::OK, "{first}");
+    assert_eq!(first["succeeded"], 1, "{first}");
+    // The first copy has changed the Ticket but not yet recorded the item: hide its record, and
+    // bring it back while the second copy runs.
+    let receipt = format!("bulk-item:p6bw-key:{id}");
+    let hide = |from: String, to: String| {
+        let pool = world.pool.clone();
+        async move {
+            let moved = sqlx::query(
+                "UPDATE penfii.commands SET idempotency_key=$2 WHERE workspace_id=$3 AND idempotency_key=$1",
+            )
+            .bind(from)
+            .bind(to)
+            .bind(workspace_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+            assert_eq!(moved.rows_affected(), 1);
+        }
+    };
+    hide(receipt.clone(), format!("{receipt}:hidden")).await;
+    let recorded = async {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        // A second copy that did not wait has recorded its own (failed) answer by now; the first
+        // copy's record is the one that stands.
+        sqlx::query("DELETE FROM penfii.commands WHERE workspace_id=$1 AND idempotency_key=$2")
+            .bind(workspace_id)
+            .bind(&receipt)
+            .execute(&world.pool)
+            .await
+            .unwrap();
+        hide(format!("{receipt}:hidden"), receipt.clone()).await;
+    };
+    let ((s, second, _), ()) = tokio::join!(
+        call(
+            &world.app,
+            "POST",
+            &bulk,
+            Some(&world.owner_cookie),
+            Some("p6bw-key"),
+            Some(body),
+        ),
+        recorded
+    );
+    assert_eq!(s, StatusCode::OK, "{second}");
+    assert_eq!(
+        second, first,
+        "the second copy answers with what the first recorded"
+    );
+    let revision: i64 = sqlx::query_scalar("SELECT revision_no FROM penfii.tickets WHERE id=$1")
+        .bind(Uuid::parse_str(&id).unwrap())
+        .fetch_one(&world.pool)
+        .await
+        .unwrap();
+    assert_eq!(revision, 2, "the Ticket was changed once");
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
 async fn a_scope_over_the_cap_keeps_the_most_recently_updated_tickets_and_says_so(pool: PgPool) {
     let world = &World::new(pool).await;
     let workspace_id = world.workspace_id;

@@ -419,6 +419,63 @@ async fn change_one(
     }
 }
 
+/// What an earlier request with the same key recorded for one bulk item, if it has. This is not
+/// `platform::replay`/`finish`: the receipt is looked up in a transaction of its own that is thrown
+/// away when fresh, and written in another one after the item has run (success or failure), so a
+/// failed item is recorded too and a retry does not redo it. A receipt for another change is
+/// refused (`idempotency_conflict`), as for any command.
+async fn recorded_item(
+    pool: &PgPool,
+    workspace_id: Uuid,
+    actor_id: Uuid,
+    receipt_key: &str,
+    digest: &[u8],
+) -> Result<Option<BulkItemResult>, CoreError> {
+    let mut tx = pool.begin().await?;
+    match platform::claim(
+        &mut tx,
+        workspace_id,
+        &platform::actor_key(actor_id),
+        receipt_key,
+        "bulk.item",
+        digest,
+    )
+    .await?
+    {
+        platform::Claim::Replayed { body, .. } => {
+            tx.commit().await?;
+            serde_json::from_value::<BulkItemResult>(body)
+                .map(Some)
+                .map_err(|e| CoreError::Internal(e.to_string()))
+        }
+        platform::Claim::Fresh => {
+            tx.rollback().await?;
+            Ok(None)
+        }
+    }
+}
+
+/// [`recorded_item`], waiting a little for a concurrent copy of the request to record it.
+async fn await_recorded_item(
+    pool: &PgPool,
+    workspace_id: Uuid,
+    actor_id: Uuid,
+    receipt_key: &str,
+    digest: &[u8],
+) -> Result<Option<BulkItemResult>, CoreError> {
+    for _ in 0..BULK_RECEIPT_WAITS {
+        tokio::time::sleep(BULK_RECEIPT_WAIT).await;
+        if let Some(item) = recorded_item(pool, workspace_id, actor_id, receipt_key, digest).await?
+        {
+            return Ok(Some(item));
+        }
+    }
+    Ok(None)
+}
+
+const BULK_RECEIPT_WAITS: u32 = 40;
+const BULK_RECEIPT_WAIT: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// Applies one change to up to [`BULK_LIMIT`] Tickets. Each Ticket goes through the same command a
 /// single edit uses, in its own transaction, so permissions, Workflow transitions, dependency
 /// blocks and revision checks are never bypassed; the result lists every Ticket. A failure on one
@@ -459,32 +516,30 @@ pub async fn bulk_change(
             "bulk.item",
             &json!({"ticketId":ticket_id,"change":change_json}),
         );
-        // A repeated request returns what the first one recorded for this Ticket. This is not
-        // `platform::replay`/`finish`: each item's receipt is looked up in a transaction of its own that
-        // is thrown away when fresh, and written in another one after the item has run (success or
-        // failure), so a failed item is recorded too and a retry does not redo it.
+        // A repeated request returns what the first one recorded for this Ticket.
+        if let Some(item) =
+            recorded_item(pool, workspace_id, actor_id, &receipt_key, &digest).await?
         {
-            let mut tx = pool.begin().await?;
-            if let platform::Claim::Replayed { body, .. } = platform::claim(
-                &mut tx,
-                workspace_id,
-                &platform::actor_key(actor_id),
-                &receipt_key,
-                "bulk.item",
-                &digest,
-            )
-            .await?
-            {
-                tx.commit().await?;
-                items.push(
-                    serde_json::from_value::<BulkItemResult>(body)
-                        .map_err(|e| CoreError::Internal(e.to_string()))?,
-                );
-                continue;
-            }
-            tx.rollback().await?;
+            items.push(item);
+            continue;
         }
         let result = change_one(pool, actor_id, ticket_id, &change, &item_key).await;
+        // The same request, sent again while this one runs, changed this Ticket between this one's
+        // look at the receipt and its read of the Ticket: the command key is taken with the revision
+        // that copy saw, so this one is refused although the Ticket was changed once, as asked. That
+        // copy records the item's result right after; this one waits for it and answers with it.
+        if matches!(
+            &result,
+            Err(CoreError::Conflict {
+                code: "idempotency_conflict",
+                ..
+            })
+        ) && let Some(item) =
+            await_recorded_item(pool, workspace_id, actor_id, &receipt_key, &digest).await?
+        {
+            items.push(item);
+            continue;
+        }
         let item = match result {
             Ok((ticket, notice)) => {
                 notices.extend(notice);

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The same bulk change sent twice at once (one `Idempotency-Key`) could answer a Ticket as failed (`idempotency_conflict`) although it was changed, once, as asked. The copy that comes second now answers with what the first recorded.
+
+### Development
+
+- An integration test of two first saves of one Draft at once expected both to be stored, but the older session is rightly refused when the newer one lands first; it failed now and then in CI.
+
 ## 0.2.1
 
 A fix release. Penfii is still early software: back up before you upgrade.
