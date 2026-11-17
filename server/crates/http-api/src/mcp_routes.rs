@@ -234,14 +234,38 @@ pub struct TokenForm {
     refresh_token: Option<String>,
     scope: Option<String>,
     resource: Option<String>,
+    client_secret: Option<String>,
+    client_assertion: Option<String>,
+    client_assertion_type: Option<String>,
 }
 
 async fn token(
     State(state): State<AppState>,
     Mcp(ctx): Mcp,
+    headers: HeaderMap,
     Form(form): Form<TokenForm>,
 ) -> Response {
+    // An empty value counts as absent.
+    let present = |value: &Option<String>| value.as_deref().is_some_and(|v| !v.is_empty());
+    let header_scheme = headers.get(header::AUTHORIZATION).map(|value| {
+        // RFC 6749 §5.2: a client that tried the header gets 401 and a challenge in its scheme.
+        let scheme = value
+            .to_str()
+            .ok()
+            .and_then(|text| text.split_whitespace().next())
+            .filter(|scheme| {
+                scheme
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            });
+        scheme.unwrap_or("Basic").to_string()
+    });
+    let client_authentication = header_scheme.is_some()
+        || present(&form.client_secret)
+        || present(&form.client_assertion)
+        || present(&form.client_assertion_type);
     let request = TokenRequest {
+        client_authentication,
         grant_type: form.grant_type,
         code: form.code,
         redirect_uri: form.redirect_uri,
@@ -253,7 +277,21 @@ async fn token(
     };
     match oauth::server::token(&state.pool, &ctx.oauth, request).await {
         Ok(response) => no_store(Json(response).into_response()),
-        Err(error) => oauth_error(error),
+        Err(error) => {
+            let challenge = (error.error == "invalid_client")
+                .then_some(header_scheme)
+                .flatten()
+                .and_then(|scheme| {
+                    HeaderValue::from_str(&format!("{scheme} realm=\"penfii\"")).ok()
+                });
+            let mut response = oauth_error(error);
+            if let Some(challenge) = challenge {
+                response
+                    .headers_mut()
+                    .insert(header::WWW_AUTHENTICATE, challenge);
+            }
+            response
+        }
     }
 }
 

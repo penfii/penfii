@@ -157,6 +157,8 @@ Set `PENFII_MCP_ENABLED=1` together with a valid `PENFII_PUBLIC_URL` (`https://`
 | `PENFII_MCP_CIMD_PRIVATE_HOSTS` | none | Hosts that may serve client metadata from a private address (otherwise such addresses are refused) |
 | `PENFII_MCP_LOG_RETENTION_DAYS`, `PENFII_MCP_AUDIT_LOG_RETENTION_DAYS`, `PENFII_MCP_GRANT_RETENTION_DAYS` | 30, 365, 365 | Retention of MCP call logs (reads, changes) and revoked grants |
 
+Clients are public: they authenticate at the token endpoint with `none` and PKCE, never with a secret. A client identified by a Client ID Metadata Document (an `https://` `client_id`) is accepted when its `token_endpoint_auth_methods_supported`, or the singular `token_endpoint_auth_method` when the list is absent, includes `none`; other methods may be listed beside it (ChatGPT lists `private_key_jwt`). A document without either is taken as `none`. A token request that authenticates the client anyway is answered `401 invalid_client`. When a client is refused, the person sees "This application could not be identified" and core-api logs the reason (`WARN oauth client refused`).
+
 ### Web Push
 
 Web Push delivers four kinds of Inbox item to the browsers of the person they are for, even when Penfii is closed: mentions, direct replies, Task assignments and reminders that came due. Nothing else is pushed, quiet hours (Do Not Disturb) send nothing, and a push carries no message text and no workspace name.

@@ -140,7 +140,16 @@ pub async fn begin_authorization(
     let client = match client::resolve(pool, config, client_id).await {
         Ok(client) => client,
         Err(CoreError::Internal(message)) => return Err(CoreError::Internal(message)),
-        Err(_) => {
+        Err(error) => {
+            // The person sees a plain page (RFC 6749 §4.1.2.1: no redirect to an unknown
+            // client); the operator needs the reason.
+            let reason = match &error {
+                CoreError::Validation(message) => message.as_str(),
+                CoreError::NotFound => "unknown or disabled client",
+                _ => "client lookup failed",
+            };
+            let shown: String = client_id.chars().take(200).collect();
+            tracing::warn!(client_id = ?shown, reason, "oauth client refused (invalid_client)");
             return Ok(AuthorizeResult::Page(
                 "This application could not be identified.".into(),
             ));
@@ -493,6 +502,9 @@ pub struct TokenRequest {
     pub refresh_token: Option<String>,
     pub scope: Option<String>,
     pub resource: Option<String>,
+    /// The request carries client authentication (an `Authorization` header, `client_secret` or
+    /// `client_assertion`). Every client here uses `none`, so such a request is refused.
+    pub client_authentication: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -511,6 +523,15 @@ pub async fn token(
     config: &OAuthConfig,
     request: TokenRequest,
 ) -> Result<TokenResponse, OAuthError> {
+    // CIMD §5: a client whose method is `none` that authenticates anyway is `invalid_client`
+    // (RFC 6749 §5.2 answers it with 401).
+    if request.client_authentication {
+        return Err(OAuthError::new(
+            401,
+            "invalid_client",
+            "this server uses no client authentication (token_endpoint_auth_method none)",
+        ));
+    }
     match request.grant_type.as_deref() {
         Some("authorization_code") => authorization_code_grant(pool, config, request).await,
         Some("refresh_token") => refresh_grant(pool, config, request).await,

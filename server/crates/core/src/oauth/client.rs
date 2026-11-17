@@ -274,21 +274,96 @@ pub fn redirect_matches(registered: &[String], given: &str) -> bool {
     })
 }
 
+/// The token endpoint authentication method this server uses with every client: they are public
+/// clients and prove themselves with PKCE. The metadata advertises it as the only one.
+pub const TOKEN_AUTH_METHOD: &str = "none";
+
+/// Methods built on a shared secret, which a public document cannot hold (CIMD §4.1).
+const SHARED_SECRET_METHODS: [&str; 3] = [
+    "client_secret_basic",
+    "client_secret_post",
+    "client_secret_jwt",
+];
+
+/// JWK members that only a private or symmetric key has (RFC 7518 §6.2.2, §6.3.2, §6.4.1).
+const PRIVATE_JWK_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+
+/// The token endpoint authentication methods a document declares (CIMD §5):
+/// `token_endpoint_auth_methods_supported` when present, otherwise the singular
+/// `token_endpoint_auth_method`, otherwise `none` (never RFC 7591's `client_secret_basic`
+/// default). When both are present the singular one must be among the plural ones.
+fn declared_auth_methods(document: &Value) -> Result<Vec<&str>, &'static str> {
+    let single = match document.get("token_endpoint_auth_method") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .ok_or("token_endpoint_auth_method must be a string")?,
+        ),
+    };
+    let Some(listed) = document.get("token_endpoint_auth_methods_supported") else {
+        return Ok(vec![single.unwrap_or(TOKEN_AUTH_METHOD)]);
+    };
+    let methods = listed
+        .as_array()
+        .filter(|all| !all.is_empty())
+        .and_then(|all| all.iter().map(Value::as_str).collect::<Option<Vec<_>>>())
+        .ok_or("token_endpoint_auth_methods_supported must be a non-empty list of names")?;
+    if single.is_some_and(|single| !methods.contains(&single)) {
+        return Err(
+            "token_endpoint_auth_method must be one of token_endpoint_auth_methods_supported",
+        );
+    }
+    Ok(methods)
+}
+
 /// Checks a fetched document and returns `(name, redirect_uris)`.
+///
+/// A document may declare methods this server does not use (such as `private_key_jwt` next to
+/// `none`); the server picks `none` from them and the client is public. One that leaves `none`
+/// out names no method this server supports and is refused.
 pub fn parse_document(url: &str, document: &Value) -> Result<(String, Vec<String>), CoreError> {
     let bad = |message: &str| CoreError::validation(format!("client metadata: {message}"));
     if document.get("client_id").and_then(Value::as_str) != Some(url) {
         return Err(bad("client_id does not equal the document URL"));
     }
-    if document.get("client_secret").is_some() {
+    if document.get("client_secret").is_some() || document.get("client_secret_expires_at").is_some()
+    {
         return Err(bad("must not contain a secret"));
     }
-    if let Some(method) = document
-        .get("token_endpoint_auth_method")
-        .and_then(Value::as_str)
-        && method != "none"
+    let methods = declared_auth_methods(document).map_err(bad)?;
+    if methods
+        .iter()
+        .any(|method| SHARED_SECRET_METHODS.contains(method))
     {
-        return Err(bad("only public clients are accepted"));
+        return Err(bad(
+            "must not declare a shared-secret authentication method",
+        ));
+    }
+    if !methods.contains(&TOKEN_AUTH_METHOD) {
+        return Err(bad(
+            "declares no token endpoint authentication method this server supports (none)",
+        ));
+    }
+    let jwks = document.get("jwks").filter(|value| !value.is_null());
+    if jwks.is_some()
+        && document
+            .get("jwks_uri")
+            .is_some_and(|value| !value.is_null())
+    {
+        return Err(bad("must not hold both jwks and jwks_uri"));
+    }
+    if let Some(jwks) = jwks {
+        let keys = jwks
+            .get("keys")
+            .and_then(Value::as_array)
+            .ok_or_else(|| bad("jwks must be a JWK Set"))?;
+        if keys
+            .iter()
+            .any(|key| PRIVATE_JWK_MEMBERS.iter().any(|m| key.get(*m).is_some()))
+        {
+            return Err(bad("must not contain private key material"));
+        }
     }
     let name = document
         .get("client_name")
@@ -475,12 +550,92 @@ mod tests {
         let mut secret = ok.clone();
         secret["client_secret"] = json!("x");
         assert!(parse_document(url, &secret).is_err());
+        let mut expiry = ok.clone();
+        expiry["client_secret_expires_at"] = json!(0);
+        assert!(parse_document(url, &expiry).is_err());
         let mut jwt = ok.clone();
         jwt["token_endpoint_auth_method"] = json!("private_key_jwt");
         assert!(parse_document(url, &jwt).is_err());
         let mut scheme = ok.clone();
         scheme["redirect_uris"] = json!(["javascript:alert(1)"]);
         assert!(parse_document(url, &scheme).is_err());
+    }
+
+    /// CIMD §5: the plural list is read first, the server picks `none` from it, and the
+    /// methods it does not support are not an error.
+    #[test]
+    fn auth_methods_are_negotiated_from_the_plural_list() {
+        let url = "https://app.example/oauth/client.json";
+        let base = json!({"client_id": url, "client_name": "App", "redirect_uris": ["https://app.example/cb"]});
+        let with = |extra: Value| {
+            let mut document = base.clone();
+            for (key, value) in extra.as_object().unwrap() {
+                document[key] = value.clone();
+            }
+            parse_document(url, &document)
+        };
+        // Neither property: none, not RFC 7591's client_secret_basic.
+        assert!(with(json!({})).is_ok());
+        assert!(with(json!({"token_endpoint_auth_methods_supported": ["none"]})).is_ok());
+        // A preference this server lacks, with none among the supported ones (ChatGPT's shape).
+        let chatgpt = with(json!({
+            "token_endpoint_auth_method": "private_key_jwt",
+            "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
+            "token_endpoint_auth_signing_alg": "RS256",
+            "jwks_uri": "https://app.example/oauth/jwks.json",
+            "grant_types": ["authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:jwt-bearer"],
+        }));
+        assert!(chatgpt.is_ok(), "{chatgpt:?}");
+        assert!(
+            with(json!({"token_endpoint_auth_methods_supported": ["private_key_jwt", "none"]}))
+                .is_ok()
+        );
+        // No method this server supports.
+        for refused in [
+            json!({"token_endpoint_auth_methods_supported": ["private_key_jwt"]}),
+            json!({"token_endpoint_auth_methods_supported": ["tls_client_auth", "private_key_jwt"]}),
+            json!({"token_endpoint_auth_method": "private_key_jwt"}),
+            // The singular one must be among the plural ones.
+            json!({"token_endpoint_auth_method": "private_key_jwt", "token_endpoint_auth_methods_supported": ["none"]}),
+            // Shared secrets, alone or beside none.
+            json!({"token_endpoint_auth_method": "client_secret_basic"}),
+            json!({"token_endpoint_auth_methods_supported": ["none", "client_secret_post"]}),
+            json!({"token_endpoint_auth_method": "none", "token_endpoint_auth_methods_supported": ["none", "client_secret_jwt"]}),
+            // Malformed.
+            json!({"token_endpoint_auth_methods_supported": []}),
+            json!({"token_endpoint_auth_methods_supported": "none"}),
+            json!({"token_endpoint_auth_methods_supported": ["none", 1]}),
+            json!({"token_endpoint_auth_method": ["none"]}),
+        ] {
+            assert!(with(refused.clone()).is_err(), "{refused}");
+        }
+    }
+
+    #[test]
+    fn key_material_is_public_and_published_once() {
+        let url = "https://app.example/oauth/client.json";
+        let doc = |extra: Value| {
+            let mut document = json!({"client_id": url, "client_name": "App", "redirect_uris": ["https://app.example/cb"], "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"]});
+            for (key, value) in extra.as_object().unwrap() {
+                document[key] = value.clone();
+            }
+            parse_document(url, &document)
+        };
+        let public_key = json!({"kty": "RSA", "kid": "1", "n": "AQAB", "e": "AQAB"});
+        assert!(doc(json!({"jwks": {"keys": [public_key]}})).is_ok());
+        assert!(doc(json!({"jwks_uri": "https://app.example/jwks.json"})).is_ok());
+        assert!(
+            doc(
+                json!({"jwks": {"keys": [public_key]}, "jwks_uri": "https://app.example/jwks.json"})
+            )
+            .is_err()
+        );
+        assert!(
+            doc(json!({"jwks": {"keys": [{"kty": "RSA", "n": "AQAB", "e": "AQAB", "d": "x"}]}}))
+                .is_err()
+        );
+        assert!(doc(json!({"jwks": {"keys": [{"kty": "oct", "k": "c2VjcmV0"}]}})).is_err());
+        assert!(doc(json!({"jwks": [public_key]})).is_err());
     }
 
     #[test]

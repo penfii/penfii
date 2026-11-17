@@ -1504,6 +1504,301 @@ async fn client_metadata_documents_are_validated_and_dcr_is_public_only(pool: Pg
     )
     .await;
     assert_eq!(start.status, StatusCode::FOUND);
+    // ... through the token endpoint, with no client authentication.
+    let code = code_for(&env, id, "http://127.0.0.1:9999/cb").await;
+    let tokens = token_with(
+        &env.app,
+        &[
+            ("grant_type", "authorization_code"),
+            ("code", &code),
+            ("redirect_uri", "http://127.0.0.1:9999/cb"),
+            ("client_id", id),
+            ("code_verifier", VERIFIER),
+        ],
+        None,
+    )
+    .await;
+    assert_eq!(tokens.status, StatusCode::OK, "{:?}", tokens.body);
+}
+
+const CHATGPT: &str = "https://chatgpt.com/oauth/client.json";
+const CHATGPT_CALLBACK: &str = "https://chatgpt.com/connector_platform_oauth_redirect";
+
+/// The document ChatGPT published (2026-11): a `private_key_jwt` preference, `none` among the
+/// supported methods, a JWKS URL and a JWT bearer grant this server does not offer.
+fn chatgpt_document() -> Value {
+    json!({
+        "client_id": CHATGPT,
+        "client_uri": "https://chatgpt.com/",
+        "redirect_uris": [CHATGPT_CALLBACK],
+        "token_endpoint_auth_method": "private_key_jwt",
+        "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
+        "grant_types": ["authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:jwt-bearer"],
+        "response_types": ["code"],
+        "client_name": "ChatGPT",
+        "logo_uri": "https://persistent.oaistatic.com/sonic/misc/openai-logo.png",
+        "token_endpoint_auth_signing_alg": "RS256",
+        "jwks_uri": "https://chatgpt.com/oauth/jwks.json"
+    })
+}
+
+/// Authorize + approve `workspace:read` for any client; returns the code.
+async fn code_for(env: &Env, client: &str, redirect: &str) -> String {
+    let start = get_plain(
+        &env.app,
+        &authorize_path(
+            client,
+            redirect,
+            "workspace:read",
+            &challenge_of(VERIFIER),
+            "st-x",
+        ),
+    )
+    .await;
+    assert_eq!(start.status, StatusCode::FOUND, "{:?}", start.body);
+    let id = request_id(&start.location.unwrap());
+    let decision = api(
+        &env.app,
+        "POST",
+        &format!("/v1/oauth/requests/{id}/decision"),
+        Some(&env.owner_cookie),
+        Some(json!({"approve": true, "scopes": ["workspace:read"]})),
+    )
+    .await;
+    assert_eq!(decision.status, StatusCode::OK, "{:?}", decision.body);
+    let back = query_of(decision.body["redirectTo"].as_str().unwrap());
+    assert!(
+        decision.body["redirectTo"]
+            .as_str()
+            .unwrap()
+            .starts_with(redirect)
+    );
+    assert_eq!(back["iss"], PUBLIC);
+    back["code"].clone()
+}
+
+async fn token_with(
+    app: &axum::Router,
+    pairs: &[(&str, &str)],
+    authorization: Option<&str>,
+) -> Reply {
+    let body = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(pairs)
+        .finish();
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri("/oauth/token")
+        .header("content-type", "application/x-www-form-urlencoded");
+    if let Some(value) = authorization {
+        builder = builder.header("authorization", value);
+    }
+    send(app, builder.body(Body::from(body)).unwrap()).await
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_document_listing_none_among_its_methods_connects_as_a_public_client(pool: PgPool) {
+    let env = setup(pool).await;
+    env.clients
+        .0
+        .lock()
+        .unwrap()
+        .insert(CHATGPT.into(), chatgpt_document());
+    let code = code_for(&env, CHATGPT, CHATGPT_CALLBACK).await;
+    let (name, kind): (String, String) =
+        sqlx::query_as("SELECT client_name, kind FROM penfii.oauth_clients WHERE client_id = $1")
+            .bind(CHATGPT)
+            .fetch_one(&env.pool)
+            .await
+            .unwrap();
+    assert_eq!((name.as_str(), kind.as_str()), ("ChatGPT", "cimd"));
+    let resource = format!("{PUBLIC}/mcp");
+    let exchange_pairs = [
+        ("grant_type", "authorization_code"),
+        ("code", code.as_str()),
+        ("redirect_uri", CHATGPT_CALLBACK),
+        ("client_id", CHATGPT),
+        ("code_verifier", VERIFIER),
+        ("resource", resource.as_str()),
+    ];
+
+    // The server chose `none`: client authentication in any form is invalid_client, and the
+    // refusal leaves the code unused.
+    let with_param = |name: &'static str, value: &'static str| {
+        let mut pairs = exchange_pairs.to_vec();
+        pairs.push((name, value));
+        pairs
+    };
+    for pairs in [
+        with_param("client_secret", "s3cret"),
+        with_param("client_assertion", "eyJhbGciOiJSUzI1NiJ9.e30.sig"),
+        with_param(
+            "client_assertion_type",
+            "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+        ),
+    ] {
+        let refused = token_with(&env.app, &pairs, None).await;
+        assert_eq!(refused.status, StatusCode::UNAUTHORIZED, "{pairs:?}");
+        assert_eq!(refused.body["error"], "invalid_client");
+        assert!(refused.header("www-authenticate").is_none());
+        assert_eq!(refused.header("cache-control"), Some("no-store"));
+    }
+    let basic = token_with(
+        &env.app,
+        &exchange_pairs,
+        Some("Basic Y2hhdGdwdDpzM2NyZXQ="),
+    )
+    .await;
+    assert_eq!(basic.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(basic.body["error"], "invalid_client");
+    assert_eq!(
+        basic.header("www-authenticate"),
+        Some("Basic realm=\"penfii\"")
+    );
+    let odd = token_with(&env.app, &exchange_pairs, Some("Weird\"scheme x")).await;
+    assert_eq!(
+        odd.header("www-authenticate"),
+        Some("Basic realm=\"penfii\"")
+    );
+
+    // An empty client_secret is no authentication.
+    let tokens = token_with(&env.app, &with_param("client_secret", ""), None).await;
+    assert_eq!(tokens.status, StatusCode::OK, "{:?}", tokens.body);
+    assert_eq!(tokens.body["scope"], "workspace:read");
+    let access = tokens.body["access_token"].as_str().unwrap();
+    let refresh = tokens.body["refresh_token"].as_str().unwrap();
+    assert_eq!(modern_list(&env.app, access).await.status, StatusCode::OK);
+
+    // Refresh follows the same rule.
+    let refresh_pairs = [
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh),
+        ("client_id", CHATGPT),
+        ("resource", resource.as_str()),
+    ];
+    let mut assertion = refresh_pairs.to_vec();
+    assertion.push(("client_assertion", "eyJhbGciOiJSUzI1NiJ9.e30.sig"));
+    let refused = token_with(&env.app, &assertion, None).await;
+    assert_eq!(refused.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(refused.body["error"], "invalid_client");
+    let rotated = token_with(&env.app, &refresh_pairs, None).await;
+    assert_eq!(
+        rotated.status,
+        StatusCode::OK,
+        "the refused try did not use the token: {:?}",
+        rotated.body
+    );
+    let access2 = rotated.body["access_token"].as_str().unwrap();
+    assert_eq!(modern_list(&env.app, access2).await.status, StatusCode::OK);
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn client_documents_are_checked_for_a_method_this_server_supports(pool: PgPool) {
+    let env = setup(pool).await;
+    let cb = "https://docs.example/callback";
+    let doc = |url: &str, extra: Value| {
+        let mut document = json!({"client_id": url, "client_name": "Doc", "redirect_uris": [cb, "http://127.0.0.1/callback"]});
+        for (key, value) in extra.as_object().unwrap() {
+            document[key] = value.clone();
+        }
+        document
+    };
+    let cases = [
+        // Accepted: what Claude Code and Codex publish, no method at all, the plural list alone.
+        (
+            "claude",
+            json!({"token_endpoint_auth_method": "none", "grant_types": ["authorization_code", "refresh_token"]}),
+            true,
+        ),
+        (
+            "codex",
+            json!({"application_type": "native", "token_endpoint_auth_method": "none", "token_endpoint_auth_methods_supported": ["none"]}),
+            true,
+        ),
+        ("bare", json!({}), true),
+        (
+            "plural",
+            json!({"token_endpoint_auth_methods_supported": ["private_key_jwt", "none"], "jwks_uri": "https://docs.example/jwks.json"}),
+            true,
+        ),
+        // Refused: no supported method, a contradiction, a shared secret, two key sources.
+        (
+            "jwt-only",
+            json!({"token_endpoint_auth_methods_supported": ["private_key_jwt"], "jwks_uri": "https://docs.example/jwks.json"}),
+            false,
+        ),
+        (
+            "jwt-single",
+            json!({"token_endpoint_auth_method": "private_key_jwt"}),
+            false,
+        ),
+        (
+            "mismatch",
+            json!({"token_endpoint_auth_method": "private_key_jwt", "token_endpoint_auth_methods_supported": ["none"]}),
+            false,
+        ),
+        (
+            "secret-listed",
+            json!({"token_endpoint_auth_methods_supported": ["none", "client_secret_basic"]}),
+            false,
+        ),
+        (
+            "secret-expiry",
+            json!({"token_endpoint_auth_method": "none", "client_secret_expires_at": 0}),
+            false,
+        ),
+        (
+            "two-keys",
+            json!({"token_endpoint_auth_methods_supported": ["none", "private_key_jwt"], "jwks_uri": "https://docs.example/jwks.json", "jwks": {"keys": []}}),
+            false,
+        ),
+        (
+            "private-key",
+            json!({"token_endpoint_auth_methods_supported": ["none", "private_key_jwt"], "jwks": {"keys": [{"kty": "EC", "crv": "P-256", "x": "a", "y": "b", "d": "c"}]}}),
+            false,
+        ),
+    ];
+    for (name, extra, accepted) in cases {
+        let url = format!("https://docs.example/{name}/client.json");
+        env.clients
+            .0
+            .lock()
+            .unwrap()
+            .insert(url.clone(), doc(&url, extra));
+        let start = get_plain(
+            &env.app,
+            &authorize_path(&url, cb, "workspace:read", &challenge_of(VERIFIER), "s"),
+        )
+        .await;
+        let stored: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM penfii.oauth_clients WHERE client_id = $1")
+                .bind(&url)
+                .fetch_one(&env.pool)
+                .await
+                .unwrap();
+        if accepted {
+            assert_eq!(start.status, StatusCode::FOUND, "{name}: {:?}", start.body);
+            assert_eq!(stored, 1, "{name}");
+        } else {
+            // A plain page, never a redirect to the client, and nothing stored.
+            assert_eq!(start.status, StatusCode::BAD_REQUEST, "{name}");
+            assert!(start.location.is_none(), "{name}");
+            assert_eq!(stored, 0, "{name}");
+        }
+    }
+    // A loopback client (the Claude Code shape) still finishes with no client authentication.
+    let url = "https://docs.example/claude/client.json";
+    let start = get_plain(
+        &env.app,
+        &authorize_path(
+            url,
+            "http://127.0.0.1:43123/callback",
+            "workspace:read",
+            &challenge_of(VERIFIER),
+            "s",
+        ),
+    )
+    .await;
+    assert_eq!(start.status, StatusCode::FOUND, "{:?}", start.body);
 }
 
 #[sqlx::test(migrator = "crate::common::GUARD")]

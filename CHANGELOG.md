@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- An MCP client whose Client ID Metadata Document prefers a token endpoint authentication method Penfii lacks, but lists `none` among the ones it supports (ChatGPT: `private_key_jwt` preferred, `none` supported), was refused with "This application could not be identified". As the CIMD draft asks, the methods now come from `token_endpoint_auth_methods_supported` when it is present, Penfii picks `none` from them, and the client connects as a public client with PKCE. A document that leaves `none` out, whose singular method is not among its listed ones, that names a shared-secret method or holds `client_secret_expires_at`, both `jwks` and `jwks_uri`, or private key material is refused.
+- A token request that authenticates the client (an `Authorization` header, `client_secret` or `client_assertion`) is answered `401 invalid_client`; every client here uses `none`. Before, the credential was ignored.
+- A client refused at `/oauth/authorize` is logged (`WARN oauth client refused`) with the reason; before, the log showed only the `400`.
+
 ## 0.2.2
 
 A fix release. Penfii is still early software: back up before you upgrade.
