@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.2.2
+
+A fix release. Penfii is still early software: back up before you upgrade.
+
+### Upgrading from 0.2.1 or 0.2.0
+
+- No database migration and no new or changed setting. Check out `v0.2.2` and rebuild with the same `docker/.env` (see [Self-hosting](docs/self-hosting.md#from-v020-or-v021-to-v022)); `db-setup` finds the schema current.
 
 ### Fixed
 
@@ -16,7 +22,7 @@ A fix release. Penfii is still early software: back up before you upgrade.
 
 ### Upgrading from 0.2.0
 
-- No database migration and no new or changed setting. Check out `v0.2.1` and rebuild with the same `docker/.env` (see [Self-hosting](docs/self-hosting.md#from-v020-to-v021)); `db-setup` finds the schema current.
+- No database migration and no new or changed setting. Check out `v0.2.1` and rebuild with the same `docker/.env` (see [Self-hosting](docs/self-hosting.md#from-v020-or-v021-to-v022)); `db-setup` finds the schema current.
 
 ### Fixed
 

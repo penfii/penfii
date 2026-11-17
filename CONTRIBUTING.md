@@ -8,7 +8,7 @@ Please read the [Code of Conduct](CODE_OF_CONDUCT.md). **Security problems are r
 
 - For a bug, search the existing issues first and use the bug report form; include the steps to reproduce it. For the web app, include the browser and the signed-in role.
 - For a new feature or a larger change, open an issue and describe the problem first. Penfii is small and opinionated; a discussion saves you from writing code that cannot be merged.
-- The project is at **v0.2.1**, an early release. Behavior, the HTTP API and the database schema can change; say so in your pull request if you change one of them.
+- The project is at **v0.2.2**, an early release. Behavior, the HTTP API and the database schema can change; say so in your pull request if you change one of them.
 
 ## Set up
 
