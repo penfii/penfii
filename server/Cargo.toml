@@ -51,7 +51,7 @@ p256 = { version = "0.14", features = ["ecdh", "pkcs8"] }
 tokio-tungstenite = "0.29"
 # SMTP for invitation and password-reset mail. rustls with the system roots only: no native-tls/openssl/boring backend,
 # and nothing that turns certificate or hostname checks off is enabled or used.
-lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls", "ring", "rustls-native-certs"] }
+lettre = { version = "0.11.24", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls", "ring", "rustls-native-certs"] }
 
 # web-push-native with p256 0.14 (no crypto-bigint 0.5, RUSTSEC-2026-0387); see vendor/web-push-native/README.md.
 [patch.crates-io]

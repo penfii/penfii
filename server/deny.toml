@@ -12,6 +12,8 @@ ignore = [
     { id = "RUSTSEC-2023-0071", reason = "rsa (Marvin timing attack on private-key operations) is only a dev-dependency of the tests, which use it to sign tokens for fake OpenID providers; it is not in core-api, admin-cli or any shipped crate. No fixed release exists." },
     { id = "RUSTSEC-2026-0194", reason = "quick-xml (quadratic duplicate-attribute check) comes in through object_store, which parses only responses of the configured S3 endpoint, a store the operator runs. The fixed quick-xml 0.41 needs object_store 0.14, which needs reqwest 0.13; ends with that upgrade." },
     { id = "RUSTSEC-2026-0195", reason = "quick-xml (NsReader namespace allocation) comes in through object_store; same scope and end as RUSTSEC-2026-0194." },
+    { id = "RUSTSEC-2026-0542", reason = "humantime is unmaintained and comes in only through object_store; it is an advisory about upkeep, not a vulnerability, and has no maintained release to move to. Ends when object_store drops it." },
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained (no vulnerability, no fixed release). It is the date type of the whole server and of sqlx and the API contracts; replacing it (jiff or time) is a project-wide migration of its own, not part of a dependency update. Ends with that migration." },
     { id = "RUSTSEC-2026-0215", reason = "smallstr is unmaintained and comes in through yrs (co-editing); it is an advisory about upkeep, not a vulnerability. Ends when yrs drops it." },
 ]
 
