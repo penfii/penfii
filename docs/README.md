@@ -6,7 +6,7 @@ Penfii is at v0.3.0, an early release. These documents describe the repository a
 
 | Page | What it covers |
 |---|---|
-| [Self-hosting](self-hosting.md) | Requirements, installing with Docker Compose, the first account, where the data lives, backups, TLS, the optional MCP gateway |
+| [Self-hosting](self-hosting.md) | Requirements, installing with Docker Compose, the first account, where the data lives, backups, TLS, the optional MCP gateway, and [upgrades](self-hosting.md#updating) |
 | [Configuration](configuration.md) | The `docker/.env` file and the full reference of server environment variables |
 | [Operations](operations.md) | `admin-cli` commands, health checks, the search index, failed event deliveries |
 | [Known limitations](known-limitations.md) | What is missing or not yet safe to rely on |
@@ -29,7 +29,6 @@ Penfii is at v0.3.0, an early release. These documents describe the repository a
 
 These are planned and are not covered anywhere yet:
 
-- An upgrade procedure between releases.
 - A reference for the HTTP API beyond [`server/api/openapi.json`](../server/api/openapi.json).
 - End-user documentation for the web app.
 - A documented release process. Changes per release are listed in the [changelog](../CHANGELOG.md).

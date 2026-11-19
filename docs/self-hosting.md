@@ -6,7 +6,7 @@ Penfii is at v0.3.0, an early release: read [Known limitations](known-limitation
 
 ## What you need
 
-- Docker with Compose v2.
+- Git and Docker with Compose v2.
 - Memory: OpenSearch runs with a 512 MB Java heap. On a nearly empty instance its container used about 1.4 GiB, so plan for a host with 4 GiB or more for the whole stack. These are observations from a development instance, not a sizing guide.
 - On Linux hosts, OpenSearch's own documentation asks for `vm.max_map_count=262144` for production use.
 - Time for the first start: it compiles the server in release mode and builds the web app, which takes several minutes. Later starts reuse the Docker cache.
@@ -14,7 +14,7 @@ Penfii is at v0.3.0, an early release: read [Known limitations](known-limitation
 ## Install
 
 ```sh
-git clone https://git.manglix.com/penfii/penfii.git
+git clone https://github.com/penfii/penfii.git
 cd penfii
 git checkout v0.3.0      # a release tag; leave this out to run the latest commit of the default branch
 cd docker
@@ -31,7 +31,7 @@ Then build and start:
 
 ```sh
 docker compose up -d --build
-docker compose ps        # every service should become "healthy"
+docker compose ps --all  # long-running services should be healthy; db-setup should exit with code 0
 ```
 
 Compose refuses to start and names the variable when a required value is missing from `.env`.
@@ -45,7 +45,7 @@ docker compose run --rm admin-cli bootstrap \
   --email owner@example.com --display-name Owner --workspace-name Penfii --time-zone Asia/Seoul
 ```
 
-The command asks for the password without showing it (and again to confirm). In a script, pipe it in instead: `printf '%s' "$PW" | docker compose run --rm -T admin-cli bootstrap ... --password-stdin`. Avoid `--password <value>`: it stays in the shell history and the process list. A password must be 15 to 128 characters and must not be a known weak password. `bootstrap` refuses to run when any user already exists.
+The command asks for the password without showing it (and again to confirm). In a script, pipe it in instead: `printf '%s' "$PW" | docker compose run --rm -T admin-cli bootstrap ... --password-stdin`. Avoid `--password <value>`: it stays in the shell history and the process list. Use 15 to 128 characters and avoid known weak passwords. `bootstrap` refuses to run when any user already exists.
 
 ### Adding other people
 
@@ -64,7 +64,7 @@ Health probes, through the web container:
 
 ```sh
 curl http://localhost:8080/healthz     # liveness
-curl http://localhost:8080/readyz      # readiness: PostgreSQL and search
+curl http://localhost:8080/readyz      # readiness: PostgreSQL, search, and background workers
 ```
 
 ## Where the data lives

@@ -1,64 +1,109 @@
 # Penfii
 
-Penfii is a self-hosted workspace that keeps **chat, projects and tickets, and documents** in one place, under one permission model.
+Penfii is an open-source, self-hosted workspace for team chat, projects, tickets, and documentation. Turn a conversation into a ticket, track it on a project board, and record the decision in a document linked to the ticket so teammates can find the context later.
 
-> **Status: v0.3.0, an early release.** Penfii is early software. The HTTP API, the database schema and the settings can still change between 0.x releases. Read the [changelog](CHANGELOG.md) before you upgrade. Read [Known limitations](docs/known-limitations.md) before you run it for other people.
+[Quick start](#quick-start) · [Product screenshots](#product-screenshots) · [Self-hosting guide](docs/self-hosting.md) · [Contributing](CONTRIBUTING.md)
 
-## What it does
+![Harborline Beta project board with assigned tickets across Todo, In Progress, Done, and Canceled](docs/assets/screenshots/project-board.png)
 
-- **Chat**: public and private channels, direct messages, threads, reactions, read state, drafts, file attachments (S3-compatible storage), rich text.
-- **Projects and tickets**: workflow states, Epic / Task / Subtask hierarchy, Board / List / Table views and saved views, labels, dependencies, Sprints, Milestones, estimates and schedules, a timeline, revision history with restore, archive (also when a Sprint is completed), a trash with administrative purge.
-- **Docs**: a page tree, saved versions with restore, templates, comments, and references between pages and tickets.
-- **Search** over messages, tickets, docs and files on OpenSearch with the Korean analyzer (`nori`). Results are re-checked against PostgreSQL permissions before they are shown.
-- **Attention**: Inbox, Watch, Later, Reminders and notification preferences.
-- **Sign-in**: password, plus optional Google, Microsoft, GitHub and generic OIDC providers. People join a workspace by invitation.
-- **MCP gateway** (off by default): an OAuth authorization server and an MCP endpoint so AI clients can act as a person, under a per-workspace policy and with an audit trail.
-- **Administration**: members and roles, invitations, account disabling, team membership, an audit log.
+*The Harborline Beta project board in Penfii v0.3.0, using a fictional ferry-app launch.*
 
-The server decides what each person may see and do, from PostgreSQL, on every request. The web client only hides what a role cannot use.
+## Why Penfii?
 
-## Repository layout
+- **Keep the context with the work.** Create tickets from chat messages, link tickets and documents, and search across the workspace when you need to pick up where someone left off.
+- **Manage access across one workspace.** Workspace roles and resource membership determine who can see or change things. The server enforces those permissions and rechecks search results before returning them.
+- **Run it on your own infrastructure.** You choose where Penfii runs and manage its database, file storage, and backups.
 
-| Path | Contents |
-|---|---|
-| [`server/`](server) | The Rust server: HTTP API, WebSockets, background workers, and the `admin-cli` operator tool. `server/api/openapi.json` is the API description. |
-| [`client/`](client) | The web app (React, TypeScript, Vite), organized as an npm workspace of `apps/` and `packages/`. |
-| [`database/`](database) | The PostgreSQL schema as SQL migrations (`database/migrations`). They are compiled into the server and applied by `admin-cli migrate` (in the Compose stack, the one-shot `db-setup` service); core-api only checks them. |
-| [`docker/`](docker) | The Docker Compose self-hosting stack and the Dockerfiles for the server, the web app and OpenSearch. |
-| [`docs/`](docs) | Documentation. |
-| [`.github/`](.github) | CI, Dependabot, issue forms and the pull request template. |
+## What you can do
 
-## Quick start (self-hosting)
+| Area | What it helps you do |
+| --- | --- |
+| Chat | Discuss work in public or private channels, send direct messages, and keep replies in threads. |
+| Projects and tickets | Organize work into epics, tasks, and subtasks. Track progress on boards and tables, plan sprints and milestones, and see dates on a timeline or calendar. |
+| Documents | Organize team knowledge in a page tree, start from templates, comment on pages, and restore saved versions. |
+| Search and follow-up | Search messages, tickets, and documents, and find files by filename. Use Inbox, Watch, Later, and Reminders to keep up with work you care about. |
 
-You need Docker with Compose v2 and a host with at least 4 GiB of memory. There are no published images, so Compose builds them from this checkout; the first start takes several minutes.
+## Product screenshots
 
-```sh
-git clone https://git.manglix.com/penfii/penfii.git
-cd penfii/docker
-cp .env.example .env     # replace every CHANGE_ME, set PENFII_PUBLIC_URL
-docker compose up -d --build
-docker compose run --rm admin-cli bootstrap \
-  --email owner@example.com --display-name Owner --workspace-name Penfii --time-zone Asia/Seoul
-```
+<details>
+<summary>Follow the Harborline team from chat to the launch plan</summary>
 
-The command asks for the owner's password (15 to 128 characters; it is not shown on screen). For a script, pipe it in with `--password-stdin` instead; do not put it on the command line.
+**Workspace chat.** The team discusses service alerts in a project channel and works through the wording in a thread.
 
-Then open <http://localhost:8080> and sign in. The full guide, including data, backups, TLS and upgrades, is in [docs/self-hosting.md](docs/self-hosting.md).
+![Harborline launch channel with four team members' messages and a two-reply thread open](docs/assets/screenshots/workspace-chat.png)
 
-## Documentation
+**Ticket detail.** The service-alert ticket shows acceptance criteria, a link to the launch plan, and its place in the epic and subtask hierarchy.
 
-See [docs/README.md](docs/README.md) for the index:
+![Service-alert ticket open beside the board, with acceptance criteria, its parent epic, and two subtasks](docs/assets/screenshots/ticket-detail.png)
 
-- [Self-hosting](docs/self-hosting.md): install, start, back up, put a TLS proxy in front.
-- [Configuration](docs/configuration.md): every setting.
-- [Operations](docs/operations.md): `admin-cli`, search index, health checks.
-- [Architecture](docs/architecture.md): how the pieces fit together.
-- [Development](docs/development.md): run it locally, run the checks, change the schema or the API.
-- [Known limitations](docs/known-limitations.md).
-- [Changelog](CHANGELOG.md).
+**Timeline.** The Gantt view shows scheduled work, a dependency, and the date the team plans to open the beta.
 
-## Contributing, security and license
+![Harborline Beta Gantt chart with scheduled tickets, a dependency, and a November 27 launch milestone](docs/assets/screenshots/project-timeline.png)
 
-- Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).
-- Report vulnerabilities privately: see [SECURITY.md](SECURITY.md). Do not open a public issue for them.
-- Copyright © 2026 Penfii contributors. Penfii is licensed under the **GNU General Public License v3.0 only** (`GPL-3.0-only`); see [LICENSE](LICENSE). Third-party components and their licenses are listed in [server/THIRD-PARTY-NOTICES.md](server/THIRD-PARTY-NOTICES.md) (Rust crates) and [client/THIRD-PARTY-NOTICES.md](client/THIRD-PARTY-NOTICES.md) (npm packages).
+**Documentation.** The launch plan links to the tickets for the rehearsal, rider invites, and service alerts.
+
+![Versioned Harborline launch plan with a page tree, section outline, and links to three tickets](docs/assets/screenshots/project-docs.png)
+
+</details>
+
+## Connect an AI client with MCP
+
+The optional Model Context Protocol (MCP) gateway lets compatible AI clients perform supported actions, such as creating a ticket, on behalf of a person who approves the connection in their browser. The gateway checks that person's existing permissions and the workspace's MCP policy, and logs tool calls. A workspace can allow supported writes, restrict access to reads, or close MCP access.
+
+MCP is **off by default**. To enable it, set `PENFII_MCP_ENABLED=1` and configure `PENFII_PUBLIC_URL` with HTTPS, or HTTP on `localhost` or `127.0.0.1` for local use. Clients connect to `/mcp` on that origin and use OAuth with PKCE. Dynamic client registration is a separate setting. See the [MCP setup guide](docs/self-hosting.md#the-mcp-gateway-optional) and [configuration reference](docs/configuration.md#mcp-gateway) for client requirements and policy defaults.
+
+## Quick start
+
+You need Git and Docker with Compose v2. Plan for at least 4 GiB of host memory. Docker Compose is the supported deployment method. It builds Penfii from source, so the first start takes several minutes. There are currently no published Penfii container images.
+
+1. Clone the repository and check out the `v0.3.0` release tag.
+
+   ```sh
+   git clone --branch v0.3.0 https://github.com/penfii/penfii.git
+   cd penfii/docker
+   cp .env.example .env
+   ```
+
+2. Edit the `.env` file you just copied and replace every `CHANGE_ME`. The database owner and runtime passwords must use only letters and digits. Keep `PENFII_PUBLIC_URL=http://localhost:8080` for a local start. See the [installation guide](docs/self-hosting.md#install) for the full settings, then build the stack.
+
+   ```sh
+   docker compose up -d --build
+   ```
+
+3. Create the first workspace and its owner's account. Replace the example email and time zone with your own.
+
+   ```sh
+   docker compose run --rm admin-cli bootstrap \
+     --email owner@example.com --display-name Owner --workspace-name Penfii --time-zone Asia/Seoul
+   ```
+
+   The command prompts for a password and confirmation without displaying either. Use 15 to 128 characters and avoid known weak passwords. For automation, pipe the password in with `--password-stdin` and `docker compose run -T` to keep it out of the command line.
+
+4. Open <http://localhost:8080> and sign in. Try creating a project and a ticket, then search for the ticket by title. Add teammates by invitation from Administration.
+
+Before opening the instance to others, follow the [network and TLS guide](docs/self-hosting.md#network-and-tls). Keep the bundled OpenSearch service internal because its security plugin is disabled. Back up both [PostgreSQL and the file store](docs/self-hosting.md#backup).
+
+## Project status and upgrades
+
+**v0.3.0 is an early release.** The API, database schema, and settings may change between 0.x releases. Back up before upgrading and check the [upgrade instructions](docs/self-hosting.md#updating) and [changelog](CHANGELOG.md) for your starting version. The web editor saves documents explicitly and has no live co-editing. Run a single API instance for live updates. See [known limitations](docs/known-limitations.md) before hosting Penfii for a team.
+
+## Architecture and documentation
+
+The React and TypeScript web app talks to a Rust API. PostgreSQL holds workspace data and permissions, OpenSearch indexes workspace content, and MinIO provides S3-compatible file storage in the Compose stack. The stack applies database migrations through the operator CLI before starting the API.
+
+| Path | What you'll find |
+| --- | --- |
+| [`server/`](server) | HTTP API, WebSockets, background workers, [OpenAPI description](server/api/openapi.json), and the `admin-cli` operator tool. |
+| [`client/`](client) | Web app and shared npm packages. |
+| [`database/`](database) | PostgreSQL migrations. |
+| [`docker/`](docker) | Compose stack and Dockerfiles. |
+
+The [documentation index](docs/README.md) links to the [configuration reference](docs/configuration.md), [operator guide](docs/operations.md), [architecture overview](docs/architecture.md), and [development guide](docs/development.md).
+
+## Contributing, security, and license
+
+- [Report a bug or suggest an improvement](https://github.com/penfii/penfii/issues/new/choose) using the matching issue form.
+- Code and documentation pull requests are welcome. See the [contribution guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md).
+- Report vulnerabilities privately using the [security policy](SECURITY.md).
+
+Copyright © 2026 Penfii contributors. Penfii is licensed under the [GNU General Public License v3.0 only](LICENSE) (`GPL-3.0-only`). Third-party licenses are listed in the [server notices](server/THIRD-PARTY-NOTICES.md) and [client notices](client/THIRD-PARTY-NOTICES.md).
