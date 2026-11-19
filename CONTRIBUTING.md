@@ -1,12 +1,12 @@
 # Contributing to Penfii
 
-Thank you for helping. This guide is short on purpose; if something is unclear, open an issue and ask.
+Thank you for helping. This guide is short on purpose; if something is unclear, [open an issue](https://github.com/penfii/penfii/issues/new/choose) and ask.
 
 Please read the [Code of Conduct](CODE_OF_CONDUCT.md). **Security problems are reported privately, see [SECURITY.md](SECURITY.md); do not open a public issue for them.**
 
 ## Before you start
 
-- For a bug, search the existing issues first and use the bug report form; include the steps to reproduce it. For the web app, include the browser and the signed-in role.
+- For a bug, search the [existing issues](https://github.com/penfii/penfii/issues) first and use the bug report form; include the steps to reproduce it. For the web app, include the browser and the signed-in role.
 - For a new feature or a larger change, open an issue and describe the problem first. Penfii is small and opinionated; a discussion saves you from writing code that cannot be merged.
 - The project is at **v0.3.0**, an early release. Behavior, the HTTP API and the database schema can change; say so in your pull request if you change one of them.
 
