@@ -16,7 +16,7 @@ base64 = { workspace = true }
 chrono = { workspace = true }
 bytes = { workspace = true }
 futures-util = { workspace = true }
-getrandom = "0.3"
+getrandom = "0.4"
 hex = { workspace = true }
 http = { workspace = true }
 jsonwebtoken = { workspace = true }
