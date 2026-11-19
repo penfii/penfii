@@ -1,9 +1,28 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+A feature release. Penfii is still early software: back up before you upgrade.
+
+### Upgrading from 0.2.2, 0.2.1 or 0.2.0
+
+- No database migration and no new or changed setting. Check out `v0.3.0` and rebuild with the same `docker/.env` (see [Self-hosting](docs/self-hosting.md#from-v020-v021-or-v022-to-v030)); `db-setup` finds the schema current.
+- An MCP client that sends a client credential to the token endpoint is now refused with `401 invalid_client` (see Fixed); before, the credential was ignored.
+- A Ticket whose parent is archived can no longer be moved to a State that is not Completed or Canceled: the request is refused with `409 parent_archived`. Unarchive the parent first.
+
+### Added
+
+- Bulk archive from the Board and the Table: Board columns have a three-state check, the bar says how many of the chosen Tickets can really be archived and why the others cannot, and archiving asks first and can be undone. The bulk change `ARCHIVE` takes an optional `onlyFinished`; with it, a Ticket that is no longer Completed or Canceled when its turn comes is refused for that Ticket alone (`not_finished`), and the rest are archived. Without it the bulk archive behaves as before.
+- A month calendar in the Project Timeline beside the Gantt. A due date is a flag on its day; the planned period is a named bar shown on request. Crowded days list the rest behind More, a phone gets a day-by-day list, and Tasks and Subtasks with neither a due date nor a drawable plan are listed under No date yet, following the same filter as the month. The calendar is a table with weekday headers and a full date for screen readers in every day cell.
+- Gantt and Calendar share one day in the address (`date=YYYY-MM-DD`); switching keeps the place, and the Gantt writes back the day in its centre once it stops moving. An old `month=` link still opens its month.
+- My projects (the default Projects page, favorites first), All projects with search and a participation filter, and All teams. A Project switcher on the Project name keeps the section; on a phone it shows as a chip.
+- From a member card or a Team page, the Team can be found in the org chart. Member search keeps its text when going back.
 
 ### Changed
 
+- The Work List is now the Table's compact density. Layout, density and columns are each person's own display, kept per account in this browser, and no longer mark a shared View as changed.
+- The Projects navigation shows shortcuts and favorites instead of every Project and Team; the Teams navigation puts the org chart, all Teams and all members above the person's own Teams.
+- A parent's panel and child list say how many of its children are open again after it was completed. Reopening a child never changes the parent.
 - Creating a ticket keeps what was typed: closing the panel (Esc, Close, Cancel, Back) keeps a draft in this browser for 14 days, per person, Workspace, Project and where Create was opened, with "Reopen" in the notice; opening the same Create again restores it, with "Discard draft". Attachments are not kept, so closing with files attached asks first. A ticket made from a Project screen opens at once; one made from a parent or a chat message is a press away in a notice.
 - The profile says what is not saved yet: changed fields are marked, a save bar counts them (fixed to the bottom of the screen on a phone), and leaving with changes asks "Keep editing / Discard and leave / Save and leave". A profile changed elsewhere (the status menu, a photo, another device) no longer replaces what is being typed; the same field changed on both sides shows both values, and Save reads the profile again first and does not overwrite a newer value silently.
 - Deleting a document says what goes with it before Delete is enabled: the subpages deleted with it, the ones kept (and moved up) because they cannot be managed, and that a deleted document cannot be restored. Nothing is deleted when that cannot be checked or when the structure changed since; the result notice counts what was really deleted.
@@ -17,6 +36,13 @@
 - An MCP client whose Client ID Metadata Document prefers a token endpoint authentication method Penfii lacks, but lists `none` among the ones it supports (ChatGPT: `private_key_jwt` preferred, `none` supported), was refused with "This application could not be identified". As the CIMD draft asks, the methods now come from `token_endpoint_auth_methods_supported` when it is present, Penfii picks `none` from them, and the client connects as a public client with PKCE. A document that leaves `none` out, whose singular method is not among its listed ones, that names a shared-secret method or holds `client_secret_expires_at`, both `jwks` and `jwks_uri`, or private key material is refused.
 - A token request that authenticates the client (an `Authorization` header, `client_secret` or `client_assertion`) is answered `401 invalid_client`; every client here uses `none`. Before, the credential was ignored.
 - A client refused at `/oauth/authorize` is logged (`WARN oauth client refused`) with the reason; before, the log showed only the `400`.
+- A child of an archived parent could be reopened, leaving open work under an archived Ticket. Every path (State change, drag, bulk State) now refuses it with `parent_archived`, and the child's panel explains why and offers the parent's Unarchive to a Project admin.
+- A Ticket reopened while a bulk archive of finished work was running could be archived anyway. The screens now send `onlyFinished`, and the server checks the State under the archive's own row lock.
+- Changing a child seen only in its parent's child list did not refresh the parent's progress.
+
+### Security
+
+- `lettre` 0.11.24 (outgoing e-mail) fixes six advisories in 0.11.23: RUSTSEC-2026-0560 to 0565 (STARTTLS response injection, missing dot-stuffing, panics on some EHLO names and display names, a recipient address that could change, unbounded buffering of SMTP replies).
 
 ## 0.2.2
 
@@ -24,7 +50,7 @@ A fix release. Penfii is still early software: back up before you upgrade.
 
 ### Upgrading from 0.2.1 or 0.2.0
 
-- No database migration and no new or changed setting. Check out `v0.2.2` and rebuild with the same `docker/.env` (see [Self-hosting](docs/self-hosting.md#from-v020-or-v021-to-v022)); `db-setup` finds the schema current.
+- No database migration and no new or changed setting. Check out `v0.2.2` and rebuild with the same `docker/.env` (see [Self-hosting](docs/self-hosting.md#from-v020-v021-or-v022-to-v030)); `db-setup` finds the schema current.
 
 ### Fixed
 
@@ -40,7 +66,7 @@ A fix release. Penfii is still early software: back up before you upgrade.
 
 ### Upgrading from 0.2.0
 
-- No database migration and no new or changed setting. Check out `v0.2.1` and rebuild with the same `docker/.env` (see [Self-hosting](docs/self-hosting.md#from-v020-or-v021-to-v022)); `db-setup` finds the schema current.
+- No database migration and no new or changed setting. Check out `v0.2.1` and rebuild with the same `docker/.env` (see [Self-hosting](docs/self-hosting.md#from-v020-v021-or-v022-to-v030)); `db-setup` finds the schema current.
 
 ### Fixed
 

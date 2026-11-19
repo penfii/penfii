@@ -2,7 +2,7 @@
 
 `docker/compose.yaml` is the supported way to run Penfii. It starts PostgreSQL, OpenSearch (with the Korean analyzer), MinIO (S3-compatible file storage), the server (`core-api`) and the web app, and builds the server and web images from this checkout. There are no published images.
 
-Penfii is at v0.2.2, an early release: read [Known limitations](known-limitations.md) first.
+Penfii is at v0.3.0, an early release: read [Known limitations](known-limitations.md) first.
 
 ## What you need
 
@@ -16,7 +16,7 @@ Penfii is at v0.2.2, an early release: read [Known limitations](known-limitation
 ```sh
 git clone https://git.manglix.com/penfii/penfii.git
 cd penfii
-git checkout v0.2.2      # a release tag; leave this out to run the latest commit of the default branch
+git checkout v0.3.0      # a release tag; leave this out to run the latest commit of the default branch
 cd docker
 cp .env.example .env
 ```
@@ -132,16 +132,16 @@ Back up first ([Backup](#backup)), then check out the release and rebuild:
 
 ```sh
 git fetch --tags
-git checkout v0.2.2
+git checkout v0.3.0
 cd docker
 docker compose up -d --build
 ```
 
 `docker compose up` runs the one-shot `db-setup` service again before core-api starts (it is started again when its image is unchanged and re-created when the image changed), and `db-setup` applies pending database migrations with the schema owner's credential. core-api itself never migrates: it checks the history and refuses to start when it is behind. There is no upgrade guarantee between 0.x releases: read the [changelog](../CHANGELOG.md) of every release you move across before you start.
 
-### From v0.2.0 or v0.2.1 to v0.2.2
+### From v0.2.0, v0.2.1 or v0.2.2 to v0.3.0
 
-v0.2.1 and v0.2.2 fix defects only. Neither has a database migration or a new or changed setting: check out `v0.2.2` and run `docker compose up -d --build` as above, with the same `docker/.env`. `db-setup` finds the schema current and core-api starts on the v0.2.0 database. Coming from v0.1.0, follow the next section first.
+v0.2.1 and v0.2.2 fix defects only, and v0.3.0 adds features. None of them has a database migration or a new or changed setting: check out `v0.3.0` and run `docker compose up -d --build` as above, with the same `docker/.env`. `db-setup` finds the schema current and core-api starts on the v0.2.0 database. Coming from v0.1.0, follow the next section first.
 
 ### From v0.1.0 to v0.2.0
 

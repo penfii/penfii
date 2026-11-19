@@ -1,10 +1,10 @@
 # Known limitations
 
-Penfii is at v0.2.2, an early release. This list says what is missing or not yet safe to rely on. It is kept short on purpose; if you find something that belongs here, open an issue.
+Penfii is at v0.3.0, an early release. This list says what is missing or not yet safe to rely on. It is kept short on purpose; if you find something that belongs here, open an issue.
 
 ## Stability
 
-- The HTTP API, the database schema and the settings can change between 0.x releases, and there is no upgrade guarantee. The database migrations from v0.1.0 to v0.2.0 are tested (v0.2.1 and v0.2.2 add none); read the [changelog](../CHANGELOG.md) for the settings an upgrade needs.
+- The HTTP API, the database schema and the settings can change between 0.x releases, and there is no upgrade guarantee. The database migrations from v0.1.0 to v0.2.0 are tested (v0.2.1, v0.2.2 and v0.3.0 add none); read the [changelog](../CHANGELOG.md) for the settings an upgrade needs.
 - Backups, upgrades and monitoring are your responsibility. A database restore check is in [Self-hosting](self-hosting.md#restore) (`docker/scripts/restore-check.sh`). It does not start the application on the restored data, and there is no point-in-time recovery. Moving between releases is described in [Self-hosting](self-hosting.md#updating); there is no way back to an older release other than restoring a backup.
 - Object storage is assumed not to use S3 Versioning. Deleting a file removes the current object after the database commit; older versions in a versioned bucket are left behind.
 
