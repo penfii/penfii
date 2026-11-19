@@ -57,6 +57,11 @@ export function textToDescription(text: string): { type: 'doc'; content: unknown
   }
 }
 
+/** Children that are neither Completed nor Canceled: what the Task or Epic still has open (the same meaning as the server's check). */
+export function openChildCount(summary: ChildSummary): number {
+  return Math.max(summary.total - summary.done - summary.canceled, 0)
+}
+
 export function progressPercent(summary: ChildSummary): number {
   const counted = summary.total - summary.canceled
   if (counted <= 0) return 0

@@ -98,6 +98,16 @@ export function buildAxis(dates: Array<Date | string>, timeZone: string, dayWidt
   return { from, to, dayWidth, width: ((to - from) / DAY_MS) * dayWidth, days, x: (instant) => ((new Date(instant).getTime() - from) / DAY_MS) * dayWidth }
 }
 
+/** The axis day (`YYYY-MM-DD` on the calendar's zone) at a horizontal position, or null left of the axis. */
+export function dayAtX(axis: Axis, x: number): string | null {
+  let found: string | null = null
+  for (const day of axis.days) {
+    if (day.x > x) break
+    found = day.label
+  }
+  return found
+}
+
 /** Working minutes in the longest day of the week: what "a day" of duration means on this calendar. */
 export function workDayMinutes(definition: CalendarDefinition | undefined): number {
   if (!definition) return 480

@@ -1617,3 +1617,138 @@ async fn t7_a_stale_read_written_last_does_not_overwrite_a_newer_read(pool: PgPo
     let (_, b) = find(&sw, &c, workspace_id, "betatwo", "ticket").await;
     assert!(b["results"].as_array().unwrap().is_empty(), "{b}");
 }
+
+/// FEA-111: a `project:` / `team:` filter narrows messages through the channels of those
+/// Projects, but it must not hide Tickets that have no channel. The All tab and the Tickets tab
+/// agree on Tickets; `in:` still narrows both; a person outside the Project sees none of it.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn fea111_project_and_team_filters_keep_channel_less_tickets_in_the_all_tab(pool: PgPool) {
+    let world = &World::new(pool).await;
+    let Some(sw) = search_world(world).await else {
+        return;
+    };
+    let ws = workspace(world, &format!("fea111-{}", Uuid::new_v4())).await;
+    let owner = world.owner_cookie.clone();
+    let (project_id, _) = new_project(world, ws, "Fea111 Alpha").await;
+    // A channel of the Project, a Ticket in it and a Ticket in no channel.
+    let (status, project_channel, _) = call(
+        &world.app,
+        "POST",
+        &format!("/v1/workspaces/{ws}/channels"),
+        Some(&owner),
+        Some("fea111-ch"),
+        Some(json!({"name": "fea111-room", "visibility": "PUBLIC", "teamId": null, "projectId": project_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{project_channel}");
+    let room: Uuid = project_channel["id"].as_str().unwrap().parse().unwrap();
+    let (_, loose) = make_ticket(
+        world,
+        &project_id,
+        "fea111-t1",
+        json!({"title": "검색결함티켓 하나"}),
+    )
+    .await;
+    let (_, in_room) = make_ticket(
+        world,
+        &project_id,
+        "fea111-t2",
+        json!({"title": "검색결함티켓 둘", "channelId": room}),
+    )
+    .await;
+    let prefix = loose["key"]
+        .as_str()
+        .unwrap()
+        .split('-')
+        .next()
+        .unwrap()
+        .to_owned();
+    send(
+        world,
+        &owner,
+        room,
+        "검색결함티켓 프로젝트 메시지",
+        None,
+        None,
+    )
+    .await;
+    // The same word in a channel outside the Project must not come in under project:.
+    let general = channel(world, ws, "general", "PUBLIC").await;
+    send(
+        world,
+        &owner,
+        general,
+        "검색결함티켓 바깥 메시지",
+        None,
+        None,
+    )
+    .await;
+    // A Team that the Project belongs to.
+    let (status, team, _) = call(
+        &world.app,
+        "POST",
+        &format!("/v1/workspaces/{ws}/teams"),
+        Some(&owner),
+        None,
+        Some(json!({"name": "Fea111Crew", "members": [{"userId": world.owner_id, "role": "MANAGER"}]})),
+    )
+    .await;
+    assert!(status.is_success(), "{team}");
+    let team_id = team["id"].as_str().unwrap().to_owned();
+    let (status, linked, _) = call(
+        &world.app,
+        "PUT",
+        &format!("/v1/projects/{project_id}/teams/{team_id}"),
+        Some(&owner),
+        None,
+        None,
+    )
+    .await;
+    assert!(status.is_success(), "{linked}");
+    index_now(&sw, ws).await;
+
+    let ids = |b: &Value, kind: &str| -> std::collections::BTreeSet<String> {
+        b["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["kind"] == kind)
+            .map(|r| r["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let loose_id = loose["id"].as_str().unwrap().to_owned();
+    let room_id = in_room["id"].as_str().unwrap().to_owned();
+    let both: std::collections::BTreeSet<String> = [loose_id.clone(), room_id.clone()].into();
+    for q in [
+        format!("검색결함티켓 project:{prefix}"),
+        format!("project:{prefix} 검색결함티켓"),
+        "검색결함티켓 team:Fea111Crew".to_owned(),
+    ] {
+        let (s, all) = find(&sw, &owner, ws, &q, "all").await;
+        assert_eq!(s, StatusCode::OK, "{all}");
+        let (_, only) = find(&sw, &owner, ws, &q, "ticket").await;
+        assert_eq!(ids(&all, "ticket"), both, "{q}: {all}");
+        assert_eq!(ids(&all, "ticket"), ids(&only, "ticket"), "{q}");
+        // Only the Project's channel answers for messages.
+        assert_eq!(ids(&all, "message").len(), 1, "{q}: {all}");
+    }
+    // The key of the channel-less Ticket, in either order.
+    let key = loose["key"].as_str().unwrap().to_owned();
+    for q in [
+        format!("{key} project:{prefix}"),
+        format!("project:{prefix} {key}"),
+    ] {
+        let (_, all) = find(&sw, &owner, ws, &q, "all").await;
+        assert!(ids(&all, "ticket").contains(&loose_id), "{q}: {all}");
+    }
+    // in: is the person's own narrowing and still applies to Tickets and messages alike.
+    let q = format!("검색결함티켓 project:{prefix} in:fea111-room");
+    let (s, all) = find(&sw, &owner, ws, &q, "all").await;
+    assert_eq!(s, StatusCode::OK, "{all}");
+    assert_eq!(ids(&all, "ticket"), [room_id.clone()].into(), "{all}");
+    assert_eq!(ids(&all, "message").len(), 1, "{all}");
+    // Someone outside the Project finds none of its Tickets, filter or not.
+    let (_, outsider) = super::inbox::member(world, ws, "fea111-out").await;
+    let (_, seen) = find(&sw, &outsider, ws, "검색결함티켓", "all").await;
+    assert!(ids(&seen, "ticket").is_empty(), "{seen}");
+}

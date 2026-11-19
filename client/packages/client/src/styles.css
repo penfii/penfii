@@ -552,12 +552,12 @@ button.reply-count { border: 0; background: transparent; padding: 0; font: inher
 
 /* Composer (frame 1.1): one rounded card, the text on top and a bar under it with the formatting tools on the left
    and the emoji, attach and send controls on the right. */
-.composer { margin: 0 var(--space-6) var(--space-5); padding: 0; border: 1px solid var(--border-strong); border-radius: 16px; background: var(--bg-elevated); box-shadow: 0 4px 16px rgba(138, 100, 18, 0.08); display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; overflow: visible; }
+.composer { margin: 0 var(--space-6) var(--space-5); padding: 0; border: var(--composer-border) solid var(--border-strong); border-radius: 16px; background: var(--bg-elevated); box-shadow: 0 4px 16px rgba(138, 100, 18, 0.08); display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; overflow: visible; }
 .composer:focus-within { border-color: var(--accent); }
 .composer > .rich-editor { display: contents; }
 .composer > .rich-editor:focus-within { outline: none; }
 .composer .rich-editor .tiptap, .composer .rich-editor > div:not(.rich-toolbar) { grid-column: 1 / -1; grid-row: 1; }
-.composer .ProseMirror { min-height: 3rem; padding: 1rem 1.25rem 0.5rem; font-size: 0.95rem; }
+.composer .ProseMirror { min-height: 3rem; padding: 1rem var(--composer-text-pad) 0.5rem; font-size: 0.95rem; }
 .composer .rich-toolbar { grid-column: 1; grid-row: 3; border: 0; padding: 0.4rem 0.6rem 0.6rem; gap: 0.2rem; }
 .composer > .composer-footer { grid-column: 2; grid-row: 3; padding: 0.4rem 0.75rem 0.6rem 0; gap: var(--space-2); }
 .composer > :not(.rich-editor):not(.composer-footer) { grid-column: 1 / -1; grid-row: 2; padding: 0 1rem; }
@@ -571,10 +571,10 @@ button.reply-count { border: 0; background: transparent; padding: 0; font: inher
 
 /* Messages (frame 1.1): a 40px avatar, the name and time on one line, 15px text, the row tinted when hovered,
    and the actions as a small white card on the row's top edge. */
-.message { gap: 0.875rem; padding: 0.5rem 0.75rem; margin-inline: var(--space-4); border-radius: 12px; }
+.message { gap: var(--message-gap); padding: 0.5rem var(--message-pad); margin-inline: var(--message-margin); border-radius: 12px; }
 .message.group-start { margin-top: 0.25rem; }
 .message.compact { padding-top: 0.1rem; padding-bottom: 0.1rem; }
-.message-gutter { width: 40px; }
+.message-gutter { width: var(--message-avatar); }
 .message-gutter .avatar { width: 40px; height: 40px; font-size: 0.8rem; font-weight: 700; background: var(--bg-muted); color: var(--text-secondary); }
 .message-main { font-size: 0.95rem; color: #2b261b; }
 .message-meta { gap: 0.5rem; }
@@ -617,3 +617,31 @@ button.reply-count { border: 0; background: transparent; padding: 0; font: inher
 
 .query-error { margin: var(--space-4); color: var(--danger, #b3261e); }
 .query-error.compact { margin: var(--space-2) 0; font-size: .875rem; }
+
+/* FEA-113: the main chat column reads in one centred block no wider than --chat-read-max (messages, day lines, composer and the
+   join / read-only bars). The channel head, the scrollbar and the "latest" button stay on the whole column. A column narrower than the
+   block is unchanged: no media query, only max-width. The thread column is not touched.
+   The text a person types in the composer starts where the text of a message starts (the letters, not the boxes), so the
+   message row and the composer take their spacing from the same variables. */
+:root {
+  /* 960px was too wide: about 77 Korean and 119 English characters a line; 800px gives about 62 and 96. */
+  --chat-read-max: 800px;
+  --message-margin: var(--space-4);
+  --message-pad: 0.75rem;
+  --message-avatar: 40px;
+  --message-gap: 0.875rem;
+  --composer-border: 1px;
+  --composer-text-pad: 1.25rem;
+  /* Space left of the block when the column is wider than the block. */
+  --chat-side: max(0px, calc(50% - var(--chat-read-max) / 2));
+}
+.conversation > .column:not(.thread-column) .scroller > * { max-width: var(--chat-read-max); margin-inline: auto; }
+.conversation > .column:not(.thread-column) > :is(.join-bar, .read-only-note, .form-error) { margin-inline: var(--chat-side); }
+@media (min-width: 641px) {
+  .conversation > .column:not(.thread-column) > .composer {
+    /* Where a message's text starts (row margin + padding + avatar + gap), less the composer's own border and padding. */
+    margin-inline-start: calc(var(--chat-side) + var(--message-margin) + var(--message-pad) + var(--message-avatar) + var(--message-gap) - var(--composer-border) - var(--composer-text-pad));
+    /* Where a message's text can run to. */
+    margin-inline-end: calc(var(--chat-side) + var(--message-margin) + var(--message-pad));
+  }
+}

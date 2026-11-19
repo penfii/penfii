@@ -18,6 +18,8 @@ import { ProjectSettings, SettingsLink } from '../modules/attention/ProjectSetti
 import { StatusSummary } from '../modules/work/ReportPanels'
 import { TimelinePage } from '../modules/work/Timeline'
 import { ConversationFrame } from './SpacePage'
+import { ProjectIndex } from './ProjectIndex'
+import { ProjectTitle, useRecordProjectVisit } from './ProjectSwitcher'
 
 export function ProjectsPage() {
   const { workspaceId = '', projectId, view } = useParams()
@@ -31,52 +33,24 @@ export function ProjectsPage() {
   return <ProjectScreen workspaceId={workspaceId} projectId={projectId} view={screen} />
 }
 
-function ProjectIndex({ workspaceId }: { workspaceId: string }) {
-  const { t } = useI18n()
-  const space = useQuery({ ...queries.space(workspaceId), enabled: workspaceId.length > 0 })
-  const apiProjects = space.data?.projects ?? []
-  if (apiProjects.length === 0) {
-    return (
-      <div className="page-scroll">
-        <header className="page-intro"><h1>{t('shell.projects.all')}</h1></header>
-        {space.isSuccess ? <EmptyState title={t('tree.emptyProjects')} body={t('empty.projectsBody')} /> : space.isError ? <QueryError query={space} /> : <p className="hint">{t('loading')}</p>}
-      </div>
-    )
-  }
-  return (
-    <div className="page-scroll">
-      <header className="page-intro">
-        <h1>{t('shell.projects.all')}</h1>
-        <p>{t('projects.lead')}</p>
-      </header>
-      <div className="result-list">
-        {apiProjects.map((project) => (
-          <Link key={project.id} className="result-hit" to={`/w/${workspaceId}/projects/${project.id}`}>
-            <strong>{project.name}</strong>
-            <small>{project.participating === false ? t('projects.joinNeeded') : t('projects.participating')}</small>
-          </Link>
-        ))}
-      </div>
-    </div>
-  )
-}
-
 export function ProjectChannelPage() {
   const { workspaceId = '', projectId = '' } = useParams()
   const space = useQuery({ ...queries.space(workspaceId), enabled: workspaceId.length > 0 })
-  if (space.data?.projects.find((item) => item.id === projectId)?.participating === false) return <NotParticipating name={space.data.projects.find((item) => item.id === projectId)?.name} />
+  if (space.data?.projects.find((item) => item.id === projectId)?.participating === false) return <NotParticipating workspaceId={workspaceId} name={space.data.projects.find((item) => item.id === projectId)?.name} />
   return <ConversationFrame />
 }
 
 /** A Project is found by everyone in the Workspace but opened only by its participants: say so, with nothing to create. */
-function NotParticipating({ name }: { name?: string }) {
+function NotParticipating({ name, workspaceId }: { name?: string; workspaceId: string }) {
   const { t } = useI18n()
   return (
     <div className="page-scroll">
       <header className="page-intro">
         <h1>{name ?? ''}</h1>
       </header>
-      <EmptyState title={t('projects.notParticipating.title')} body={t('projects.notParticipating.body')} />
+      <EmptyState title={t('projects.notParticipating.title')} body={t('projects.notParticipating.body')}>
+        <Link className="btn btn-secondary" to={`/w/${workspaceId}/projects?browse=all`}>{t('projects.backToAll')}</Link>
+      </EmptyState>
     </div>
   )
 }
@@ -119,6 +93,7 @@ function ProjectScreen({ workspaceId, projectId, view }: { workspaceId: string; 
   useEffect(() => {
     tabs.current?.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
   }, [view])
+  useRecordProjectVisit(workspaceId, projectId, apiProject !== undefined && apiProject.participating !== false)
   // A failed read of the Space is not "still loading".
   if (space.isError) return <div className="page-scroll"><QueryError query={space} /></div>
   if (space.isSuccess && !apiProject) {
@@ -126,13 +101,13 @@ function ProjectScreen({ workspaceId, projectId, view }: { workspaceId: string; 
   }
   // Until the Space says whether the person takes part, nothing of the inside is asked for.
   if (!apiProject) return <div className="page-scroll"><p className="hint">{t('loading')}</p></div>
-  if (apiProject?.participating === false) return <NotParticipating name={name} />
+  if (apiProject?.participating === false) return <NotParticipating workspaceId={workspaceId} name={name} />
   return (
     <div className={view === 'work' ? 'page-scroll board-page project-page' : 'page-scroll project-page'}>
       <header className="page-intro project-header">
         <div className="project-title-row">
           <div className="project-title-left">
-            <h1>{name ?? t('loading')}</h1>
+            <h1><ProjectTitle workspaceId={workspaceId} projectId={projectId} name={name ?? t('loading')} section={view} projects={space.data?.projects ?? []} /></h1>
             {apiProject ? <FavoriteButton workspaceId={workspaceId} kind="PROJECT" targetId={projectId} label={name} /> : null}
             {apiProject ? <WatchButton kind="PROJECT" targetId={projectId} className="btn watch-chip" /> : null}
           </div>

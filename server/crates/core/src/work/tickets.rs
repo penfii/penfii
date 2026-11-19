@@ -637,6 +637,28 @@ pub(crate) async fn apply_status_change(
     if status_id == old.status_id {
         return Ok(StatusOutcome::Unchanged(old));
     }
+    // A Ticket whose parent is archived can be finished or canceled but not (re)opened: the archive of the parent said its
+    // work was over, and reopening below it would leave live work under an archived Ticket. The category decides (never a
+    // State name), the parent is read under a share lock so that this and the parent's archive (which takes the row for
+    // update) are ordered one after the other, and the way out is the parent's own unarchive. A parent that is Done is not
+    // in question here: that stays open to reopening, and the parent is not changed by it.
+    if target_category != "DONE"
+        && target_category != "CANCELED"
+        && let Some(parent_id) = old.parent_id
+    {
+        let parent_archived: Option<bool> = sqlx::query_scalar(
+            "SELECT archived_at IS NOT NULL FROM penfii.tickets WHERE id=$1 AND purged_at IS NULL FOR SHARE",
+        )
+        .bind(parent_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if parent_archived == Some(true) {
+            return Err(CoreError::conflict(
+                "parent_archived",
+                "the parent ticket is archived; unarchive it before reopening this one",
+            ));
+        }
+    }
     // A Dependency limits completion only: a successor may run in parallel, but it cannot enter
     // a DONE-category State while a predecessor is not DONE. The check is on the target category,
     // never on State names or order, and runs for every move (command, drag, any source State).

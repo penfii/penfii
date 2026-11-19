@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { newIdempotencyKey } from '@penfii/api-client'
-import type { BulkItemResult, BulkResult, ProjectBoard } from '@penfii/contracts'
+import type { BulkChange, BulkItemResult, BulkResult, ProjectBoard, Ticket } from '@penfii/contracts'
 import { api } from '../../api'
+import { openChildCount } from './ticketModel'
 
 /** The server takes at most this many Tickets in one bulk request; the split is invisible to the person. */
 export const BULK_REQUEST_LIMIT = 100
@@ -20,6 +21,40 @@ export function finishedSelection(chosen: Set<string>, board: ProjectBoard): str
   const finishedStates = new Set(board.states.filter((state) => state.category === 'DONE' || state.category === 'CANCELED').map((state) => state.id))
   const finished = new Set(board.columns.flatMap((column) => column.tickets).filter((ticket) => finishedStates.has(ticket.statusId)).map((ticket) => ticket.id))
   return [...chosen].filter((id) => finished.has(id))
+}
+
+/** A Ticket with Tasks or Subtasks that are neither Completed nor Canceled cannot be archived yet. */
+export function hasOpenChildren(ticket: Pick<Ticket, 'childSummary'>): boolean {
+  return openChildCount(ticket.childSummary) > 0
+}
+
+export type ArchivePlan = {
+  /** What an Archive would send: finished, with nothing unfinished below it, in a Project the person manages. */
+  ids: string[]
+  /** Chosen but not Completed or Canceled (only a Table can choose these). */
+  unfinished: number
+  /** Finished but with unfinished children. */
+  openChildren: number
+  /** Finished in a Project where the person is not an administrator. */
+  noPermission: number
+}
+
+/**
+ * How many of the chosen Tickets an Archive would really take, and why the others stay out. This is guidance for the
+ * person; the server still decides for every Ticket (permission, State, unfinished children) when the Archive runs.
+ */
+export function archivePlan(
+  tickets: Array<Pick<Ticket, 'id' | 'childSummary' | 'projectId'> & { finished: boolean }>,
+  canManage: (projectId: string) => boolean,
+): ArchivePlan {
+  const plan: ArchivePlan = { ids: [], unfinished: 0, openChildren: 0, noPermission: 0 }
+  for (const ticket of tickets) {
+    if (!ticket.finished) plan.unfinished += 1
+    else if (!canManage(ticket.projectId)) plan.noPermission += 1
+    else if (hasOpenChildren(ticket)) plan.openChildren += 1
+    else plan.ids.push(ticket.id)
+  }
+  return plan
 }
 
 export function chunk<T>(items: T[], size: number): T[][] {
@@ -43,7 +78,10 @@ export async function runLifecycle(
   const batches = chunk(ids, BULK_REQUEST_LIMIT)
   for (const [index, batch] of batches.entries()) {
     try {
-      const result = await api.bulkTickets(workspaceId, batch, { type: action }, newIdempotencyKey())
+      // An Archive from these screens is only for finished work: the server checks that again as it processes each Ticket,
+      // so one that was reopened after it was chosen is refused instead of archived.
+      const change: BulkChange = action === 'ARCHIVE' ? { type: 'ARCHIVE', onlyFinished: true } : { type: 'TRASH' }
+      const result = await api.bulkTickets(workspaceId, batch, change, newIdempotencyKey())
       items.push(...result.items)
       progress(items.length)
     } catch {
@@ -58,7 +96,16 @@ export async function runLifecycle(
 }
 
 /** Puts trashed Tickets back (the Undo of a bulk trash). Each one is its own request; the count of those that did not come back is reported. */
-export async function restoreFromTrash(ids: string[]): Promise<{ ok: number; failed: number }> {
+export function restoreFromTrash(ids: string[]): Promise<{ ok: number; failed: number }> {
+  return putBack(ids, (id) => api.restoreTicketFromTrash(id))
+}
+
+/** Takes archived Tickets out of the archive (the Undo of a bulk archive). */
+export function restoreArchived(ids: string[]): Promise<{ ok: number; failed: number }> {
+  return putBack(ids, (id) => api.unarchiveTicket(id))
+}
+
+async function putBack(ids: string[], restore: (id: string) => Promise<unknown>): Promise<{ ok: number; failed: number }> {
   let ok = 0
   let next = 0
   // At most RESTORE_CONCURRENCY requests at a time: three hundred Tickets must not be three hundred requests at once.
@@ -68,7 +115,7 @@ export async function restoreFromTrash(ids: string[]): Promise<{ ok: number; fai
       next += 1
       if (id === undefined) return
       try {
-        await api.restoreTicketFromTrash(id)
+        await restore(id)
         ok += 1
       } catch {
         // Counted as failed below.

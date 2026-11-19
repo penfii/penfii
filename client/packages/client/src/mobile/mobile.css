@@ -68,7 +68,6 @@
 .mobile-segments a.active { background: var(--bg-elevated); color: var(--text); box-shadow: var(--shadow-sm); }
 
 /* Work: the Table layout is reached through the list's display options on a phone, so its button is not offered. */
-.mobile-shell .view-layout[data-layout="TABLE"]:not(.on) { display: none; }
 /* The project's name is already in the top bar; its sections stay a one-line strip that scrolls sideways. */
 .mobile-shell .project-tabs { flex-wrap: nowrap; scrollbar-width: none; padding-inline: var(--space-4); }
 .mobile-shell .project-tabs::-webkit-scrollbar { display: none; }
@@ -246,3 +245,8 @@ html.m-scroll-locked .mobile-main :is(.page-scroll, .work-scroll, .workspace-nav
 .mobile-shell .workspace-admin > h1 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .mobile-shell .members-table, .mobile-shell .admin-table-wrap table { margin: 0; width: 100%; max-width: 100%; }
 .mobile-shell .members-table td.admin-col-actions { text-align: left; width: auto; }
+
+/* The Project name is in the top bar on a phone, and the page's own heading is hidden. When the person can switch Projects the
+   heading holds the switcher, so it must stay reachable: shown as a chip beside the star. */
+.mobile-shell .project-title-left h1:has(.project-switch-trigger) { position: static; width: auto; height: auto; overflow: visible; clip-path: none; white-space: normal; font-size: 0.875rem; min-width: 0; }
+.mobile-shell .project-switch-trigger { min-height: 44px; max-width: 12rem; margin: 0; padding: 0 var(--space-3); border: 1px solid var(--border); border-radius: 999px; background: var(--bg-elevated); font-weight: 600; }

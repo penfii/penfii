@@ -5,7 +5,6 @@ import { useLocation,useParams } from 'react-router'
 import { useI18n } from '../i18n/I18nProvider'
 import { queries } from '../queries'
 import { canCreateChannel } from '../modules/spaces/capabilities'
-import { activeTeams } from '../modules/spaces/teamState'
 import { TeamsNav } from '../pages/TeamsNav'
 import { ChatNav } from './nav/ChatNav'
 import { ProjectList,ProjectNav,projectViews } from './nav/ProjectNav'
@@ -97,7 +96,7 @@ export function ContextSidebar({
           participating={space.data?.projects.find((project) => project.id === projectId)?.participating !== false}
         />
       ) : null}
-      {section === 'projects' && !projectId ? <ProjectList workspaceId={workspaceId} apiProjects={space.data?.projects ?? []} teams={activeTeams(space.data?.teams ?? [])} /> : null}
+      {section === 'projects' && !projectId ? <ProjectList workspaceId={workspaceId} apiProjects={space.data?.projects ?? []} /> : null}
       {section === 'docs' ? <DocsNav workspaceId={workspaceId} /> : null}
       {section === 'teams' ? <TeamsNav workspaceId={workspaceId} /> : null}
       {section === 'search' ? <SearchNav workspaceId={workspaceId} /> : null}

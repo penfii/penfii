@@ -103,13 +103,14 @@ describe('Doc tree', () => {
     expect(await screen.findByText('페이지를 자기 자신이나 하위 페이지 아래로 옮길 수 없습니다.')).toBeTruthy()
   })
 
-  it('asks before deleting and deletes the page with its subpages', async () => {
+  it('asks before deleting, says what goes with the page, and deletes only after checking', async () => {
     api.deleteDoc.mockResolvedValue(undefined)
     mount(<DocTree workspaceId="w" selectedId={null} onSelect={() => undefined} />)
     fireEvent.click(await screen.findByRole('button', { name: /삭제: 루트/ }))
-    expect(await screen.findByText(/와 그 하위 페이지를 삭제할까요/)).toBeTruthy()
+    expect(await screen.findByText('“루트”와(과) 하위 문서 1개를 삭제합니다.')).toBeTruthy()
+    expect(screen.getByText('삭제한 문서는 지금 제품에서 되살릴 수 없습니다.')).toBeTruthy()
     expect(api.deleteDoc).not.toHaveBeenCalled()
-    fireEvent.click(screen.getAllByRole('button', { name: '삭제' }).at(-1)!)
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '삭제' }))
     await waitFor(() => expect(api.deleteDoc).toHaveBeenCalledWith('a'))
   })
 })

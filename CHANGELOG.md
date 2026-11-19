@@ -2,8 +2,18 @@
 
 ## Unreleased
 
+### Changed
+
+- Creating a ticket keeps what was typed: closing the panel (Esc, Close, Cancel, Back) keeps a draft in this browser for 14 days, per person, Workspace, Project and where Create was opened, with "Reopen" in the notice; opening the same Create again restores it, with "Discard draft". Attachments are not kept, so closing with files attached asks first. A ticket made from a Project screen opens at once; one made from a parent or a chat message is a press away in a notice.
+- The profile says what is not saved yet: changed fields are marked, a save bar counts them (fixed to the bottom of the screen on a phone), and leaving with changes asks "Keep editing / Discard and leave / Save and leave". A profile changed elsewhere (the status menu, a photo, another device) no longer replaces what is being typed; the same field changed on both sides shows both values, and Save reads the profile again first and does not overwrite a newer value silently.
+- Deleting a document says what goes with it before Delete is enabled: the subpages deleted with it, the ones kept (and moved up) because they cannot be managed, and that a deleted document cannot be restored. Nothing is deleted when that cannot be checked or when the structure changed since; the result notice counts what was really deleted.
+- The main chat column reads in a centred block at most 800px wide on wide screens, and the text typed in the composer starts where message text starts. A reader at the bottom stays there when a thread opens or the window narrows.
+- A new channel's name is checked on Create and explained under the field in the screen's language; Create sends one request however often it is pressed, and an answer that did not arrive says the channel may exist instead of inviting a retry.
+- Search with no results lists the conditions in effect with ways to remove them; changing the kind keeps the text and the Project state, also on a phone.
+
 ### Fixed
 
+- Search in the All tab with `project:` or `team:` left out every ticket that has no channel (and every ticket of a Project without channels); the Tickets tab found them.
 - An MCP client whose Client ID Metadata Document prefers a token endpoint authentication method Penfii lacks, but lists `none` among the ones it supports (ChatGPT: `private_key_jwt` preferred, `none` supported), was refused with "This application could not be identified". As the CIMD draft asks, the methods now come from `token_endpoint_auth_methods_supported` when it is present, Penfii picks `none` from them, and the client connects as a public client with PKCE. A document that leaves `none` out, whose singular method is not among its listed ones, that names a shared-secret method or holds `client_secret_expires_at`, both `jwks` and `jwks_uri`, or private key material is refused.
 - A token request that authenticates the client (an `Authorization` header, `client_secret` or `client_assertion`) is answered `401 invalid_client`; every client here uses `none`. Before, the credential was ignored.
 - A client refused at `/oauth/authorize` is logged (`WARN oauth client refused`) with the reason; before, the log showed only the `400`.

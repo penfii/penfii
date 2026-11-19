@@ -13,5 +13,7 @@ export function useProjectContext(projectId: string) {
   const context: ProjectContext | undefined = board.data
     ? { board: board.data, labels: labels.data ?? [], members: members.data ?? [], types: types.data ?? [], planning: planning.data }
     : undefined
-  return { board, context }
+  /** The option lists have answered (or failed): a form that checks saved ids against them may now do so. */
+  const ready = !labels.isPending && !members.isPending && !types.isPending
+  return { board, context, ready }
 }

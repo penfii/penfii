@@ -24,4 +24,14 @@ describe('refreshTicket', () => {
     await refreshTicket(client, 't1', 'p1')
     expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.ticketAttachments('t1') })
   })
+
+  it("marks the parent's progress and child list stale for a child seen only in that parent's list", async () => {
+    const client = new QueryClient()
+    // The child's own detail was never opened: only the parent's child list holds it.
+    client.setQueryData(queryKeys.ticketChildren('parent'), [{ id: 'kid' }])
+    const spy = vi.spyOn(client, 'invalidateQueries')
+    await refreshTicket(client, 'kid', 'p1')
+    expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.ticket('parent') })
+    expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.ticketChildren('parent') })
+  })
 })

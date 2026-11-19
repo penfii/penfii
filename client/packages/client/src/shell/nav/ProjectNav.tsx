@@ -1,7 +1,8 @@
 import { DocTree } from '../../modules/docs/DocTree'
-import { useEffect,useState } from 'react'
-import type { Channel } from '@penfii/contracts'
-import { NavLink,useLocation,useNavigate,useSearchParams } from 'react-router'
+import { useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import type { Channel, Project } from '@penfii/contracts'
+import { Link, NavLink, useLocation, useNavigate, useSearchParams } from 'react-router'
 import {
 visibleSlice
 } from '../chatGroups'
@@ -10,6 +11,8 @@ import { canManageChannelSettings, isWorkspaceManager } from '../../modules/spac
 import { useWorkspaceRole } from '../../modules/spaces/useWorkspaceRole'
 import { useCreate } from '../create'
 import { ChannelLink } from './ChatNav'
+import { queries } from '../../queries'
+import { myProjects } from '../../pages/projectsModel'
 
 export const projectViews = [
   ['overview', 'shell.project.overview'],
@@ -20,57 +23,64 @@ export const projectViews = [
   ['chat', 'shell.project.chat'],
 ] as const
 
+/** How many participating Projects the list shows before "all"; every favorite is always shown. A density choice, not a limit on what can be reached. */
+const NAV_PROJECT_LIMIT = 8
 
-export function ProjectList({ workspaceId, apiProjects, teams }: { workspaceId: string; apiProjects: Array<{ id: string; name: string; participating?: boolean }>; teams: Array<{ id: string; name: string }> }) {
+/**
+ * The Projects Context Nav, outside any one Project: shortcuts first (My work, All projects), then the Projects the
+ * person takes part in with the starred ones first. Projects the person is not in, and Teams, are reached from All
+ * projects and from the global Teams.
+ */
+export function ProjectList({ workspaceId, apiProjects }: { workspaceId: string; apiProjects: Project[] }) {
   const { t } = useI18n()
   const open = useCreate()
-  // Creating a Team or a Project is for a Workspace owner or admin.
+  const location = useLocation()
+  const [params] = useSearchParams()
+  const favorites = useQuery({ ...queries.favorites(workspaceId), enabled: workspaceId.length > 0 })
+  // Creating a Project is for a Workspace owner or admin.
   const canCreate = isWorkspaceManager(useWorkspaceRole(workspaceId))
+  const mine = myProjects(apiProjects, favorites.data ?? [])
+  const total = mine.favorites.length + mine.others.length
+  // Every favorite is listed; the other Projects fill the rest of the usual length.
+  const room = Math.max(NAV_PROJECT_LIMIT - mine.favorites.length, 0)
+  const hidden = mine.others.length - Math.min(room, mine.others.length)
+  const base = `/w/${workspaceId}/projects`
+  const atProjects = location.pathname === base
+  const browsing = params.get('browse') === 'all'
   return (
     <>
       {canCreate ? <button type="button" className="nav-add" onClick={() => open('project')}>+ {t('shell.projects.new')}</button> : null}
-      <section className="tree-block">
-        <h3>{t('shell.projects.mine')}</h3>
-        {apiProjects.length === 0 ? <p className="tree-empty">{t('tree.emptyProjects')}</p> : null}
+      <section className="tree-block" aria-label={t('projects.nav.shortcuts')}>
         <ul>
-          {apiProjects.filter((project) => project.participating !== false).map((project) => (
-            <li key={project.id}>
-              <NavLink className="tree-link" to={`/w/${workspaceId}/projects/${project.id}`}>{project.name}</NavLink>
-            </li>
-          ))}
-        </ul>
-      </section>
-      {apiProjects.some((project) => project.participating === false) ? (
-        <section className="tree-block">
-          <h3>{t('shell.projects.others')}</h3>
-          <ul>
-            {apiProjects.filter((project) => project.participating === false).map((project) => (
-              <li key={project.id}>
-                <NavLink className="tree-link" to={`/w/${workspaceId}/projects/${project.id}`}>{project.name}</NavLink>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-      <section className="tree-block">
-        <div className="section-title">
-          <h3>{t('shell.teams')}</h3>
-          {canCreate ? <button type="button" className="icon-add" aria-label={t('create.team')} onClick={() => open('team')}>+</button> : null}
-        </div>
-        <ul>
-          {teams.map((team) => (
-            <li key={team.id}>
-              <NavLink className="tree-link" to={`/w/${workspaceId}/teams/${team.id}`}>{team.name}</NavLink>
-            </li>
-          ))}
-        </ul>
-      </section>
-      <section className="tree-block">
-        <h3>{t('shell.projects.views')}</h3>
-        <ul>
-          <li><NavLink end className={({ isActive }) => (isActive ? 'tree-link active' : 'tree-link')} to={`/w/${workspaceId}/projects`}>{t('shell.projects.all')}</NavLink></li>
           <li><NavLink className="tree-link" to={`/w/${workspaceId}/my-work`}>{t('shell.projects.tasks')}</NavLink></li>
+          <li>
+            <Link className={atProjects && browsing ? 'tree-link active' : 'tree-link'} aria-current={atProjects && browsing ? 'page' : undefined} to={`${base}?browse=all`}>{t('shell.projects.all')}</Link>
+          </li>
         </ul>
+      </section>
+      <section className="tree-block">
+        <h3>
+          <Link className={atProjects && !browsing ? 'tree-heading-link active' : 'tree-heading-link'} aria-current={atProjects && !browsing ? 'page' : undefined} to={base}>
+            {t('shell.projects.mine')} <span className="list-count">{total}</span>
+          </Link>
+        </h3>
+        {total === 0 ? <p className="tree-empty">{apiProjects.length === 0 ? t('tree.emptyProjects') : t('projects.nav.empty')}</p> : null}
+        <ul>
+          {mine.favorites.map((project) => (
+            <li key={project.id}>
+              <NavLink className="tree-link" to={`${base}/${project.id}`}>
+                <span className="tree-star" role="img" aria-label={t('projects.favorite')}>★</span>
+                {project.name}
+              </NavLink>
+            </li>
+          ))}
+          {mine.others.slice(0, room).map((project) => (
+            <li key={project.id}>
+              <NavLink className="tree-link" to={`${base}/${project.id}`}>{project.name}</NavLink>
+            </li>
+          ))}
+        </ul>
+        {hidden > 0 ? <Link className="tree-more" to={base}>{t('projects.nav.more', { count: String(total) })}</Link> : null}
       </section>
     </>
   )

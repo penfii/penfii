@@ -153,7 +153,11 @@ pub fn kinds_for_tab(tab: &str) -> Option<Vec<&'static str>> {
 
 #[derive(Default, Debug)]
 struct Resolved {
+    /// Channels the person named with `in:`; applies to every kind that has channels.
     channel_ids: Option<Vec<Uuid>>,
+    /// Channels messages are limited to: `in:` intersected with the channels of `project:` /
+    /// `team:`. Kept apart from `channel_ids` so a project filter never hides channel-less Tickets.
+    message_channel_ids: Option<Vec<Uuid>>,
     from_ids: Option<Vec<Uuid>>,
     assignee_ids: Option<Vec<Uuid>>,
     assignee_none: bool,
@@ -560,7 +564,7 @@ fn kind_query(
             }
         }
         "message" => {
-            if let Some(c) = &r.channel_ids {
+            if let Some(c) = r.message_channel_ids.as_ref().or(r.channel_ids.as_ref()) {
                 filter.push(terms("conversationId", c));
             }
             if let Some(f) = &r.from_ids {
@@ -573,7 +577,7 @@ fn kind_query(
                 filter.push(json!({"term": {"mentionedUserIds": actor}}));
             }
             // A Project's messages are the messages of its channels, resolved by the caller
-            // into `channel_ids` when `project:` is used with messages.
+            // into `message_channel_ids` when `project:` is used with messages.
         }
         "space" => {
             if let Some(p) = &r.project_ids {
@@ -836,7 +840,7 @@ async fn narrow_by_project_and_team(
         .bind(resolved.team_ids.as_deref())
         .fetch_all(&mut *conn)
         .await?;
-        resolved.channel_ids = Some(match resolved.channel_ids.take() {
+        resolved.message_channel_ids = Some(match resolved.channel_ids.clone() {
             Some(existing) => existing
                 .into_iter()
                 .filter(|c| channels.contains(c))

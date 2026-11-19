@@ -94,6 +94,13 @@ export function SearchPage() {
     const known = ['unsupported_key', 'invalid_status', 'invalid_date', 'invalid_value', 'unsupported_syntax', 'unknown_filter_value', 'query_too_long', 'invalid_cursor', 'ambiguous_filter']
     return known.includes(error.code) ? t(key as 'search2.error.invalid_value', { token }) : t('search2.error.generic')
   }
+  // What narrows the search, said back when nothing was found: the typed filters, the project state and the kind tab.
+  const stateName = workflow.data?.states.find((item) => item.id === stateId)?.name
+  const conditions = [
+    ...q.split(/\s+/).filter((word) => /^[a-z]+:\S+/i.test(word)),
+    ...(stateId ? [t('search2.cond.state', { state: stateName ?? stateId })] : []),
+    ...(tab !== 'all' ? [t('search2.cond.tab', { tab: t(`search2.tab.${tab}`) })] : []),
+  ]
   const candidates = isApiError(error) && error.code === 'ambiguous_filter'
     ? ((error.details as { token?: string; candidates?: Array<{ id: string; name: string }> } | undefined) ?? {})
     : null
@@ -183,7 +190,23 @@ export function SearchPage() {
         <p className="board-note" role="status">{t('search2.indexing', { kinds: status.unavailableKinds.map((k) => t(`search2.kind.${k as 'message'}`)).join(', ') })}</p>
       ) : null}
       {status?.stale ? <p className="board-note" role="status">{t('search2.stale')}</p> : null}
-      {search.isSuccess && results.length === 0 ? <EmptyState title={t('search2.empty')} body={t('search2.emptyBody')} /> : null}
+      {projectToken ? <p className="hint search-scope" role="note">{t('search2.projectScope')}</p> : null}
+      {search.isSuccess && results.length === 0 ? (
+        <div className="search-empty">
+          <EmptyState title={t('search2.empty')} body={t('search2.emptyBody')} />
+          {conditions.length > 0 ? (
+            <div className="search-conditions" role="group" aria-label={t('search2.cond.title')}>
+              <span className="hint">{t('search2.cond.title')}</span>
+              {conditions.map((condition) => <span key={condition} className="chip active">{condition}</span>)}
+            </div>
+          ) : null}
+          <div className="search-empty-actions">
+            {projectToken ? <Button type="button" variant="secondary" onClick={() => update({ q: setKey(q, 'project', null), state: null })}>{t('search2.clearProject')}</Button> : null}
+            {conditions.length > 0 ? <Button type="button" variant="secondary" onClick={() => update({ q: '', state: null })}>{t('search2.clearAll')}</Button> : null}
+            {tab !== 'all' ? <Button type="button" variant="secondary" onClick={() => update({ tab: 'all' })}>{t('search2.searchAll')}</Button> : null}
+          </div>
+        </div>
+      ) : null}
       <ul className="result-list search-results">
         {results.map((result) => {
           if (result.kind === 'person') {

@@ -5,7 +5,7 @@ import { PushBar } from './PushBar'
 import { TabBar } from './TabBar'
 import { RootBar } from './RootBar'
 import { useChromeCollapse, useKeyboardViewport } from './useChrome'
-import { ResumeBand, SearchRoot, SettingsRoot } from './RootScreens'
+import { ResumeBand, SearchRoot, SettingsRoot, searchRootFrom } from './RootScreens'
 import { pushTarget, resolveScreen, rootPath } from './routes'
 import { useScreenTitle } from './useScreenTitle'
 import { useDemotedHeadings } from './useDemotedHeadings'
@@ -69,7 +69,13 @@ export function MobileShell({ section, workspaceId, slots }: { section: ShellSec
         ) : threadBase ? (
           <PushBar fallback={threadBase} title={t('thread.title')} backLabel={title} onBack={() => leave(threadBase)} />
         ) : (
-          <PushBar fallback={rootPath(workspaceId, vault ? 'home' : area)} title={title} backLabel={vault ? t('nav.home') : sectionLabel} />
+          <PushBar
+            fallback={rootPath(workspaceId, vault ? 'home' : area)}
+            title={title}
+            backLabel={vault ? t('nav.home') : sectionLabel}
+            // Back from search results keeps the search, so another kind can be chosen for the same text and state.
+            onBack={area === 'search' ? () => leave(searchRootFrom(workspaceId, location.search)) : undefined}
+          />
         )}
         <main ref={main} className="mobile-main" onClickCapture={onListClick} onScrollCapture={onScroll}>
           {showList && area === 'search' ? (

@@ -1,10 +1,13 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
+import { useQuery } from '@tanstack/react-query'
 import type { WorkspacePerson } from '@penfii/contracts'
 import { Avatar, Button, Dialog } from '../../design/ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { openPendingDm } from '../../shell/pendingDm'
 import { useSession } from '../identity'
+import { queries } from '../../queries'
+import { departmentPath } from '../spaces/orgTree'
 
 /** A person's name that opens their card: job title, status, their Teams, and a message to them. */
 export function PersonButton({ workspaceId, person }: { workspaceId: string; person: WorkspacePerson }) {
@@ -34,13 +37,7 @@ export function PersonButton({ workspaceId, person }: { workspaceId: string; per
             <small className="hint">{person.email}</small>
           </span>
         </div>
-        {person.teams.length > 0 ? (
-          <ul className="plain-list">
-            {person.teams.map((team) => (
-              <li key={team.id}><Link to={`/w/${workspaceId}/directory/teams/${team.id}`} onClick={() => setOpen(false)}>{team.name}</Link></li>
-            ))}
-          </ul>
-        ) : <p className="hint">{t('teams.unaffiliated')}</p>}
+        {open ? <PersonTeams workspaceId={workspaceId} person={person} onNavigate={() => setOpen(false)} /> : null}
         {self ? null : (
           <Button
             type="button"
@@ -54,5 +51,35 @@ export function PersonButton({ workspaceId, person }: { workspaceId: string; per
         )}
       </Dialog>
     </>
+  )
+}
+
+/**
+ * The Teams a person is on, each with the department above it, a link to the Team and a link that finds the Team in the
+ * org chart. A person may be on several Teams, so each one has its own pair of links. The two links are separate: opening a
+ * Team and seeing where it sits are different questions.
+ */
+function PersonTeams({ workspaceId, person, onNavigate }: { workspaceId: string; person: WorkspacePerson; onNavigate: () => void }) {
+  const { t } = useI18n()
+  // Read only while the card is open.
+  const space = useQuery(queries.space(workspaceId))
+  const departments = useQuery(queries.departments(workspaceId))
+  if (person.teams.length === 0) return <p className="hint">{t('teams.noTeam')}</p>
+  return (
+    <ul className="plain-list person-teams-list">
+      {person.teams.map((team) => {
+        const full = space.data?.teams.find((item) => item.id === team.id)
+        const path = departmentPath(departments.data ?? [], full?.departmentId ?? null)
+        return (
+          <li key={team.id} className="person-team-row">
+            <span>
+              <Link to={`/w/${workspaceId}/directory/teams/${team.id}`} aria-label={t('teams.openTeamFor', { name: team.name })} onClick={onNavigate}>{team.name}</Link>
+              <small className="hint"> {path.length > 0 ? path.join(' › ') : departments.isSuccess ? t('teams.unplacedTeam') : ''}</small>
+            </span>
+            <Link to={`/w/${workspaceId}/directory?focus=team:${team.id}`} aria-label={t('teams.viewInOrgFor', { name: team.name })} onClick={onNavigate}>{t('teams.viewInOrg')}</Link>
+          </li>
+        )
+      })}
+    </ul>
   )
 }

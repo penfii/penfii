@@ -71,6 +71,8 @@ a { color: inherit; }
   margin: 0 0 var(--space-3);
 }
 
+/* An error under a field, outside its label, so the label's name stays the field's name. */
+.field-error-block { display: block; margin: calc(var(--space-3) * -0.7) 0 var(--space-3); }
 .field-hint, .hint, .meta { color: var(--text-muted); font-size: 0.85rem; }
 
 input, select, textarea {
@@ -375,3 +377,12 @@ button.secondary.danger-outline { height: 36px; color: #b4452f; font-size: 0.8re
 .action-menu-item:hover:not(:disabled), .action-menu-item:focus-visible { background: var(--bg-muted); }
 .action-menu-item.danger { color: var(--danger, #8d3535); border-top: 1px solid var(--border); border-radius: 0 0 var(--radius-sm) var(--radius-sm); margin-top: var(--space-1); padding-top: var(--space-2); }
 .action-menu-item:disabled { opacity: .55; }
+
+/* The kept-draft line on the create-ticket form and the result line of "Create another". */
+.draft-restored, .create-result { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: baseline; margin: 0 0 var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--bg-muted); font-size: 0.85rem; }
+.draft-restored .link-button { margin-left: auto; }
+.create-result { margin-bottom: var(--space-2); }
+
+/* Search with no result: the conditions that narrowed it and the ways out. */
+.search-conditions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; margin: var(--space-3) 0; }
+.search-empty-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }

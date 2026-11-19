@@ -3,7 +3,9 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { newIdempotencyKey } from '@penfii/api-client'
 import type { BulkChange, BulkItemResult, BulkResult } from '@penfii/contracts'
 import { api } from '../../api'
-import { Button } from '../../design/ui'
+import { Button, useConfirm } from '../../design/ui'
+import { archivePlan, runLifecycle } from './bulkLifecycle'
+import { ArchiveExcluded, announceArchived } from './archiveFeedback'
 import { useI18n } from '../../i18n/I18nProvider'
 import type { MessageKey } from '../../i18n/messages'
 import { PRIORITIES } from './ticketModel'
@@ -31,6 +33,8 @@ export function failureKey(item: BulkItemResult): MessageKey | null {
       return 'bulk.fail.conflict'
     case 'open_children':
       return 'bulk.fail.open_children'
+    case 'not_finished':
+      return 'bulk.fail.not_finished'
     case 'ticket_trashed':
       return 'bulk.fail.ticket_trashed'
     case 'not_processed':
@@ -108,6 +112,41 @@ export function useBulkForm(workspaceId: string, selected: WorkTicket[], onResul
 }
 
 /**
+ * The Archive of the chosen Tickets from a Table or a phone's select mode: the count that can really be archived (with
+ * the reasons for the rest), a question first, one result for all of them, and an Undo that takes them out again.
+ */
+export function useArchiveAction({
+  workspaceId,
+  selected,
+  canArchive,
+  onResult,
+  onRefresh,
+}: {
+  workspaceId: string
+  selected: WorkTicket[]
+  canArchive: (projectId: string) => boolean
+  onResult: (result: BulkResult | null) => void
+  onRefresh: () => void
+}) {
+  const { t } = useI18n()
+  const { confirm, dialog } = useConfirm()
+  const [archiving, setArchiving] = useState<{ done: number; total: number } | null>(null)
+  const plan = archivePlan(selected.map((ticket) => ({ ...ticket, finished: ticket.stateCategory === 'DONE' || ticket.stateCategory === 'CANCELED' })), canArchive)
+
+  async function archive() {
+    if (archiving || plan.ids.length === 0) return
+    if (!(await confirm({ title: t('bulk.lifecycle.archiveConfirmTitle'), body: t('bulk.lifecycle.archiveConfirm', { count: String(plan.ids.length) }), confirmLabel: t('bulk.lifecycle.archive') }))) return
+    onResult(null)
+    setArchiving({ done: 0, total: plan.ids.length })
+    const outcome = await runLifecycle(workspaceId, 'ARCHIVE', plan.ids, (done) => setArchiving({ done, total: plan.ids.length }))
+    setArchiving(null)
+    onResult(outcome)
+    announceArchived(t, outcome, onRefresh)
+  }
+  return { plan, archive, archiving, dialog }
+}
+
+/**
  * One change for the Tickets chosen in a Table. Every Ticket goes through the same command a
  * single edit uses, so a Ticket that may not take the change is refused with its own reason while
  * the others still change; the result is never summed into a plain "done".
@@ -119,9 +158,18 @@ export function BulkBar({
   names,
   onClear,
   onResult,
+  canArchive,
+  scope,
+  onRefresh,
 }: {
   workspaceId: string
   selected: WorkTicket[]
+  /** Whether the person administers a Project (the Archive of its Tickets needs it); the server still decides. */
+  canArchive: (projectId: string) => boolean
+  /** One line on what the choice covers. */
+  scope: string
+  /** Reloads the Tickets after an Archive was taken back with Undo (and drops the result that no longer holds). */
+  onRefresh: () => void
   /** The last result stays on screen after the selection is gone, so a full success is still reported. */
   result: BulkResult | null
   /** Key and title of every Ticket the result may mention. */
@@ -132,6 +180,7 @@ export function BulkBar({
 }) {
   const { t } = useI18n()
   const { field, setField, value, setValue, options, locked, needsValue, ready, apply, bulk } = useBulkForm(workspaceId, selected, onResult)
+  const { plan, archive, archiving, dialog } = useArchiveAction({ workspaceId, selected, canArchive, onResult, onRefresh })
   return (
     <div className="bulk-bar" role="region" aria-label={t('bulk.title')}>
       <div className="bulk-controls">
@@ -153,9 +202,15 @@ export function BulkBar({
             ))}
           </select>
         </label>
-        <Button type="button" disabled={!ready || bulk.isPending} onClick={apply}>{t('bulk.apply')}</Button>
-        <Button type="button" variant="ghost" onClick={onClear}>{t('bulk.clear')}</Button>
+        <Button type="button" disabled={!ready || bulk.isPending || archiving !== null} onClick={apply}>{t('bulk.apply')}</Button>
+        <span className="bulk-sep" aria-hidden="true" />
+        <Button type="button" variant="secondary" disabled={plan.ids.length === 0 || archiving !== null || bulk.isPending} onClick={() => void archive()}>{t('bulk.lifecycle.archiveCount', { count: String(plan.ids.length) })}</Button>
+        <Button type="button" variant="ghost" disabled={archiving !== null} onClick={onClear}>{t('bulk.clear')}</Button>
       </div>
+      <ArchiveExcluded plan={plan} count={selected.length} />
+      {selected.length > 0 ? <p className="bulk-scope">{scope}</p> : null}
+      {archiving ? <p className="hint" role="status">{t('bulk.lifecycle.running', { done: String(archiving.done), total: String(archiving.total) })}</p> : null}
+      {dialog}
       {locked ? <small className="field-hint">{t('bulk.oneProject')}</small> : null}
       {bulk.isError ? <p className="board-error" role="alert">{t('bulk.error')}</p> : null}
       <BulkResultView result={result} names={names} />

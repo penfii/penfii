@@ -16,6 +16,7 @@ import { DependenciesSection } from './DependenciesSection'
 import { HierarchySection } from './HierarchySection'
 import { TrashTicketButton } from '../admin/TrashTicketButton'
 import { ArchiveTicketButton } from './ArchiveTicketButton'
+import { OpenChildrenNote, ParentArchivedNote } from './ParentNotices'
 import { ReferencedBy } from '../docs/ReferencedBy'
 import { HistoryTab } from './HistoryTab'
 import { ScheduleSection } from './PlanFields'
@@ -235,6 +236,7 @@ function failureMessageKey(failure: NonNullable<ReturnType<typeof useTicketEdito
     case 'moveConflict': return 'work.move.conflict'
     case 'blocked': return 'work.move.blocked'
     case 'blockedCanceled': return 'work.move.blockedCanceled'
+    case 'parentArchived': return 'work.move.parentArchived'
     case 'move': return 'work.move.error'
     case 'invalidValue': return 'work.panel.invalidValue'
     case 'save':
@@ -264,7 +266,7 @@ function TicketBody({ ticket, ctx, onClose, onOpenTicket }: { ticket: Ticket; ct
   const space = useQuery({ ...queries.space(workspaceId), enabled: workspaceId.length > 0 })
   const parentTicket = useQuery({
     ...queries.ticket(ticket.parentId ?? ''),
-    enabled: ticket.hierarchyKind === 'SUBTASK' && ticket.parentId !== null,
+    enabled: ticket.parentId !== null,
   })
 
   // A title changed elsewhere replaces the field only while it has no edit of its own.
@@ -320,6 +322,8 @@ function TicketBody({ ticket, ctx, onClose, onOpenTicket }: { ticket: Ticket; ct
       <div className="ticket-body" ref={rootRef} tabIndex={-1}>
       <div className="ticket-title-block">
       {ticket.archivedAt ? <p className="board-note" role="note">{t('archive.banner')}</p> : !canEdit ? <p className="board-note" role="note">{t('work.panel.readOnly')}</p> : null}
+      <ParentArchivedNote ticket={ticket} parent={parentTicket.data} canManage={ctx.board.canManageWorkflow} onOpenTicket={onOpenTicket} />
+      {ticket.hierarchyKind !== 'SUBTASK' && ctx.board.states.find((state) => state.id === ticket.statusId)?.category === 'DONE' ? <OpenChildrenNote summary={ticket.childSummary} /> : null}
       {editor.conflict ? (
         <ConflictBanner conflict={editor.conflict} ticket={ticket} ctx={ctx} busy={editor.busy} onReapply={() => {
           // The server stores the description in its canonical form, so the echo never equals the draft: a

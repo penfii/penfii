@@ -31,10 +31,6 @@ export function useDocTreeCommands(workspaceId: string) {
         api.moveDoc(id, { parentId, beforeId }),
       onSuccess: refresh,
     }),
-    remove: useMutation({
-      mutationFn: (id: string) => api.deleteDoc(id),
-      onSuccess: refresh,
-    }),
   }
 }
 

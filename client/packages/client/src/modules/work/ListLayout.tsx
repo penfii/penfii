@@ -6,6 +6,7 @@ import { StateMenu } from './StateMenu'
 import { formatDue, isOverdue, isPriority } from './ticketModel'
 import { formatEstimate } from './planValues'
 import { BlockedChip } from './WorkChips'
+import { TriCheck } from './TriCheck'
 import type { Section, WorkTicket } from './viewModel'
 import type { TableColumn } from '@penfii/contracts'
 
@@ -25,7 +26,7 @@ export type ListReorder = {
 export function ListLayout({
   sections,
   selectedId,
-  compact,
+  compact = false,
   wide,
   states,
   busy,
@@ -35,10 +36,12 @@ export function ListLayout({
   onState,
   fields,
   select,
+  wrapTitles,
 }: {
   sections: Section[]
   selectedId: string | null
-  compact: boolean
+  /** Tighter rows (the Sprint planning lists). */
+  compact?: boolean
   /** A scope that mixes Projects: rows name their Project and Channel. */
   wide: boolean
   /** The Project's States when it is known; otherwise each row loads its own Project's. */
@@ -51,16 +54,33 @@ export function ListLayout({
   /** On a phone the Table's columns are the fields a row shows; without it every field shows. */
   fields?: ReadonlySet<TableColumn>
   /** Phone select mode: a row is chosen instead of opened, and its State and order controls rest. */
-  select?: { chosen: ReadonlySet<string>; onToggle: (id: string) => void }
+  select?: {
+    chosen: ReadonlySet<string>
+    onToggle: (id: string) => void
+    /** Chooses or releases a whole group (and enables the group's own check). */
+    onToggleMany?: (ids: string[], on: boolean) => void
+    /** The check sits beside a row that still opens and still changes its State (a desktop Table); otherwise a row is chosen by tapping it. */
+    inline?: boolean
+  }
+  /** Titles wrap instead of being cut at the end of the line (the Table's compact density). */
+  wrapTitles?: boolean
 }) {
   const { t, locale } = useI18n()
   const show = (column: TableColumn) => !fields || fields.has(column)
   return (
-    <div className={compact ? 'work-list compact' : 'work-list'}>
+    <div className={['work-list', compact ? 'compact' : '', wrapTitles ? 'wrap-titles' : ''].filter(Boolean).join(' ')}>
       {sections.map((section) => (
         <section key={section.id} className="list-section" aria-label={section.title || undefined}>
           {section.title ? (
             <h3 className="list-section-head">
+              {select?.onToggleMany ? (
+                <TriCheck
+                  label={t('work.table.selectGroup', { title: section.title })}
+                  ids={section.tickets.filter(canEdit).map((ticket) => ticket.id)}
+                  selection={select.chosen}
+                  onSelect={select.onToggleMany}
+                />
+              ) : null}
               {section.title}
               {section.hint ? <small className="hint"> · {section.hint}</small> : null}
               <span className="list-count">{section.tickets.length}</span>
@@ -81,7 +101,8 @@ export function ListLayout({
               const ticket = row.ticket as WorkTicket
               const done = ticket.stateCategory === 'DONE' || ticket.stateCategory === 'CANCELED'
               const overdue = isOverdue(ticket.dueOn, done)
-              const editable = canEdit(ticket) && !busy.has(ticket.id) && !select
+              const phoneSelect = select !== undefined && !select.inline
+              const editable = canEdit(ticket) && !busy.has(ticket.id) && !phoneSelect
               const pickable = select && canEdit(ticket) && !busy.has(ticket.id)
               const chosen = Boolean(select?.chosen.has(ticket.id))
               const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
@@ -104,16 +125,16 @@ export function ListLayout({
                   data-ticket-id={ticket.id}
                   aria-busy={busy.has(ticket.id)}
                 >
-                  {select ? (
+                  {select && (select.inline ? canEdit(ticket) : true) ? (
                     <input type="checkbox" className="list-row-check" aria-label={t('bulk.rowSelect', { key: ticket.key })} checked={chosen} disabled={!pickable} onChange={() => select.onToggle(ticket.id)} />
-                  ) : null}
+                  ) : select ? <span className="list-row-check" aria-hidden="true" /> : null}
                   <button
                     type="button"
                     className="list-row-open"
                     aria-current={ticket.id === selectedId ? 'true' : undefined}
                     aria-keyshortcuts={reorder && canEdit(ticket) ? 'Alt+ArrowUp Alt+ArrowDown Alt+Home' : undefined}
                     aria-label={t('work.board.openTicket', { key: ticket.key })}
-                    onClick={() => (select ? (pickable ? select.onToggle(ticket.id) : undefined) : onOpen(ticket.id))}
+                    onClick={() => (phoneSelect ? (pickable ? select.onToggle(ticket.id) : undefined) : onOpen(ticket.id))}
                     onKeyDown={onKeyDown}
                   >
                     <small className="ticket-key">{ticket.key}</small>
@@ -151,7 +172,7 @@ export function ListLayout({
                       </span>
                     ) : null}
                   </span>
-                  {reorder && canEdit(ticket) && !select ? (
+                  {reorder && canEdit(ticket) && !phoneSelect ? (
                     <span className="list-row-order">
                       {reorder.canStep(ticket, section) ? (
                         <>

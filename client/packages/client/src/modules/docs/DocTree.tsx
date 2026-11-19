@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { DocNode } from '@penfii/contracts'
 import { Button, Dialog, Select } from '../../design/ui'
 import { queries } from '../../queries'
+import { DeleteDocDialog, type Deleted } from './DeleteDocDialog'
 import { NewDocDialog } from './NewDocDialog'
 import './knowledge.css'
 import type { ShareScope } from './ShareScopePicker'
@@ -65,6 +66,10 @@ export function DocTree({
   const [renaming, setRenaming] = useState<string | null>(null)
   const [renameText, setRenameText] = useState('')
   const [confirm, setConfirm] = useState<DocNode | null>(null)
+  // Where the rows were when Delete was asked: after the delete, focus goes to the next row that is still there (else the one before, else New).
+  const trail = useRef<{ ids: string[]; index: number }>({ ids: [], index: -1 })
+  const [focusAfter, setFocusAfter] = useState<string | null>(null)
+  const newRef = useRef<HTMLButtonElement>(null)
   const [moving, setMoving] = useState<DocNode | null>(null)
   const [moveTarget, setMoveTarget] = useState<string>('')
   const [dropOn, setDropOn] = useState<string | null>(null)
@@ -156,18 +161,37 @@ export function DocTree({
     }
   }
 
-  async function remove(node: DocNode) {
+  function askDelete(node: DocNode) {
+    trail.current = { ids: rows.map((row) => row.node.id), index: rows.findIndex((row) => row.node.id === node.id) }
+    setConfirm(node)
+  }
+
+  function deleted(node: DocNode, result: Deleted | null) {
     setConfirm(null)
-    try {
-      await commands.remove.mutateAsync(node.id)
-      if (selectedId === node.id || ancestorIds(nodes, selectedId ?? '').includes(node.id)) {
-        onSelect(null)
-        onGone?.()
-      }
-    } catch (error) {
-      explain(error)
+    const gone = result?.removedIds ?? new Set([node.id])
+    const { ids, index } = trail.current
+    const next = [...ids.slice(index + 1), ...ids.slice(0, Math.max(index, 0)).reverse()].find((id) => !gone.has(id) && id !== node.id)
+    setFocusAfter(next ?? '')
+    const looking = selectedId !== null && (gone.has(selectedId) || selectedId === node.id || (result === null && ancestorIds(nodes, selectedId).includes(node.id)))
+    if (looking) {
+      onSelect(null)
+      onGone?.()
     }
   }
+
+  // Focus follows a delete to the next row (after the dialog has given focus back to where it came from).
+  useEffect(() => {
+    if (focusAfter === null) return
+    const timer = setTimeout(() => {
+      const row = focusAfter ? document.getElementById(`doc-row-${focusAfter}`) : null
+      if (row) {
+        setFocused(focusAfter)
+        row.focus()
+      } else newRef.current?.focus()
+      setFocusAfter(null)
+    }, 50)
+    return () => clearTimeout(timer)
+  }, [focusAfter])
 
   function onKeyDown(event: KeyboardEvent<HTMLUListElement>) {
     if (renaming) return
@@ -214,7 +238,7 @@ export function DocTree({
         break
       case 'Delete':
         event.preventDefault()
-        if (row.node.rights.manage) setConfirm(row.node)
+        if (row.node.rights.manage) askDelete(row.node)
         break
       default:
     }
@@ -225,7 +249,7 @@ export function DocTree({
 
   return (
     <div className="doc-tree-wrap">
-      <button type="button" className="nav-add" onClick={() => (onDraft ? onDraft(null) : setCreating({ parentId: null }))}>+ {t('docs.new')}</button>
+      <button ref={newRef} type="button" className="nav-add" onClick={() => (onDraft ? onDraft(null) : setCreating({ parentId: null }))}>+ {t('docs.new')}</button>
       <input className="doc-tree-search" value={query} aria-label={t('docs.tree.search')} placeholder={t('docs.tree.search')} onChange={(event) => setQuery(event.target.value)} />
       {message ? <p className="board-error" role="alert">{message}</p> : null}
       {hiddenOpen ? (
@@ -358,7 +382,7 @@ export function DocTree({
                     </>
                   ) : null}
                   {node.rights.manage ? (
-                    <button type="button" aria-label={`${t('docs.delete')}: ${node.title || t('docs.untitled')}`} onClick={() => setConfirm(node)}><CloseIcon /></button>
+                    <button type="button" aria-label={`${t('docs.delete')}: ${node.title || t('docs.untitled')}`} onClick={() => askDelete(node)}><CloseIcon /></button>
                   ) : null}
                 </span>
               </div>
@@ -368,13 +392,18 @@ export function DocTree({
         })}
       </ul>
       <NewDocDialog open={creating !== null} workspaceId={workspaceId} suggestedProjectId={projectId ?? null} onCreate={addPage} onClose={() => setCreating(null)} />
-      <Dialog open={confirm !== null} title={t('docs.delete.title')} onClose={() => setConfirm(null)}>
-        <p>{t('docs.delete.body', { title: confirm?.title || t('docs.untitled') })}</p>
-        <div className="dialog-actions">
-          <Button variant="ghost" onClick={() => setConfirm(null)}>{t('docs.cancel')}</Button>
-          <Button onClick={() => confirm && void remove(confirm)}>{t('docs.delete')}</Button>
-        </div>
-      </Dialog>
+      <DeleteDocDialog
+        workspaceId={workspaceId}
+        node={confirm}
+        onClose={() => {
+          // Cancelled, or the page turned out to be gone: focus goes back to the row the question was asked about (the row's
+          // buttons only show on hover, so the dialog's own return of focus would land on the page).
+          const id = confirm?.id
+          setConfirm(null)
+          if (id) setTimeout(() => document.getElementById(`doc-row-${id}`)?.focus(), 0)
+        }}
+        onDeleted={deleted}
+      />
       <Dialog open={moving !== null} title={t('docs.tree.move')} onClose={() => setMoving(null)} presentation="full">
         <label className="field">
           <span>{t('docs.tree.moveUnder')}</span>

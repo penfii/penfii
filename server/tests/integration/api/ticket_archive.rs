@@ -630,6 +630,564 @@ async fn bulk_archive_and_trash_report_every_ticket(pool: PgPool) {
     assert_eq!(trashed, 2);
 }
 
+/// FEA-125: the bulk archive may ask for finished work only, and the server then decides under the Ticket's lock.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_bulk_archive_that_asks_for_finished_work_refuses_a_ticket_reopened_before_it_runs(
+    pool: PgPool,
+) {
+    let world = &World::new(pool).await;
+    let workspace_id = world.workspace_id;
+    let (project_id, workflow) = new_project(world, workspace_id, "OnlyFinished").await;
+    let (done, doing) = (
+        state_id(&workflow, "DONE"),
+        state_id(&workflow, "IN_PROGRESS"),
+    );
+    let kept = ticket(world, &project_id, "of-a", json!({"title":"Stays done"})).await;
+    let reopened = ticket(world, &project_id, "of-b", json!({"title":"Reopened"})).await;
+    let plain = ticket(
+        world,
+        &project_id,
+        "of-c",
+        json!({"title":"Open, archived the old way"}),
+    )
+    .await;
+    for (id, key) in [(&kept, "of-da"), (&reopened, "of-db")] {
+        set_state(world, id, &done, 1, key).await;
+    }
+    // Someone reopens it after the screen chose it: the revision moves on, the State is no longer finished.
+    set_state(world, &reopened, &doing, 2, "of-reopen").await;
+    let path = format!("/v1/workspaces/{workspace_id}/tickets/bulk");
+    let (s, v) = post_as(
+        world,
+        &world.owner_cookie,
+        &path,
+        "of-1",
+        json!({"ticketIds":[kept,reopened],"change":{"type":"ARCHIVE","onlyFinished":true}}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    // Only that Ticket is refused, with its own reason; the other one is counted as the success it is.
+    assert_eq!(
+        (v["succeeded"].as_i64(), v["failed"].as_i64()),
+        (Some(1), Some(1)),
+        "{v}"
+    );
+    let refused = v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["ok"] == false)
+        .unwrap();
+    assert_eq!(
+        (refused["ticketId"].as_str(), refused["code"].as_str()),
+        (Some(reopened.as_str()), Some("not_finished"))
+    );
+    assert!(archived_at(world, &kept).await.is_some());
+    assert!(archived_at(world, &reopened).await.is_none());
+    // Sending the same request again repeats the recorded result: nothing is archived twice and nothing new is refused or taken.
+    let (s, again) = post_as(
+        world,
+        &world.owner_cookie,
+        &path,
+        "of-1",
+        json!({"ticketIds":[kept,reopened],"change":{"type":"ARCHIVE","onlyFinished":true}}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{again}");
+    assert_eq!(again["items"], v["items"]);
+    // Without the condition the bulk archive keeps accepting any State, like the single archive (other callers do not change).
+    let (s, v) = post_as(
+        world,
+        &world.owner_cookie,
+        &path,
+        "of-2",
+        json!({"ticketIds":[plain],"change":{"type":"ARCHIVE"}}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["succeeded"], 1, "{v}");
+    assert!(archived_at(world, &plain).await.is_some());
+    let (s, v) = command(
+        world,
+        &world.owner_cookie,
+        &reopened,
+        "archive",
+        "of-single",
+    )
+    .await;
+    assert!(
+        s.is_success(),
+        "the single archive has no State rule: {s} {v}"
+    );
+    assert!(archived_at(world, &reopened).await.is_some());
+    // An already archived Ticket is a success even for the checked archive: a repeat does not turn into a refusal.
+    let (s, v) = post_as(
+        world,
+        &world.owner_cookie,
+        &path,
+        "of-3",
+        json!({"ticketIds":[reopened],"change":{"type":"ARCHIVE","onlyFinished":true}}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["succeeded"], 1, "{v}");
+    // The condition must be a boolean.
+    let (s, v) = post_as(
+        world,
+        &world.owner_cookie,
+        &path,
+        "of-4",
+        json!({"ticketIds":[kept],"change":{"type":"ARCHIVE","onlyFinished":"yes"}}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+}
+
+/// FEA-125: reopening and archiving at the same moment never leaves an archived Ticket that is not finished. A reopen that
+/// wins makes the checked archive refuse; an archive that wins makes the reopen fail on the (now read-only) Ticket.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_reopen_racing_a_checked_bulk_archive_never_leaves_an_archived_open_ticket(pool: PgPool) {
+    let world = &World::new(pool).await;
+    let workspace_id = world.workspace_id;
+    let (project_id, workflow) = new_project(world, workspace_id, "Race").await;
+    let (done, doing) = (
+        state_id(&workflow, "DONE"),
+        state_id(&workflow, "IN_PROGRESS"),
+    );
+    let mut ids = Vec::new();
+    for n in 0..8 {
+        let id = ticket(
+            world,
+            &project_id,
+            &format!("race-{n}"),
+            json!({"title":format!("T{n}")}),
+        )
+        .await;
+        set_state(world, &id, &done, 1, &format!("race-d{n}")).await;
+        ids.push(id);
+    }
+    let path = format!("/v1/workspaces/{workspace_id}/tickets/bulk");
+    let archive = post_as(
+        world,
+        &world.owner_cookie,
+        &path,
+        "race-bulk",
+        json!({"ticketIds":ids,"change":{"type":"ARCHIVE","onlyFinished":true}}),
+    );
+    let reopens = futures_util::future::join_all(ids.iter().enumerate().map(|(n, id)| {
+        let (url, key, doing) = (
+            format!("/v1/tickets/{id}/commands/change-status"),
+            format!("race-r{n}"),
+            doing.clone(),
+        );
+        async move {
+            post_as(
+                world,
+                &world.owner_cookie,
+                &url,
+                &key,
+                json!({"expectedRevision":2,"statusId":doing}),
+            )
+            .await
+        }
+    }));
+    let ((s, v), reopened) = futures_util::future::join(archive, reopens).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let open_but_archived: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM penfii.tickets t JOIN penfii.workflow_statuses s ON s.id=t.status_id
+         WHERE t.archived_at IS NOT NULL AND s.category NOT IN ('DONE','CANCELED')",
+    )
+    .fetch_one(&world.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        open_but_archived,
+        0,
+        "bulk {v}, reopens {:?}",
+        reopened.iter().map(|(s, _)| s.as_u16()).collect::<Vec<_>>()
+    );
+    // The counts agree with what happened: every archived Ticket was reported as a success, every refused one is still live.
+    let archived: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM penfii.tickets WHERE archived_at IS NOT NULL")
+            .fetch_one(&world.pool)
+            .await
+            .unwrap();
+    assert_eq!(v["succeeded"].as_i64(), Some(archived), "{v}");
+}
+
+/// FEA-125: an unfinished child added to a parent at the moment the parent is archived is never left under an archived parent: the
+/// two steps take the parent's row lock one after the other, so the archive either sees the new child (and refuses with
+/// `open_children`) or the add finds the parent archived (and is refused). Only the added child is raced here. Reopening an
+/// already finished child of an archived parent is allowed with or without a race (the child is a Ticket of its own and stays
+/// live), so that is not an outcome this archive guards.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_child_added_while_the_parent_is_archived_is_never_left_open_under_an_archived_parent(
+    pool: PgPool,
+) {
+    let world = &World::new(pool).await;
+    let workspace_id = world.workspace_id;
+    let (project_id, workflow) = new_project(world, workspace_id, "ChildRace").await;
+    let done = state_id(&workflow, "DONE");
+    let path = format!("/v1/workspaces/{workspace_id}/tickets/bulk");
+    let mut parents = Vec::new();
+    for n in 0..6 {
+        let parent = ticket(
+            world,
+            &project_id,
+            &format!("cr-p{n}"),
+            json!({"title":format!("P{n}"),"hierarchyKind":"TASK"}),
+        )
+        .await;
+        let child = ticket(
+            world,
+            &project_id,
+            &format!("cr-c{n}"),
+            json!({"title":format!("C{n}"),"hierarchyKind":"SUBTASK","parentId":parent}),
+        )
+        .await;
+        set_state(world, &child, &done, 1, &format!("cr-dc{n}")).await;
+        set_state(world, &parent, &done, 1, &format!("cr-dp{n}")).await;
+        parents.push((parent, child));
+    }
+    let ids: Vec<String> = parents.iter().map(|(p, _)| p.clone()).collect();
+    let archive = post_as(
+        world,
+        &world.owner_cookie,
+        &path,
+        "cr-bulk",
+        json!({"ticketIds":ids,"change":{"type":"ARCHIVE","onlyFinished":true}}),
+    );
+    let racers =
+        futures_util::future::join_all(parents.iter().enumerate().map(|(n, (parent, _))| {
+            let (add_url, add_key, parent) = (
+                format!("/v1/projects/{project_id}/tickets"),
+                format!("cr-add{n}"),
+                parent.clone(),
+            );
+            async move {
+                post_as(
+                    world,
+                    &world.owner_cookie,
+                    &add_url,
+                    &add_key,
+                    json!({"title":"late child","hierarchyKind":"SUBTASK","parentId":parent}),
+                )
+                .await
+            }
+        }));
+    let ((s, v), _) = futures_util::future::join(archive, racers).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let open_under_archived: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM penfii.tickets c
+         JOIN penfii.tickets p ON p.id = c.parent_id
+         JOIN penfii.workflow_statuses s ON s.id = c.status_id
+         WHERE p.archived_at IS NOT NULL AND c.archived_at IS NULL AND c.trashed_at IS NULL
+           AND s.category NOT IN ('DONE','CANCELED')",
+    )
+    .fetch_one(&world.pool)
+    .await
+    .unwrap();
+    assert_eq!(open_under_archived, 0, "{v}");
+}
+
+/// FEA-126: the parent's Done and the parent's archive are different things, and so is what may happen to a child below each.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_child_of_a_done_parent_can_be_reopened_and_the_parent_stays_done(pool: PgPool) {
+    let world = &World::new(pool).await;
+    let (project_id, workflow) = new_project(world, world.workspace_id, "DoneParent").await;
+    let (done, doing, todo) = (
+        state_id(&workflow, "DONE"),
+        state_id(&workflow, "IN_PROGRESS"),
+        state_id(&workflow, "NOT_STARTED"),
+    );
+    let parent = ticket(
+        world,
+        &project_id,
+        "dp-p",
+        json!({"title":"P","hierarchyKind":"TASK"}),
+    )
+    .await;
+    let a = ticket(
+        world,
+        &project_id,
+        "dp-a",
+        json!({"title":"A","hierarchyKind":"SUBTASK","parentId":parent}),
+    )
+    .await;
+    let b = ticket(
+        world,
+        &project_id,
+        "dp-b",
+        json!({"title":"B","hierarchyKind":"SUBTASK","parentId":parent}),
+    )
+    .await;
+    set_state(world, &a, &done, 1, "dp-da").await;
+    set_state(world, &b, &done, 1, "dp-db").await;
+    set_state(world, &parent, &done, 1, "dp-dp").await;
+    // Reopening one child is allowed: the parent is not touched (still Done, same revision), and the count says one is open.
+    set_state(world, &a, &doing, 2, "dp-ra").await;
+    let (_, p) = get_as(world, &world.owner_cookie, &format!("/v1/tickets/{parent}")).await;
+    assert_eq!(p["statusId"], done.as_str(), "{p}");
+    assert_eq!(
+        p["revisionNo"], 2,
+        "the parent was not changed by the reopen: {p}"
+    );
+    assert_eq!(
+        (
+            p["childSummary"]["total"].as_i64(),
+            p["childSummary"]["done"].as_i64(),
+            p["childSummary"]["canceled"].as_i64()
+        ),
+        (Some(2), Some(1), Some(0)),
+        "{p}"
+    );
+    // Another State change of the open child is allowed too, and so is reopening the second one; the count follows.
+    set_state(world, &a, &todo, 3, "dp-ta").await;
+    set_state(world, &b, &todo, 2, "dp-rb").await;
+    let (_, p) = get_as(world, &world.owner_cookie, &format!("/v1/tickets/{parent}")).await;
+    assert_eq!(p["childSummary"]["done"], 0, "{p}");
+    // The parent cannot be completed again while a child is open (an open Task leaves and returns: the server decides).
+    set_state(world, &parent, &doing, 2, "dp-pre").await;
+    let (s, v) = post_as(
+        world,
+        &world.owner_cookie,
+        &format!("/v1/tickets/{parent}/commands/change-status"),
+        "dp-redo",
+        json!({"expectedRevision":3,"statusId":done}),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].as_str()),
+        (StatusCode::CONFLICT, Some("unfinished_subtasks")),
+        "{v}"
+    );
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_child_of_an_archived_parent_cannot_be_reopened_until_the_parent_is_unarchived(
+    pool: PgPool,
+) {
+    let world = &World::new(pool).await;
+    let workspace_id = world.workspace_id;
+    let (project_id, workflow) = new_project(world, workspace_id, "ArchivedParent").await;
+    let (done, doing, canceled) = (
+        state_id(&workflow, "DONE"),
+        state_id(&workflow, "IN_PROGRESS"),
+        state_id(&workflow, "CANCELED"),
+    );
+    let editor_email = "arch-parent-editor@penfii.test";
+    let editor = viewer_cookie(world, workspace_id, editor_email).await;
+    grant(
+        world,
+        &project_id,
+        user_id_of(world, editor_email).await,
+        "EDITOR",
+    )
+    .await;
+    let parent = ticket(
+        world,
+        &project_id,
+        "ap-p",
+        json!({"title":"P","hierarchyKind":"TASK"}),
+    )
+    .await;
+    let a = ticket(
+        world,
+        &project_id,
+        "ap-a",
+        json!({"title":"A","hierarchyKind":"SUBTASK","parentId":parent}),
+    )
+    .await;
+    let b = ticket(
+        world,
+        &project_id,
+        "ap-b",
+        json!({"title":"B","hierarchyKind":"SUBTASK","parentId":parent}),
+    )
+    .await;
+    for (id, key) in [(&a, "ap-da"), (&b, "ap-db")] {
+        set_state(world, id, &done, 1, key).await;
+    }
+    set_state(world, &parent, &done, 1, "ap-dp").await;
+    let (s, _) = command(world, &world.owner_cookie, &parent, "archive", "ap-arch").await;
+    assert!(s.is_success());
+    let change = |who: &str, id: &str, revision: i64, to: &str, key: &str| {
+        let (who, id, to, key) = (who.to_owned(), id.to_owned(), to.to_owned(), key.to_owned());
+        async move {
+            post_as(
+                world,
+                &who,
+                &format!("/v1/tickets/{id}/commands/change-status"),
+                &key,
+                json!({"expectedRevision":revision,"statusId":to}),
+            )
+            .await
+        }
+    };
+    // Every way to reopen is refused, for the admin and for an editor alike, with the reason the screen needs.
+    for (n, who) in [world.owner_cookie.clone(), editor.clone()]
+        .iter()
+        .enumerate()
+    {
+        let (s, v) = change(who, &a, 2, &doing, &format!("ap-r{n}")).await;
+        assert_eq!(
+            (s, v["code"].as_str()),
+            (StatusCode::CONFLICT, Some("parent_archived")),
+            "{v}"
+        );
+    }
+    let (s, v) = post_as(
+        world,
+        &world.owner_cookie,
+        &format!("/v1/tickets/{a}/commands/move"),
+        "ap-move",
+        json!({"expectedRevision":2,"statusId":doing}),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].as_str()),
+        (StatusCode::CONFLICT, Some("parent_archived")),
+        "the drag path: {v}"
+    );
+    let (s, v) = post_as(
+        world,
+        &world.owner_cookie,
+        &format!("/v1/workspaces/{workspace_id}/tickets/bulk"),
+        "ap-bulk",
+        json!({"ticketIds":[a,b],"change":{"type":"STATUS","statusId":doing}}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        (v["succeeded"].as_i64(), v["failed"].as_i64()),
+        (Some(0), Some(2)),
+        "{v}"
+    );
+    assert!(
+        v["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["code"] == "parent_archived"),
+        "{v}"
+    );
+    // Finishing or canceling below an archived parent is not reopening: it stays possible, and so does the same State again.
+    let (s, v) = change(&world.owner_cookie, &a, 2, &canceled, "ap-cancel").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (s, v) = change(&world.owner_cookie, &b, 2, &done, "ap-same").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    // The unarchive is the admin's: an editor cannot, and nothing about the parent's State changes with it.
+    let (s, _) = command(world, &editor, &parent, "unarchive", "ap-un-e").await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, _) = command(world, &world.owner_cookie, &parent, "unarchive", "ap-un").await;
+    assert!(s.is_success());
+    let (_, p) = get_as(world, &world.owner_cookie, &format!("/v1/tickets/{parent}")).await;
+    assert_eq!(
+        p["statusId"],
+        done.as_str(),
+        "unarchiving does not reopen the parent: {p}"
+    );
+    // Now the reopen goes through (for the editor too), and the parent is still Done.
+    let (s, v) = change(&editor, &b, 2, &doing, "ap-after").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (_, p) = get_as(world, &world.owner_cookie, &format!("/v1/tickets/{parent}")).await;
+    assert_eq!(p["statusId"], done.as_str(), "{p}");
+    // A repeat of the refused request with its own key repeats the refusal; a replay of the accepted one repeats its answer.
+    let (s, v) = change(&editor, &b, 2, &doing, "ap-after").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+}
+
+/// FEA-126: reopening a child at the moment its parent is archived: the two take the parent's row one after the other, so either
+/// the archive sees the reopened child (`open_children`) or the reopen sees the archived parent (`parent_archived`). The old
+/// outcome, an open child under an archived parent, no longer happens.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_reopen_racing_the_archive_of_its_parent_never_leaves_an_open_child_under_an_archived_parent(
+    pool: PgPool,
+) {
+    let world = &World::new(pool).await;
+    let workspace_id = world.workspace_id;
+    let (project_id, workflow) = new_project(world, workspace_id, "ReopenRace").await;
+    let (done, doing) = (
+        state_id(&workflow, "DONE"),
+        state_id(&workflow, "IN_PROGRESS"),
+    );
+    let path = format!("/v1/workspaces/{workspace_id}/tickets/bulk");
+    let mut pairs = Vec::new();
+    for n in 0..8 {
+        let parent = ticket(
+            world,
+            &project_id,
+            &format!("rr-p{n}"),
+            json!({"title":format!("P{n}"),"hierarchyKind":"TASK"}),
+        )
+        .await;
+        let child = ticket(
+            world,
+            &project_id,
+            &format!("rr-c{n}"),
+            json!({"title":format!("C{n}"),"hierarchyKind":"SUBTASK","parentId":parent}),
+        )
+        .await;
+        set_state(world, &child, &done, 1, &format!("rr-dc{n}")).await;
+        set_state(world, &parent, &done, 1, &format!("rr-dp{n}")).await;
+        pairs.push((parent, child));
+    }
+    let ids: Vec<String> = pairs.iter().map(|(p, _)| p.clone()).collect();
+    let archive = post_as(
+        world,
+        &world.owner_cookie,
+        &path,
+        "rr-bulk",
+        json!({"ticketIds":ids,"change":{"type":"ARCHIVE","onlyFinished":true}}),
+    );
+    let reopens =
+        futures_util::future::join_all(pairs.iter().enumerate().map(|(n, (_, child))| {
+            let (url, key, doing) = (
+                format!("/v1/tickets/{child}/commands/change-status"),
+                format!("rr-ro{n}"),
+                doing.clone(),
+            );
+            async move {
+                post_as(
+                    world,
+                    &world.owner_cookie,
+                    &url,
+                    &key,
+                    json!({"expectedRevision":2,"statusId":doing}),
+                )
+                .await
+            }
+        }));
+    let ((s, v), results) = futures_util::future::join(archive, reopens).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let open_under_archived: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM penfii.tickets c
+         JOIN penfii.tickets p ON p.id = c.parent_id
+         JOIN penfii.workflow_statuses s ON s.id = c.status_id
+         WHERE p.archived_at IS NOT NULL AND c.archived_at IS NULL AND c.trashed_at IS NULL
+           AND s.category NOT IN ('DONE','CANCELED')",
+    )
+    .fetch_one(&world.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        open_under_archived,
+        0,
+        "bulk {v}; reopens {:?}",
+        results
+            .iter()
+            .map(|(s, v)| (s.as_u16(), v["code"].clone()))
+            .collect::<Vec<_>>()
+    );
+    // Every answer is one of the allowed outcomes, nothing else (no 5xx, no half result).
+    for (s, v) in &results {
+        assert!(
+            *s == StatusCode::OK || (*s == StatusCode::CONFLICT && v["code"] == "parent_archived"),
+            "{s} {v}"
+        );
+    }
+}
+
 #[sqlx::test(migrator = "crate::common::GUARD")]
 async fn every_write_path_refuses_an_archived_ticket_and_dependencies_follow_the_policy(
     pool: PgPool,

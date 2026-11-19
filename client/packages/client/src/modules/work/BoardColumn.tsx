@@ -5,6 +5,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { slotFromY } from './boardMoves'
 import { Popover } from './Popover'
 import { TICKET_DRAG_TYPE, TicketCard } from './TicketCard'
+import { TriCheck } from './TriCheck'
 import type { ColumnModel } from './viewModel'
 import { GearIcon } from '../../design/icons'
 
@@ -40,6 +41,7 @@ export function BoardColumn({
   onSetWip,
   picked,
   onPick,
+  onPickMany,
 }: {
   column: ColumnModel
   states: Map<string, WorkflowState>
@@ -74,6 +76,8 @@ export function BoardColumn({
   /** The Tickets chosen for a bulk archive/trash. Only Completed and Canceled cards can be chosen. */
   picked?: Set<string>
   onPick?: (ticketId: string) => void
+  /** Chooses or releases several cards at once (the column's own check). */
+  onPickMany?: (ticketIds: string[], on: boolean) => void
 }) {
   const { t } = useI18n()
   const [over, setOver] = useState(false)
@@ -83,6 +87,9 @@ export function BoardColumn({
   const draggedIds = draggingId ? groupIds(draggingId) : []
   const interactive = canEdit && canDrop
   const warn = column.wipLimit !== null && column.total > column.wipLimit
+  // The cards of this column that can be chosen (Completed or Canceled), and how many of them are.
+  const pickable = picked && onPickMany ? column.tickets.filter((ticket) => isFinished(states.get(ticket.statusId))) : []
+  const pickedCount = pickable.filter((ticket) => picked?.has(ticket.id)).length
 
   function slotAt(event: DragEvent, ids: string[]): number {
     const cards = Array.from(dropRef.current?.querySelectorAll<HTMLElement>('[data-ticket-id]') ?? []).filter((card) => ids.includes(card.dataset.ticketId ?? ''))
@@ -124,6 +131,12 @@ export function BoardColumn({
       }}
     >
       <h3>
+        {pickable.length > 0 && onPickMany ? (
+          <label className="col-pick">
+            <TriCheck label={t('work.board.pickColumn', { name: column.name })} ids={pickable.map((ticket) => ticket.id)} selection={picked ?? new Set()} onSelect={onPickMany} />
+            {pickedCount > 0 ? <span>{t('work.board.pickedOf', { picked: String(pickedCount), total: String(pickable.length) })}</span> : null}
+          </label>
+        ) : null}
         <span className={`state-dot ${(column.category ?? 'none').toLowerCase()}`} aria-hidden="true" />
         <span className="board-col-name">{column.name}</span>
         <span className="board-count" aria-label={String(column.tickets.length)}>{column.tickets.length}</span>
@@ -183,7 +196,7 @@ export function BoardColumn({
                 onMoveTo={(columnId) => onMoveTo(ticket, columnId)}
                 onReorder={(step) => onReorder(ticket, step)}
                 onMoveToTop={canEdit && canDrop ? (moveToTopFor(ticket) ?? undefined) : undefined}
-                pick={picked && onPick && (states.get(ticket.statusId)?.category === 'DONE' || states.get(ticket.statusId)?.category === 'CANCELED') ? { checked: picked.has(ticket.id), onToggle: () => onPick(ticket.id) } : undefined}
+                pick={picked && onPick && isFinished(states.get(ticket.statusId)) ? { checked: picked.has(ticket.id), onToggle: () => onPick(ticket.id) } : undefined}
               />
             </div>
           )
@@ -191,6 +204,10 @@ export function BoardColumn({
       </div>
     </section>
   )
+}
+
+function isFinished(state: WorkflowState | undefined): boolean {
+  return state?.category === 'DONE' || state?.category === 'CANCELED'
 }
 
 function WipEditor({ name, limit, onSave }: { name: string; limit: number | null; onSave: (limit: number | null) => Promise<boolean> }) {

@@ -1,6 +1,6 @@
 import { useProjectLive } from './live'
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import { Link } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { newIdempotencyKey } from '@penfii/api-client'
 import { api } from '../../api'
@@ -8,17 +8,21 @@ import { Button } from '../../design/ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { queryKeys } from '../../queryKeys'
 import { queries } from '../../queries'
-import { buildAxis, edgePath, ganttRows, nonWorkingSpans, planBar, planConflict, planConflicts, resizeDuration, scheduleBody, shiftStart, unplannedReason, workDayMinutes, type GanttRow } from './ganttModel'
+import { buildAxis, dayAtX, edgePath, ganttRows, nonWorkingSpans, planBar, planConflict, planConflicts, resizeDuration, scheduleBody, shiftStart, unplannedReason, workDayMinutes, type GanttRow } from './ganttModel'
 import { useTicketPanel } from './panelParam'
 import { useNow } from '../../ui/useNow'
 import { formatMinutes } from './planValues'
 import { errorCode } from './ticketModel'
-import { browserZone, formatZoned } from './zonedTime'
+import { browserZone, formatZoned, localInputToInstant } from './zonedTime'
+import { CalendarView } from './CalendarView'
+import { addDays, filterItems, isDay, isMonth, middleOf, type Day, type Filters } from './calendarModel'
 
 const ROW_FINE = 30
 /** A finger needs more room than a pointer: rows are taller where the pointer is coarse. */
 const ROW_TOUCH = 40
 const HEAD = 34
+/** How long after we move the chart ourselves its scroll still counts as ours. */
+const QUIET_MS = 1200
 
 /** What the marks of the chart mean; only the ones this chart can show are listed. */
 function Legend({ calendar, conflicts }: { calendar: boolean; conflicts: boolean }) {
@@ -45,17 +49,84 @@ function Legend({ calendar, conflicts }: { calendar: boolean; conflicts: boolean
 }
 
 /**
- * The Timeline of a Project: its Tickets as bars on a day axis in the work calendar's zone, the
- * blocking dependencies as arrows and an unplanned list. Bars come from planned schedules and
- * their derived ends.
+ * The Timeline of a Project: the Gantt (a Ticket's plan as bars on a day axis in the work calendar's zone, the blocking
+ * dependencies as arrows, an unplanned list) or the month calendar (due dates, and plans when asked). Which one is shown, the
+ * month and the shared filters are the person's own way of looking: they are kept in the address (replacing, so Back is not
+ * filled with them) and never change anything shared.
  */
 export function TimelinePage({ workspaceId, projectId }: { workspaceId: string; projectId: string }) {
+  const { t } = useI18n()
+  const [params, setParams] = useSearchParams()
+  const mode = params.get('mode') === 'calendar' ? 'calendar' : 'gantt'
+  // The day both views share. `month=YYYY-MM` links (the first version of the calendar) mean that month's 15th.
+  const dateParam = params.get('date')
+  const monthParam = params.get('month')
+  const date: Day | null = isDay(dateParam) ? dateParam : isMonth(monthParam) ? middleOf(monthParam) : null
+  const plan = params.get('plan') === '1'
+  const hideDone = params.get('done') === 'hide'
+  const text = params.get('q') ?? ''
+  const filters = useMemo<Filters>(() => ({ hideDone, text }), [hideDone, text])
+  const update = (patch: Record<string, string | null>) =>
+    setParams((current) => {
+      const next = new URLSearchParams(current)
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === null || value === '') next.delete(key)
+        else next.set(key, value)
+      }
+      return next
+    }, { replace: true })
+  // An old `month` link is rewritten into the form the page itself writes, so Back and a shared link carry one kind of address.
+  useEffect(() => {
+    if (monthParam === null) return
+    setParams((current) => {
+      const next = new URLSearchParams(current)
+      next.delete('month')
+      if (!isDay(next.get('date')) && isMonth(monthParam)) next.set('date', middleOf(monthParam))
+      return next
+    }, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [monthParam])
+  return (
+    <section className="timeline" aria-label={t('timeline.title')}>
+      <header className="timeline-head timeline-top">
+        <h2>{t('timeline.title')}</h2>
+        <div className="kind-switch" role="radiogroup" aria-label={t('timeline.mode')}>
+          {(['gantt', 'calendar'] as const).map((value) => (
+            <label key={value} className={mode === value ? 'is-selected' : undefined}>
+              <input type="radio" name="timeline-mode" value={value} checked={mode === value} onChange={() => update({ mode: value === 'calendar' ? 'calendar' : null })} />
+              {t(`timeline.mode.${value}`)}
+            </label>
+          ))}
+        </div>
+        <div className="timeline-filters" role="group" aria-label={t('timeline.filters')}>
+          <input type="search" className="view-search" aria-label={t('timeline.filter.text')} placeholder={t('timeline.filter.text')} value={text} onChange={(event) => update({ q: event.target.value })} />
+          <label className="switch-line">
+            <input type="checkbox" checked={hideDone} onChange={(event) => update({ done: event.target.checked ? 'hide' : null })} />
+            <span>{t('timeline.filter.hideDone')}</span>
+          </label>
+        </div>
+      </header>
+      {mode === 'calendar' ? (
+        <CalendarView workspaceId={workspaceId} projectId={projectId} filters={filters} state={{ date, plan }} onState={(patch) => update({ ...('date' in patch ? { date: patch.date ?? null } : {}), ...('plan' in patch ? { plan: patch.plan ? '1' : null } : {}) })} />
+      ) : (
+        <GanttView workspaceId={workspaceId} projectId={projectId} filters={filters} date={date} onDate={(next) => update({ date: next })} />
+      )}
+    </section>
+  )
+}
+
+function GanttView({ workspaceId, projectId, filters, date, onDate }: { workspaceId: string; projectId: string; filters: Filters; date: Day | null; onDate: (day: Day | null) => void }) {
   const { t, locale } = useI18n()
   const queryClient = useQueryClient()
   const { open: openPanel, selectedId } = useTicketPanel()
   const opener = useRef<string | null>(null)
   const previousPanel = useRef<string | null>(null)
   const scrolled = useRef(false)
+  const [openedOn] = useState(date)
+  // The day in the middle of the chart, when the chart was last moved by us rather than the person, and the settle timer.
+  const centre = useRef<Day | null>(null)
+  const quiet = useRef(0)
+  const settle = useRef(0)
   const today = useNow()
   const [coarse] = useState(() => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches)
   const ROW = coarse ? ROW_TOUCH : ROW_FINE
@@ -72,7 +143,7 @@ export function TimelinePage({ workspaceId, projectId }: { workspaceId: string; 
 
   const data = schedule.data
   const zone = data?.calendar?.timeZone ?? browserZone()
-  const rows = useMemo(() => ganttRows(data?.items ?? []), [data?.items])
+  const rows = useMemo(() => ganttRows(filterItems(data?.items ?? [], filters)), [data?.items, filters])
   const dayMinutes = workDayMinutes(calendar.data?.calendar?.definition)
 
   const axis = useMemo(() => {
@@ -84,8 +155,17 @@ export function TimelinePage({ workspaceId, projectId }: { workspaceId: string; 
     for (const sprint of planning.data?.sprints ?? []) dates.push(`${sprint.startsOn}T00:00:00Z`, `${sprint.endsOn}T00:00:00Z`)
     for (const milestone of planning.data?.milestones ?? []) if (milestone.targetOn && milestone.state !== 'CANCELED') dates.push(`${milestone.targetOn}T00:00:00Z`)
     dates.push(new Date(today).toISOString())
+    // The day the chart was opened on is always on the axis, even a month with nothing planned in it, so there is somewhere to
+    // scroll to, with half a screen of days either side so it can sit in the middle. It is the day from the address at the time
+    // the chart opened, not the live one: the shared day follows the person's scrolling, and an axis that grew with it would
+    // shift under their hands.
+    const pad = Math.ceil((scrollRef.current?.clientWidth || 1000) / dayWidth / 2) + 3
+    for (const day of openedOn ? [addDays(openedOn, -pad), openedOn, addDays(openedOn, pad)] : []) {
+      const instant = localInputToInstant(`${day}T12:00`, zone)
+      if (instant) dates.push(instant)
+    }
     return buildAxis(dates, zone, dayWidth)
-  }, [rows, zone, planning.data, dayWidth, today])
+  }, [rows, zone, planning.data, dayWidth, today, openedOn])
 
   /** Opens the Ticket and remembers where from, so closing the panel puts the focus back there. */
   function open(ticketId: string) {
@@ -102,12 +182,62 @@ export function TimelinePage({ workspaceId, projectId }: { workspaceId: string; 
     previousPanel.current = selectedId
   }, [selectedId])
 
-  // A narrow screen starts at today, not at the left edge of a long axis.
+  /** Moves the chart ourselves: the scroll event that follows is not the person moving it, so it must not rewrite the shared day. */
+  function scrollChartTo(left: number) {
+    const box = scrollRef.current
+    if (!box) return
+    const target = Math.max(0, left)
+    // Nothing moves, nothing will be heard: do not leave the flag up for the person's next scroll.
+    if (Math.abs(box.scrollLeft - target) > 1) quiet.current = Date.now()
+    box.scrollLeft = target
+  }
+
+  /** Puts a day in the middle of the chart. */
+  function showDay(day: Day) {
+    const box = scrollRef.current
+    const at = axis && localInputToInstant(`${day}T12:00`, zone)
+    if (!box || !axis || !at) return
+    scrollChartTo(axis.x(at) - box.clientWidth / 2)
+  }
+
+  // The first view starts at the shared day (the middle of the month the calendar was on), else at today, as before.
   useEffect(() => {
     if (scrolled.current || !axis || !scrollRef.current) return
     scrolled.current = true
-    scrollRef.current.scrollLeft = Math.max(0, axis.x(today) - 48)
+    if (date) showDay(date)
+    else scrollChartTo(axis.x(today) - 48)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [axis, schedule.isSuccess, today])
+
+  // Another zoom keeps the day that was in the middle, not the pixel that was.
+  const lastWidth = useRef(dayWidth)
+  useEffect(() => {
+    if (lastWidth.current === dayWidth) return
+    lastWidth.current = dayWidth
+    if (centre.current) showDay(centre.current)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dayWidth, axis])
+
+  /** Once the chart has stopped moving, the day in its middle becomes the shared day (replacing the address, not adding to it). */
+  function onChartScroll() {
+    window.clearTimeout(settle.current)
+    settle.current = window.setTimeout(() => {
+      const box = scrollRef.current
+      if (!box || !axis) return
+      const day = dayAtX(axis, box.scrollLeft + box.clientWidth / 2)
+      if (!day) return
+      centre.current = day
+      // Our own move (it takes a moment to settle, smooth scrolling included) is not the person choosing a day; a flag that
+      // outlives any such move was never followed by a scroll and is dropped.
+      if (quiet.current && Date.now() - quiet.current < QUIET_MS) {
+        quiet.current = 0
+        return
+      }
+      quiet.current = 0
+      if (day !== date) onDate(day)
+    }, 200)
+  }
+  useEffect(() => () => window.clearTimeout(settle.current), [])
 
   if (schedule.isPending) return <p className="hint" role="status">{t('loading')}</p>
   if (schedule.isError || !data) {
@@ -209,14 +339,15 @@ export function TimelinePage({ workspaceId, projectId }: { workspaceId: string; 
     const box = scrollRef.current
     if (!box || !axis) return
     const left = Math.max(0, axis.x(today) - 48)
+    if (Math.abs(box.scrollLeft - left) > 1) quiet.current = Date.now()
+    onDate(null)
     if (typeof box.scrollTo === 'function') box.scrollTo({ left, behavior: typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
     else box.scrollLeft = left
   }
 
   return (
-    <section className="timeline" aria-label={t('timeline.title')}>
-      <header className="timeline-head">
-        <h2>{t('timeline.title')}</h2>
+    <div className="gantt-view">
+      <div className="timeline-head gantt-tools">
         <div className="kind-switch" role="radiogroup" aria-label={t('timeline.scale')}>
           {(['day', 'week', 'month'] as const).map((value) => (
             <label key={value} className={scale === value ? 'is-selected' : undefined}>
@@ -236,7 +367,7 @@ export function TimelinePage({ workspaceId, projectId }: { workspaceId: string; 
             </p>
           )}
         </div>
-      </header>
+      </div>
 
       <SprintPeriods sprints={planning.data?.sprints ?? []} />
       {rows.length === 0 ? <p className="hint">{t('gantt.empty.none')}</p> : !drawn ? <p className="hint">{t('gantt.empty.noPlan')}</p> : null}
@@ -280,7 +411,7 @@ export function TimelinePage({ workspaceId, projectId }: { workspaceId: string; 
                 )
               })}
             </ul>
-            <div className="gantt-scroll" ref={scrollRef}>
+            <div className="gantt-scroll" ref={scrollRef} onScroll={onChartScroll}>
               <svg width={axis.width} height={height} viewBox={`0 0 ${String(axis.width)} ${String(height)}`} className="gantt-svg">
                 <defs>
                   <marker id="gantt-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
@@ -462,7 +593,7 @@ export function TimelinePage({ workspaceId, projectId }: { workspaceId: string; 
           </table>
         </div>
       </details>
-    </section>
+    </div>
   )
 }
 

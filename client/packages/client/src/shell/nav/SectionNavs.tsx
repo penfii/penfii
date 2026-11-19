@@ -116,6 +116,9 @@ export function SearchNav({ workspaceId }: { workspaceId: string }) {
   const [params] = useSearchParams()
   const tab = params.get('tab') ?? 'all'
   const q = params.get('q') ?? ''
+  const state = params.get('state') ?? ''
+  // Changing the kind keeps what narrows the search: the text and the Project state.
+  const tabLink = (id: string) => `/w/${workspaceId}/search?tab=${id}${q ? `&q=${encodeURIComponent(q)}` : ''}${state ? `&state=${encodeURIComponent(state)}` : ''}`
   return (
     <section className="tree-block">
       <h3>{t('shell.search.filters')}</h3>
@@ -123,7 +126,7 @@ export function SearchNav({ workspaceId }: { workspaceId: string }) {
         {SEARCH_TABS.map((id) => (
           <li key={id}>
             {/* Every tab shares one path, so a NavLink would mark all of them current; the tab parameter decides. */}
-            <Link className={tab === id ? 'tree-link active' : 'tree-link'} aria-current={tab === id ? 'page' : undefined} to={`/w/${workspaceId}/search?tab=${id}${q ? `&q=${encodeURIComponent(q)}` : ''}`}>{t(`search2.tab.${id}`)}</Link>
+            <Link className={tab === id ? 'tree-link active' : 'tree-link'} aria-current={tab === id ? 'page' : undefined} to={tabLink(id)}>{t(`search2.tab.${id}`)}</Link>
           </li>
         ))}
       </ul>

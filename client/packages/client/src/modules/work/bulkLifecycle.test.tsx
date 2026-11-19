@@ -5,11 +5,12 @@ const api = vi.hoisted(() => ({ bulkTickets: vi.fn() }))
 vi.mock('../../api', () => ({ api }))
 
 import { BulkLifecycleBar } from './BulkLifecycleBar'
-import { BULK_REQUEST_LIMIT, chunk, finishedSelection, runLifecycle } from './bulkLifecycle'
+import { BULK_REQUEST_LIMIT, archivePlan, chunk, finishedSelection, runLifecycle } from './bulkLifecycle'
 import { fixtureBoard, fixtureTicket } from './testFixtures'
 import { renderWithProviders } from '../../test/renderWithProviders'
 
 const ok = (ticketId: string) => ({ ticketId, key: ticketId.toUpperCase(), ok: true, code: null, message: null })
+const plan = { ids: ['a'], unfinished: 0, openChildren: 0, noPermission: 0 }
 const ids = (count: number) => Array.from({ length: count }, (_, index) => `t${String(index)}`)
 
 beforeEach(() => {
@@ -40,6 +41,20 @@ describe('Bulk archive and trash as one operation', () => {
     expect(result.succeeded).toBe(100)
     expect(result.failed).toBe(150)
     expect(result.items.filter((item) => item.code === 'not_processed')).toHaveLength(150)
+  })
+
+  it('asks the server to archive only finished work, and says why a reopened ticket was refused', async () => {
+    api.bulkTickets.mockResolvedValue({ total: 2, succeeded: 1, failed: 1, items: [ok('a'), { ticketId: 'b', key: null, ok: false, code: 'not_finished', message: 'x' }] })
+    await runLifecycle('w', 'ARCHIVE', ['a', 'b'])
+    expect(api.bulkTickets.mock.calls[0]?.[2]).toEqual({ type: 'ARCHIVE', onlyFinished: true })
+    api.bulkTickets.mockClear()
+    // The trash is not part of this condition.
+    await runLifecycle('w', 'TRASH', ['a'])
+    expect(api.bulkTickets.mock.calls[0]?.[2]).toEqual({ type: 'TRASH' })
+    renderWithProviders(
+      <BulkLifecycleBar count={1} plan={{ ids: ['b'], unfinished: 0, openChildren: 0, noPermission: 0 }} scope="" running={null} last="ARCHIVE" names={new Map([['b', { key: 'PEN-3', title: 'Reopened' }]])} onRun={() => undefined} onClear={() => undefined} result={{ total: 2, succeeded: 1, failed: 1, items: [ok('a'), { ticketId: 'b', key: null, ok: false, code: 'not_finished', message: 'x' }] }} />,
+    )
+    expect(screen.getByText(/it is no longer Completed or Canceled \(it was reopened\)/)).toBeTruthy()
   })
 
   it('keeps a per-ticket refusal as a failure and counts only the processed ones', async () => {
@@ -74,6 +89,8 @@ describe('Bulk lifecycle bar', () => {
     renderWithProviders(
       <BulkLifecycleBar
         count={1}
+        plan={plan}
+        scope=""
         running={null}
         last="ARCHIVE"
         names={names}
@@ -90,16 +107,37 @@ describe('Bulk lifecycle bar', () => {
 
   it('says all were processed only when none failed, and locks the buttons while running', () => {
     renderWithProviders(
-      <BulkLifecycleBar count={0} running={null} last="TRASH" names={names} onRun={() => undefined} onClear={() => undefined} result={{ total: 2, succeeded: 2, failed: 0, items: [ok('a'), ok('b')] }} />,
+      <BulkLifecycleBar count={0} plan={plan} scope="" running={null} last="TRASH" names={names} onRun={() => undefined} onClear={() => undefined} result={{ total: 2, succeeded: 2, failed: 0, items: [ok('a'), ok('b')] }} />,
     )
     expect(screen.getByRole('status').textContent).toContain('2 moved to the trash')
     expect(screen.queryByRole('button', { name: 'Retry the failed ones' })).toBeNull()
     // Nothing is chosen any more: no actions, just the result and a way to close it.
-    expect(screen.queryByRole('button', { name: 'Archive' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Archive/ })).toBeNull()
     expect(screen.getByRole('button', { name: 'Dismiss' })).toBeTruthy()
     cleanup()
-    renderWithProviders(<BulkLifecycleBar count={3} running={{ done: 100, total: 250 }} last="TRASH" names={names} onRun={() => undefined} onClear={() => undefined} result={null} />)
-    expect((screen.getByRole('button', { name: 'Archive' }) as HTMLButtonElement).disabled).toBe(true)
+    renderWithProviders(<BulkLifecycleBar count={3} plan={plan} scope="" running={{ done: 100, total: 250 }} last="TRASH" names={names} onRun={() => undefined} onClear={() => undefined} result={null} />)
+    expect((screen.getByRole('button', { name: /^Archive/ }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByText('Processing 100/250…')).toBeTruthy()
+  })
+})
+
+describe('What an Archive would take', () => {
+  const child = (open: number) => ({ total: open, done: 0, canceled: 0 })
+  const t = (id: string, finished: boolean, open = 0, projectId = 'p') => ({ id, finished, projectId, childSummary: child(open) })
+
+  it('counts only finished Tickets without unfinished children in a Project the person administers, with the reasons for the rest', () => {
+    const plan = archivePlan([t('a', true), t('b', true, 2), t('c', false), t('d', true, 0, 'other')], (project) => project === 'p')
+    expect(plan).toEqual({ ids: ['a'], unfinished: 1, openChildren: 1, noPermission: 1 })
+  })
+
+  it('names the reasons and the scope in the bar and archives only what can be archived', () => {
+    const onRun = vi.fn()
+    renderWithProviders(
+      <BulkLifecycleBar count={3} plan={{ ids: ['a', 'b'], unfinished: 0, openChildren: 1, noPermission: 0 }} scope="Chosen from the Board" running={null} last={null} names={new Map()} onRun={onRun} onClear={() => undefined} result={null} />,
+    )
+    expect(screen.getByText(/1 will not be archived: 1 with unfinished child tickets/)).toBeTruthy()
+    expect(screen.getByText('Chosen from the Board')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Archive 2' }))
+    expect(onRun).toHaveBeenCalledWith('ARCHIVE')
   })
 })

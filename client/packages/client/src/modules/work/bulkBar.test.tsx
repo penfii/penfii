@@ -11,7 +11,7 @@ import { renderWithProviders } from '../../test/renderWithProviders'
 const selected = [{ id: 't1', projectId: 'p' }] as WorkTicket[]
 
 function mount(onResult: (result: unknown) => void) {
-  return renderWithProviders(<BulkBar workspaceId="w" selected={selected} result={null} names={new Map()} onClear={() => undefined} onResult={onResult} />)
+  return renderWithProviders(<BulkBar workspaceId="w" selected={selected} result={null} names={new Map()} onClear={() => undefined} onResult={onResult} canArchive={() => true} scope="" onRefresh={() => undefined} />)
 }
 
 beforeEach(() => {

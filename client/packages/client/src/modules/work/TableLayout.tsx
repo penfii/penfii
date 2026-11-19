@@ -5,6 +5,7 @@ import { StateMenu } from './StateMenu'
 import { formatEstimate } from './planValues'
 import { formatDue, isOverdue, isPriority } from './ticketModel'
 import { BlockedChip } from './WorkChips'
+import { TriCheck } from './TriCheck'
 import type { Section, WorkTicket } from './viewModel'
 
 const SORTABLE: Partial<Record<TableColumn, ViewSortField>> = { TITLE: 'TITLE', PRIORITY: 'PRIORITY', DUE_ON: 'DUE_ON', ESTIMATE: 'ESTIMATE' }
@@ -20,7 +21,6 @@ export function TableLayout({
   sort,
   selectedId,
   selection,
-  compact,
   states,
   busy,
   canEdit,
@@ -34,7 +34,6 @@ export function TableLayout({
   sort: { field: ViewSortField; dir: 'ASC' | 'DESC' }
   selectedId: string | null
   selection: Set<string>
-  compact: boolean
   states?: WorkflowState[]
   busy: Set<string>
   canEdit: (ticket: WorkTicket) => boolean
@@ -47,7 +46,6 @@ export function TableLayout({
   // Only Tickets the person can edit can be chosen for a change; a read-only table has no checkboxes.
   const all = sections.flatMap((section) => section.tickets).filter(canEdit)
   const selectable = all.length > 0
-  const allSelected = all.length > 0 && all.every((ticket) => selection.has(ticket.id))
   const span = columns.length + 1
 
   function cell(column: TableColumn, ticket: WorkTicket) {
@@ -114,12 +112,12 @@ export function TableLayout({
   }
 
   return (
-    <div className={compact ? 'work-table-wrap compact' : 'work-table-wrap'}>
+    <div className="work-table-wrap">
       <table className="work-table">
         <thead>
           <tr>
             <th className="table-check">
-              {selectable ? <input type="checkbox" aria-label={t('work.table.selectAll')} checked={allSelected} onChange={(event) => onSelect(all.map((ticket) => ticket.id), event.target.checked)} /> : null}
+              {selectable ? <TriCheck label={t('work.table.selectAll')} ids={all.map((ticket) => ticket.id)} selection={selection} onSelect={onSelect} /> : null}
             </th>
             {columns.map((column) => {
               const field = SORTABLE[column]
@@ -145,16 +143,12 @@ export function TableLayout({
               <tr className="table-group">
                 <th colSpan={span} scope="colgroup">
                   {section.tickets.some(canEdit) ? (
-                    <input
-                      type="checkbox"
-                      aria-label={t('work.table.selectGroup', { title: section.title })}
-                      checked={section.tickets.filter(canEdit).every((ticket) => selection.has(ticket.id))}
-                      onChange={(event) => onSelect(section.tickets.filter(canEdit).map((ticket) => ticket.id), event.target.checked)}
-                    />
+                    <TriCheck label={t('work.table.selectGroup', { title: section.title })} ids={section.tickets.filter(canEdit).map((ticket) => ticket.id)} selection={selection} onSelect={onSelect} />
                   ) : null}{' '}
                   {section.title}
                   {section.hint ? <small className="hint"> · {section.hint}</small> : null}
                   <span className="list-count">{section.tickets.length}</span>
+                  {section.tickets.some(canEdit) && section.tickets.filter(canEdit).some((ticket) => selection.has(ticket.id)) ? <small className="hint"> · {t('work.table.partial', { picked: String(section.tickets.filter((ticket) => selection.has(ticket.id)).length), total: String(section.tickets.filter(canEdit).length) })}</small> : null}
                 </th>
               </tr>
             ) : null}

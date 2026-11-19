@@ -254,9 +254,42 @@ pub async fn archive_ticket(
     actor: Uuid,
     ticket_id: Uuid,
 ) -> Result<(ArchiveOutcome, Option<ChangeNotice>), CoreError> {
+    archive_ticket_checked(pool, actor, ticket_id, false).await
+}
+
+/// `archive_ticket`, optionally only for a Ticket that is Completed or Canceled *now*. The State is read under the same row
+/// lock the archive then writes under, and every State change takes that lock too, so a Ticket reopened a moment before cannot be
+/// archived by a request that was decided on older data: it is refused as `not_finished`. A Ticket that is already archived stays
+/// a success whatever its State, like the plain archive. Only the bulk archive asks for the condition; the single archive and the
+/// Sprint schedule do not.
+pub async fn archive_ticket_checked(
+    pool: &PgPool,
+    actor: Uuid,
+    ticket_id: Uuid,
+    only_finished: bool,
+) -> Result<(ArchiveOutcome, Option<ChangeNotice>), CoreError> {
     let mut tx = pool.begin().await?;
     let ticket = locked_ticket(&mut tx, ticket_id).await?;
     project_role::require_project_admin(&mut tx, ticket.project_id, actor).await?;
+    if only_finished
+        && ticket.purged_at.is_none()
+        && ticket.trashed_at.is_none()
+        && ticket.archived_at.is_none()
+    {
+        let category: String = sqlx::query_scalar(
+            "SELECT s.category FROM penfii.tickets t
+             JOIN penfii.workflow_statuses s ON s.id = t.status_id WHERE t.id = $1",
+        )
+        .bind(ticket_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if category != "DONE" && category != "CANCELED" {
+            return Err(CoreError::conflict(
+                "not_finished",
+                "the ticket is no longer Completed or Canceled",
+            ));
+        }
+    }
     let outcome = archive_locked(&mut tx, actor, ticket_id, &ticket, false).await?;
     // A Ticket that was already archived did not change: nothing to tell.
     let notice = if outcome == ArchiveOutcome::Archived {

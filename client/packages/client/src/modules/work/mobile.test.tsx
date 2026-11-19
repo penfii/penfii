@@ -51,14 +51,13 @@ afterEach(cleanup)
 describe('Work on a phone', () => {
   beforeEach(() => setViewport(PHONE))
 
-  it('shows a Table view as a List: there is no Table on a phone', async () => {
+  it('shows the Table as compact rows: a phone has no grid of columns', async () => {
     mount(`${PATH}?layout=table`)
     expect(await screen.findByText('API login')).toBeTruthy()
     expect(document.querySelector('table')).toBeNull()
     expect(document.querySelector('.work-list')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'List' }).getAttribute('aria-pressed')).toBe('true')
-    // The Table button stays in the markup for a saved Table view; the phone stylesheet hides it.
-    expect(document.querySelector('[data-layout="TABLE"]')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Table' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.queryByRole('button', { name: 'List' })).toBeNull()
   })
 
   it('chooses the fields a List row shows in the Display sheet', async () => {

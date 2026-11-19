@@ -156,3 +156,45 @@ export function ancestorIds(nodes: readonly DocNode[], id: string): string[] {
   }
   return out
 }
+
+/**
+ * What deleting a page does, worked out from the tree the person can see: the server deletes the page and every page below it
+ * that the person may manage, and keeps what they may not manage (with everything below it), moving it up to the deleted page's parent.
+ * A page the person cannot read is not in `nodes`: it is never counted or named, and since managing implies reading it is always kept.
+ * `nodes` must be the whole Workspace's tree: a Project's tree leaves out subpages that belong to other Projects.
+ */
+export type DeleteScope = {
+  /** The page first, then its subpages that are deleted with it, in tree order. */
+  deleted: DocNode[]
+  /** Subpages kept because they cannot be managed, whose parent is deleted. */
+  moved: DocNode[]
+  /** Where the moved pages go: the deleted page's parent, or null for the top. */
+  destination: DocNode | null
+}
+
+export function deleteScope(nodes: readonly DocNode[], id: string): DeleteScope | null {
+  const target = nodes.find((node) => node.id === id)
+  if (!target) return null
+  const children = new Map<string, DocNode[]>()
+  for (const node of nodes) {
+    if (!node.parentId) continue
+    children.set(node.parentId, [...(children.get(node.parentId) ?? []), node])
+  }
+  const deleted: DocNode[] = []
+  const moved: DocNode[] = []
+  const visit = (node: DocNode) => {
+    deleted.push(node)
+    for (const child of children.get(node.id) ?? []) {
+      if (child.rights.manage) visit(child)
+      else moved.push(child)
+    }
+  }
+  visit(target)
+  const destination = target.parentId ? (nodes.find((node) => node.id === target.parentId) ?? null) : null
+  return { deleted, moved, destination }
+}
+
+/** Equal when the same pages are deleted and moved to the same place. */
+export function scopeKey(scope: DeleteScope): string {
+  return JSON.stringify([scope.deleted.map((node) => node.id).sort(), scope.moved.map((node) => node.id).sort(), scope.destination?.id ?? null])
+}

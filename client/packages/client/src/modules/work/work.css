@@ -453,7 +453,6 @@
 .work-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
 .work-table th, .work-table td { padding: .4rem var(--space-3); text-align: left; border-top: 1px solid var(--border); vertical-align: middle; }
 .work-table thead th { border-top: 0; font-size: .72rem; text-transform: none; color: var(--text-secondary); white-space: nowrap; background: var(--bg-sunken); position: sticky; top: 0; }
-.work-table-wrap.compact td { padding-block: .15rem; }
 .work-table tr.selected td, .work-table tr.checked td { background: var(--accent-soft); }
 .work-table .table-group th { background: var(--bg-sunken); font-size: .8rem; }
 .work-table .table-check { width: 2rem; padding-inline: var(--space-2); }
@@ -920,15 +919,20 @@
 }
 
 /* Archive */
-/* Bottom-right: the top-right corner belongs to the "move to top" button. It sits over the card's own open button,
-   so it is at least 24px (and 32px on a touch screen or phone) and the card keeps a gutter for it: a missed tap
-   must not open the ticket instead. */
-.ticket-card input.card-pick { position: absolute; bottom: 0.4rem; right: 0.4rem; z-index: 1; margin: 0; width: 1.5rem; height: 1.5rem; min-width: 1.5rem; min-height: 1.5rem; cursor: pointer; }
-.ticket-card:has(.card-pick) .ticket-card-open { padding-right: 2.25rem; }
+/* The check sits left of the key in the card's first row, where a person looks for it. Its room is always kept, so
+   showing it never moves the card's text; it appears on hover, on focus, once anything is chosen and on a touch
+   screen, and it is a sibling of the open button, so choosing never opens the ticket. */
+.ticket-card input.card-pick { position: absolute; top: 0.45rem; left: 0.5rem; z-index: 1; margin: 0; width: 1.25rem; height: 1.25rem; min-width: 1.25rem; min-height: 1.25rem; cursor: pointer; opacity: 0; transition: opacity 0.1s; }
+.ticket-card:has(.card-pick) .ticket-card-top { padding-left: 1.75rem; min-height: 1.25rem; }
+.ticket-card:hover input.card-pick, .ticket-card input.card-pick:focus-visible, .ticket-card input.card-pick:checked, .ticket-card input.card-pick:indeterminate, .board.is-selecting .ticket-card input.card-pick { opacity: 1; }
 @media (pointer: coarse), (max-width: 640px) {
-  .ticket-card input.card-pick { width: 2rem; height: 2rem; min-width: 2rem; min-height: 2rem; }
-  .ticket-card:has(.card-pick) .ticket-card-open { padding-right: 2.75rem; }
+  .ticket-card input.card-pick { opacity: 1; width: 1.75rem; height: 1.75rem; min-width: 1.75rem; min-height: 1.75rem; top: 0.25rem; left: 0.25rem; }
+  .ticket-card:has(.card-pick) .ticket-card-top { padding-left: 2.1rem; min-height: 1.75rem; }
 }
+.board-col h3 .col-pick { display: inline-flex; align-items: center; gap: 0.25rem; margin: 0 0.25rem 0 0; font-weight: 400; font-size: 0.75rem; color: var(--text-muted, inherit); }
+.board-col h3 .col-pick input { margin: 0; width: 1.1rem; height: 1.1rem; }
+.bulk-scope { margin: 0; font-size: 0.8125rem; color: var(--text-muted, inherit); }
+.bulk-excluded { margin: 0; font-size: 0.8125rem; }
 .archive-panel { border: 1px solid var(--border, #d0d7de); border-radius: 0.5rem; padding: 0.75rem 1rem; margin: 0.5rem var(--space-4, 1rem); }
 .archive-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
 .archive-panel .link-button { background: none; border: 0; padding: 0; text-align: left; cursor: pointer; color: inherit; text-decoration: underline; }
@@ -963,3 +967,62 @@
 .admin-subnav { display: flex; flex-wrap: wrap; gap: .35rem; margin: var(--space-3) 0; }
 .admin-subnav a { border: 1px solid var(--border); border-radius: 999px; padding: .15rem .75rem; font-size: .85rem; color: var(--text-secondary); text-decoration: none; }
 .admin-subnav a.active { border-color: var(--accent); color: var(--text); background: var(--accent-soft, transparent); font-weight: 600; }
+
+/* The Table's compact rows: titles wrap (a long title is read whole, not cut), the check sits left of the key, and a
+   group's own check sits in its heading. */
+.work-list.wrap-titles .list-row-title { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+.work-list.wrap-titles .list-row-open { align-items: flex-start; }
+.work-list.wrap-titles .list-row-open .ticket-key { padding-top: .15rem; }
+.list-section-head input[type="checkbox"] { margin: 0; width: 1.1rem; height: 1.1rem; }
+span.list-row-check { display: inline-block; }
+.view-display-note { margin: var(--space-2) 0 0; }
+.bulk-sep { align-self: stretch; width: 1px; background: var(--border); }
+
+/* Timeline calendar: a month grid of days. Each day holds its date, the lanes of plan bars that cross it and the Tickets
+   due on it; bars that continue into the next day lose their gap so they read as one. */
+.timeline-top { flex-wrap: wrap; gap: var(--space-2) var(--space-3); }
+.timeline-filters { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin-inline-start: auto; }
+.timeline-filters .view-search { width: 12rem; }
+.gantt-tools { margin-bottom: var(--space-2); }
+.calendar-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-3); }
+.calendar-nav { display: flex; align-items: center; gap: var(--space-2); }
+.calendar-month { margin: 0; min-width: 8rem; text-align: center; font-size: 1.05rem; }
+.calendar-zone { margin: var(--space-1) 0; }
+.tlcalendar-table { width: 100%; table-layout: fixed; border-collapse: collapse; border: 1px solid var(--border); background: var(--bg-elevated); }
+.tlcalendar-weekday { padding: var(--space-1) var(--space-2); font-size: 0.75rem; font-weight: 400; color: var(--text-secondary); text-align: center; background: var(--bg-sunken); }
+.tlcalendar-day { min-width: 0; height: 7.5rem; padding: 0; vertical-align: top; border: 1px solid var(--border); }
+.tlcalendar-day-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; min-height: 7.5rem; padding: 2px 0 var(--space-1); }
+.tlcalendar-day.is-outside { background: var(--bg-sunken); color: var(--text-muted); }
+.tlcalendar-day.is-today { background: var(--accent-soft); }
+.tlcalendar-date { padding: 0 var(--space-2); font-size: 0.8125rem; font-weight: 600; }
+.tlcalendar-today-tag { font-weight: 700; color: var(--accent-text, var(--accent)); }
+.cal-lane { display: block; height: 1.4rem; margin: 0; padding: 0 var(--space-2); border: 0; font: inherit; font-size: 0.75rem; line-height: 1.4rem; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-lane.empty { visibility: hidden; }
+.cal-plan { background: var(--accent-soft); color: var(--text); border-block: 1px solid var(--accent); border-inline-start: 1px solid var(--accent); border-radius: var(--radius-sm); margin-inline: 2px; cursor: pointer; }
+.cal-plan.open-left { border-start-start-radius: 0; border-end-start-radius: 0; border-inline-start-style: dashed; margin-inline-start: 0; }
+.cal-plan.joined-left { margin-inline-start: 0; border-start-start-radius: 0; border-end-start-radius: 0; border-inline-start: 0; }
+.cal-plan.joined-right { margin-inline-end: 0; border-start-end-radius: 0; border-end-end-radius: 0; }
+.cal-plan.open-right { border-start-end-radius: 0; border-end-end-radius: 0; margin-inline-end: 0; border-inline-end-style: dashed; }
+.cal-plan:not(.joined-right) { border-inline-end: 1px solid var(--accent); }
+.cal-plan.state-done, .cal-plan.state-canceled { opacity: 0.65; }
+.cal-kind { font-weight: 700; }
+.cal-due-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.cal-due { display: block; width: 100%; padding: 1px var(--space-2); border: 0; background: transparent; color: inherit; font: inherit; font-size: 0.75rem; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; border-radius: var(--radius-sm); }
+.cal-due:hover, .cal-plan:hover { background: var(--bg-muted); }
+.cal-due:focus-visible, .cal-plan:focus-visible, .cal-more:focus-visible { box-shadow: var(--focus); outline: none; }
+.cal-due.state-done, .cal-due.state-canceled { text-decoration: line-through; color: var(--text-muted); }
+.cal-flag { color: var(--accent-text, var(--accent)); }
+.cal-more { border: 0; background: transparent; padding: 1px var(--space-2); font: inherit; font-size: 0.75rem; color: var(--accent-text, var(--accent)); text-align: left; cursor: pointer; }
+.cal-day-list ul { list-style: none; margin: var(--space-1) 0 0; padding: 0; display: grid; gap: 2px; min-width: 14rem; }
+.cal-day-list .cal-due { white-space: normal; }
+.calendar-agenda { list-style: none; margin: var(--space-2) 0; padding: 0; display: grid; gap: var(--space-3); }
+.calendar-agenda h4 { margin: 0 0 var(--space-1); font-size: 0.875rem; }
+.calendar-agenda ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); }
+.calendar-agenda .cal-due { min-height: 2.5rem; padding-block: var(--space-2); white-space: normal; border: 1px solid var(--border); background: var(--bg-elevated); }
+.calendar-agenda .is-today h4 { color: var(--accent-text, var(--accent)); }
+.calendar-work-link { display: inline-block; margin-top: var(--space-2); }
+.project-switch, .project-switch input { font-size: 0.875rem; font-weight: 400; line-height: 1.4; }
+.project-switch input { width: 100%; }
+.project-switch-item span { font-weight: 500; }
+.calendar-view > .calendar-zone, .calendar-view > p.hint { max-width: none; }
+.calendar-legend { margin: var(--space-2) 0; }

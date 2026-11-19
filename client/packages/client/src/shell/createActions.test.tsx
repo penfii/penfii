@@ -3,7 +3,7 @@ import { Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { queryKeys } from '../queryKeys'
 
-const api = vi.hoisted(() => ({ getSpace: vi.fn(), listWorkspaces: vi.fn() }))
+const api = vi.hoisted(() => ({ getSpace: vi.fn(), listWorkspaces: vi.fn(), getFavorites: vi.fn() }))
 const open = vi.hoisted(() => vi.fn())
 vi.mock('../api', () => ({ api }))
 vi.mock('./create', () => ({ useCreate: () => open }))
@@ -29,7 +29,10 @@ const space = (canManage: boolean) => ({
   dms: [],
 })
 
-beforeEach(() => localStorage.setItem('penfii.locale', 'en-US'))
+beforeEach(() => {
+  localStorage.setItem('penfii.locale', 'en-US')
+  api.getFavorites.mockResolvedValue([])
+})
 afterEach(() => {
   cleanup()
   open.mockClear()
@@ -63,26 +66,19 @@ describe('Create actions follow who the server lets create', () => {
   })
 })
 
-describe('Creating a Team or a Project is offered to a Workspace owner or admin', () => {
+describe('Creating a Project is offered to a Workspace owner or admin', () => {
   it.each([
     ['MEMBER', false],
     ['ADMIN', true],
     ['OWNER', true],
-  ])('offers New team and New project to %s: %s', async (role, offered) => {
+  ])('offers New project to %s: %s', async (role, offered) => {
     api.listWorkspaces.mockResolvedValue(workspaces(role))
     api.getSpace.mockResolvedValue(space(false))
     const client = mount('/w/w/projects', 'projects')
     await waitFor(() => expect(client.getQueryData(queryKeys.space('w'))).toBeTruthy())
     await waitFor(() => expect(client.getQueryData(queryKeys.workspaces)).toBeTruthy())
-    expect(screen.queryByRole('button', { name: 'New team' }) !== null).toBe(offered)
     expect(screen.queryByRole('button', { name: /\+ New project/ }) !== null).toBe(offered)
-  })
-
-  it('offers New team even while the Workspace has no Team, and opens the team dialog', async () => {
-    api.listWorkspaces.mockResolvedValue(workspaces('OWNER'))
-    api.getSpace.mockResolvedValue(space(false))
-    mount('/w/w/projects', 'projects')
-    fireEvent.click(await screen.findByRole('button', { name: 'New team' }))
-    expect(open).toHaveBeenCalledWith('team')
+    // Teams are managed from the global Teams, never from the Projects navigation.
+    expect(screen.queryByRole('button', { name: 'New team' })).toBeNull()
   })
 })

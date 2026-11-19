@@ -48,27 +48,19 @@ afterEach(cleanup)
 
 const projectWork = <Work target={{ kind: 'PROJECT', workspaceId: 'w', projectId: 'p' }} />
 
-describe('Work in a Project: one dataset, three layouts', () => {
+describe('Work in a Project: one dataset, two layouts', () => {
   const tickets = [
     ticket({ id: 'a', key: 'PFI-001', title: 'API login', statusId: 's-todo', priority: 'HIGH', assigneeId: 'u1', assigneeName: 'John Park', channelId: 'c1' }),
     ticket({ id: 'b', key: 'PFI-002', title: 'Login page', statusId: 's-doing' }),
   ]
 
-  it('opens as a Board and switches to List and Table without losing a Ticket', async () => {
+  it('opens as a Board and switches to the Table without losing a Ticket', async () => {
     api.getProjectBoard.mockResolvedValue(fixtureBoard(tickets))
     mount('/w/w/projects/p/work', projectWork)
     expect(await screen.findByText('API login')).toBeTruthy()
     const layouts = screen.getByRole('group', { name: 'Layout' })
-    expect(within(layouts).getAllByRole('button').map((button) => button.textContent)).toEqual(['Board', 'List', 'Table'])
+    expect(within(layouts).getAllByRole('button').map((button) => button.textContent)).toEqual(['Board', 'Table'])
     expect(document.querySelector('.board')).not.toBeNull()
-
-    fireEvent.click(within(layouts).getByRole('button', { name: 'List' }))
-    expect(await screen.findByLabelText('Open PFI-001')).toBeTruthy()
-    expect(document.querySelector('.board')).toBeNull()
-    expect(screen.getByTestId('where').textContent).toContain('layout=list')
-    expect(screen.getByLabelText('Open PFI-002')).toBeTruthy()
-    // The list names a channel the Ticket lives in; the Board and the List read one dataset.
-    expect(screen.getByText('# general')).toBeTruthy()
 
     fireEvent.click(within(layouts).getByRole('button', { name: 'Table' }))
     const table = await screen.findByRole('table')
@@ -76,19 +68,57 @@ describe('Work in a Project: one dataset, three layouts', () => {
     expect(within(table).getByText('API login')).toBeTruthy()
     expect(within(table).getByText('Login page')).toBeTruthy()
     expect(api.getProjectBoard).toHaveBeenCalledTimes(1)
+    // Switching the layout is the person's own display: no unsaved-change bar, nothing in the address, and it survives a refresh.
+    expect(screen.queryByText('You have unsaved changes.')).toBeNull()
+    expect(screen.getByTestId('where').textContent).not.toContain('layout=')
   })
 
-  it('keeps the layout in the address so a refresh returns to it', async () => {
+  it('keeps the layout, density and columns on this device, not in the shared View', async () => {
+    api.getProjectBoard.mockResolvedValue(fixtureBoard(tickets))
+    const first = mount('/w/w/projects/p/work', projectWork)
+    await screen.findByText('API login')
+    fireEvent.click(within(screen.getByRole('group', { name: 'Layout' })).getByRole('button', { name: 'Table' }))
+    await screen.findByRole('table')
+    fireEvent.click(screen.getByRole('button', { name: 'Display' }))
+    fireEvent.click(screen.getByRole('radio', { name: /Compact/ }))
+    // Compact density draws one row per Ticket, with the title in a row of its own; nothing is "unsaved".
+    expect(await screen.findByLabelText('Open PFI-001')).toBeTruthy()
+    expect(screen.queryByRole('table')).toBeNull()
+    expect(screen.queryByText('You have unsaved changes.')).toBeNull()
+    expect(api.updateProjectView).not.toHaveBeenCalled()
+    first.unmount()
+    // Back later (a refresh): still a compact Table. Another View, or Reset, goes back to the View's own display.
+    mount('/w/w/projects/p/work', projectWork)
+    expect(await screen.findByLabelText('Open PFI-001')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Display' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reset my display' }))
+    expect(await screen.findByText('API login')).toBeTruthy()
+    expect(document.querySelector('.board')).not.toBeNull()
+  })
+
+  it('opens a List link and a List View as the same Table with compact rows, without rewriting the View', async () => {
+    api.getProjectBoard.mockResolvedValue(fixtureBoard(tickets))
+    api.getProjectViews.mockResolvedValue([{ id: 'vl', projectId: 'p', targetKind: 'PROJECT', teamId: null, name: 'Old list', layout: 'LIST', scope: 'PERSONAL', ownerId: 'u1', definition: { filter: { labelIds: [], assigneeIds: [], unassigned: false, priorities: ['HIGH'], typeIds: [], kinds: [], sprintIds: [], noSprint: false, milestoneIds: [], blocked: null, text: null, categories: [], channelIds: [], projectIds: [] }, group: 'CATEGORY', sort: { field: 'RANK', dir: 'ASC' }, display: { subtasks: true, compact: false, columns: [] } }, version: 3, canEdit: true, createdAt: '', updatedAt: '' }])
+    mount('/w/w/projects/p/work?v=vl', projectWork)
+    expect(await screen.findByLabelText('Open PFI-001')).toBeTruthy()
+    // Same filter, grouping and sorting as the saved View; the compact rows come with its List layout.
+    expect(screen.queryByRole('table')).toBeNull()
+    expect(screen.queryByText('You have unsaved changes.')).toBeNull()
+    expect(screen.queryByRole('group', { name: 'Layout' })?.textContent).not.toContain('List')
+    expect(api.updateProjectView).not.toHaveBeenCalled()
+  })
+
+  it('keeps the layout in the address when a link asks for it, without an unsaved change', async () => {
     api.getProjectBoard.mockResolvedValue(fixtureBoard(tickets))
     mount('/w/w/projects/p/work?layout=table', projectWork)
     expect(await screen.findByRole('table')).toBeTruthy()
-    expect(screen.getByText('You have unsaved changes.')).toBeTruthy()
+    expect(screen.queryByText('You have unsaved changes.')).toBeNull()
   })
 
   it('saves the layout with the View', async () => {
     api.getProjectBoard.mockResolvedValue(fixtureBoard(tickets))
     api.createProjectView.mockResolvedValue({ id: 'v9', projectId: 'p', targetKind: 'PROJECT', teamId: null, name: 'My table', layout: 'TABLE', scope: 'PERSONAL', ownerId: 'u1', definition: {}, version: 1, canEdit: true, createdAt: '', updatedAt: '' })
-    mount('/w/w/projects/p/work?layout=table', projectWork)
+    mount('/w/w/projects/p/work?layout=table&d=1&group=CATEGORY', projectWork)
     await screen.findByRole('table')
     fireEvent.click(screen.getByRole('button', { name: 'Save view' }))
     fireEvent.change(screen.getByLabelText('View name'), { target: { value: 'My table' } })
@@ -135,7 +165,7 @@ describe('Work in a Project: one dataset, three layouts', () => {
   })
 })
 
-describe('Work in a Team or the Workspace: List and Table, never a Board', () => {
+describe('Work in a Team or the Workspace: a Table, never a Board', () => {
   const dataset: ScopeDataset = {
     projects: [project('pa', 'Alpha'), project('pb', 'Beta', false)],
     truncated: false,
@@ -148,12 +178,11 @@ describe('Work in a Team or the Workspace: List and Table, never a Board', () =>
   const teamWork = <Work target={{ kind: 'TEAM', workspaceId: 'w', teamId: 't1' }} />
   const teamRoute = '/w/:workspaceId/teams/:teamId'
 
-  it('offers only List and Table, groups by category, and shows Project and own State on every row', async () => {
+  it('offers only the Table, with compact rows, groups by category, and shows Project and own State on every row', async () => {
     api.getScopeDataset.mockResolvedValue(dataset)
     mount('/w/w/teams/t1', teamWork, teamRoute)
     expect(await screen.findByLabelText('Open A-1')).toBeTruthy()
-    const layouts = screen.getByRole('group', { name: 'Layout' })
-    expect(within(layouts).getAllByRole('button').map((button) => button.textContent)).toEqual(['List', 'Table'])
+    expect(screen.queryByRole('group', { name: 'Layout' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Board' })).toBeNull()
     expect(document.querySelector('.board')).toBeNull()
     const headings = screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent ?? '')
@@ -199,14 +228,14 @@ describe('Work in a Team or the Workspace: List and Table, never a Board', () =>
 
   it('saves a Team View against the Team', async () => {
     api.getScopeDataset.mockResolvedValue(dataset)
-    api.createWideView.mockResolvedValue({ id: 'v1', projectId: null, targetKind: 'TEAM', teamId: 't1', name: 'Mine', layout: 'LIST', scope: 'PERSONAL', ownerId: 'u1', definition: {}, version: 1, canEdit: true, createdAt: '', updatedAt: '' })
+    api.createWideView.mockResolvedValue({ id: 'v1', projectId: null, targetKind: 'TEAM', teamId: 't1', name: 'Mine', layout: 'TABLE', scope: 'PERSONAL', ownerId: 'u1', definition: {}, version: 1, canEdit: true, createdAt: '', updatedAt: '' })
     mount('/w/w/teams/t1?d=1&group=PROJECT', teamWork, teamRoute)
     await screen.findByLabelText('Open A-1')
     fireEvent.click(screen.getByRole('button', { name: 'Save view' }))
     fireEvent.change(screen.getByLabelText('View name'), { target: { value: 'Mine' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create' }))
     await waitFor(() => expect(api.createWideView).toHaveBeenCalledTimes(1))
-    expect(api.createWideView).toHaveBeenCalledWith('w', expect.objectContaining({ targetKind: 'TEAM', teamId: 't1', layout: 'LIST' }), expect.any(String))
+    expect(api.createWideView).toHaveBeenCalledWith('w', expect.objectContaining({ targetKind: 'TEAM', teamId: 't1', layout: 'TABLE' }), expect.any(String))
     // A Team View is personal: there is no "share with the Project" choice.
     expect(screen.queryByLabelText('Visibility')).toBeNull()
   })

@@ -1526,6 +1526,10 @@ pub struct GanttItem {
     pub assignee_name: Option<String>,
     pub revision_no: i64,
     pub schedule: Option<TicketSchedule>,
+    /// The Ticket's own due date, a plain calendar date with no zone. It is a separate fact from the planned
+    /// schedule: a Ticket may have either, both or neither.
+    #[serde(default)]
+    pub due_on: Option<chrono::NaiveDate>,
 }
 
 /// A blocking dependency between two Tickets the viewer can see.

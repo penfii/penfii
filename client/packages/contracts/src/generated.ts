@@ -8084,6 +8084,11 @@ export interface components {
             revisionNo: number;
             /** @description plannedEndAt is derived from the calendar here; null without a calendar or beyond five years */
             schedule?: components["schemas"]["TicketSchedule"] | null;
+            /**
+             * Format: date
+             * @description The Ticket's own due date, a plain calendar date with no time zone; separate from the planned schedule
+             */
+            dueOn?: string | null;
         };
         GanttEdge: {
             /** Format: uuid */
@@ -9124,7 +9129,7 @@ export interface operations {
                     "application/json": components["schemas"]["Ticket"];
                 };
             };
-            /** @description Revision or subtask conflict */
+            /** @description Revision or subtask conflict (version_conflict, unfinished_subtasks, dependency_blocked) or parent_archived: the Ticket's parent is archived, so it can be moved to a Completed or Canceled State but not (re)opened until the parent is unarchived */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -9654,7 +9659,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description version_conflict, dependency_blocked, unfinished_subtasks or stale_anchor */
+            /** @description version_conflict, dependency_blocked, unfinished_subtasks, parent_archived or stale_anchor */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -10741,7 +10746,7 @@ export interface operations {
             content: {
                 "application/json": {
                     ticketIds: string[];
-                    /** @description {type: STATUS|ASSIGNEE|PRIORITY|ADD_LABELS|REMOVE_LABELS|SPRINT|ADD_MILESTONES|REMOVE_MILESTONES|ARCHIVE|TRASH, ...}. Each Ticket goes through the single-Ticket command; ARCHIVE and TRASH are Project admin only and report each Ticket on its own (open_children, forbidden...). */
+                    /** @description {type: STATUS|ASSIGNEE|PRIORITY|ADD_LABELS|REMOVE_LABELS|SPRINT|ADD_MILESTONES|REMOVE_MILESTONES|ARCHIVE|TRASH, ...}. Each Ticket goes through the single-Ticket command; ARCHIVE and TRASH are Project admin only and report each Ticket on its own (open_children, forbidden...). ARCHIVE takes an optional onlyFinished: true, which makes the archive of a Ticket that is not Completed or Canceled when it is processed fail for that Ticket alone as not_finished (the State is read under the Ticket's row lock, so a concurrent reopen cannot slip through). Without it, ARCHIVE accepts any State, as the single-Ticket archive does. */
                     change: {
                         [key: string]: unknown;
                     };

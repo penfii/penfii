@@ -2,8 +2,9 @@ import { useState } from 'react'
 import type { BulkResult } from '@penfii/contracts'
 import { Sheet, SheetRow } from '../../design/Sheet'
 import { useI18n } from '../../i18n/I18nProvider'
-import { BULK_FIELDS, BulkResultView, useBulkForm, type Field } from './BulkBar'
+import { BULK_FIELDS, BulkResultView, useArchiveAction, useBulkForm, type Field } from './BulkBar'
 import type { WorkTicket } from './viewModel'
+import { ArchiveExcluded } from './archiveFeedback'
 
 /**
  * Select mode on a phone: the List's rows get a check, and this bar holds what can be done with
@@ -18,6 +19,8 @@ export function PhoneBulk({
   onAll,
   onDone,
   onResult,
+  canArchive,
+  onRefresh,
 }: {
   workspaceId: string
   selected: WorkTicket[]
@@ -27,6 +30,8 @@ export function PhoneBulk({
   onAll: () => void
   onDone: () => void
   onResult: (result: BulkResult | null) => void
+  canArchive: (projectId: string) => boolean
+  onRefresh: () => void
 }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
@@ -38,6 +43,7 @@ export function PhoneBulk({
     if (outcome) setOpen(false)
   })
   const { field, setField, value, setValue, options, locked, ready, apply, bulk } = form
+  const archiveAction = useArchiveAction({ workspaceId, selected, canArchive, onResult, onRefresh })
 
   function close() {
     setOpen(false)
@@ -51,8 +57,11 @@ export function PhoneBulk({
         <strong>{selected.length > 0 ? t('bulk.selected', { count: String(selected.length) }) : t('bulk.pickTickets')}</strong>
         <button type="button" className="btn btn-ghost" onClick={onAll}>{t('bulk.all')}</button>
         <button type="button" className="btn btn-primary" disabled={selected.length === 0} aria-haspopup="dialog" onClick={() => { setStep('field'); setOpen(true) }}>{t('bulk.change')}</button>
+        <button type="button" className="btn btn-secondary" disabled={archiveAction.plan.ids.length === 0 || archiveAction.archiving !== null} onClick={() => void archiveAction.archive()}>{t('bulk.lifecycle.archiveCount', { count: String(archiveAction.plan.ids.length) })}</button>
         <button type="button" className="btn btn-ghost" onClick={onDone}>{t('bulk.done')}</button>
       </div>
+      <ArchiveExcluded plan={archiveAction.plan} count={selected.length} />
+      {archiveAction.dialog}
       <Sheet open={open} title={step === 'field' ? t('bulk.title') : t(`bulk.field.${field}`)} onClose={close}>
         {step === 'field' ? (
           BULK_FIELDS.map((item: Field) => (

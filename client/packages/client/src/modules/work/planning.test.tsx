@@ -165,9 +165,31 @@ describe('bulk archive and trash on the Board', () => {
     fireEvent.click(await screen.findByRole('checkbox', { name: 'Select PFI-001' }))
     fireEvent.click(screen.getByRole('checkbox', { name: 'Select PFI-002' }))
     expect(screen.getByText('2 completed/canceled selected')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Archive' }))
-    await waitFor(() => expect(api.bulkTickets).toHaveBeenCalledWith('w', ['a', 'b'], { type: 'ARCHIVE' }, expect.any(String)))
+    fireEvent.click(screen.getByRole('button', { name: 'Archive 2' }))
+    // Archiving asks first, with the count that will really be archived, and sends nothing until confirmed.
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText(/Archive the 2 that can be archived/)).toBeTruthy()
+    expect(api.bulkTickets).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }))
+    await waitFor(() => expect(api.bulkTickets).toHaveBeenCalledWith('w', ['a', 'b'], { type: 'ARCHIVE', onlyFinished: true }, expect.any(String)))
     expect((await screen.findAllByText(/2 archived/)).length).toBeGreaterThan(0)
+  })
+
+  it('chooses a whole column with one check, shows a partial choice in words and leaves out what cannot be archived', async () => {
+    const withChild = { ...finished('b', 'PFI-002', 'Has open child'), childSummary: { total: 2, done: 1, canceled: 0 } }
+    api.getProjectBoard.mockResolvedValue(adminBoard([finished('a', 'PFI-001', 'Shipped'), withChild]))
+    mount(BOARD_PATH)
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select PFI-001' }))
+    const column = screen.getByRole('checkbox', { name: /Choose every Completed and Canceled ticket/ }) as HTMLInputElement
+    expect(column.indeterminate).toBe(true)
+    expect(column.getAttribute('aria-checked')).toBe('mixed')
+    expect(screen.getByText('1/2')).toBeTruthy()
+    fireEvent.click(column)
+    expect(screen.getByText('2 completed/canceled selected')).toBeTruthy()
+    // Choosing the column does not archive anything; the one with an unfinished child is named as left out.
+    expect(api.bulkTickets).not.toHaveBeenCalled()
+    expect(screen.getByText(/1 will not be archived: 1 with unfinished child tickets/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Archive 1' })).toBeTruthy()
   })
 
   const trashTwo = async () => {
@@ -212,6 +234,26 @@ describe('bulk archive and trash on the Board', () => {
     await waitFor(() => expect(api.restoreTicketFromTrash).toHaveBeenCalledTimes(2))
     expect(api.restoreTicketFromTrash).toHaveBeenCalledWith('a')
     expect(await screen.findByText('2 restored from the trash')).toBeTruthy()
+    dismissNotice()
+  })
+
+  it('archives from the Table and, after Undo, leaves no stale result in the bar', async () => {
+    api.getProjectBoard.mockResolvedValue(adminBoard([finished('a', 'PFI-001', 'Shipped'), ticket({ id: 'b', key: 'PFI-002', title: 'Open work' })]))
+    api.bulkTickets.mockResolvedValue({ total: 1, succeeded: 1, failed: 0, items: [{ ticketId: 'a', key: 'PFI-001', ok: true, code: null, message: null }] })
+    api.unarchiveTicket.mockResolvedValue(undefined)
+    mount(`${BOARD_PATH}?layout=table`)
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select all' }))
+    const bar = screen.getByRole('region', { name: 'Bulk change' })
+    // The open ticket is chosen too but is named as left out; only the finished one is sent.
+    expect(within(bar).getByText(/1 will not be archived: 1 not Completed or Canceled/)).toBeTruthy()
+    fireEvent.click(within(bar).getByRole('button', { name: 'Archive 1' }))
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Archive' }))
+    await waitFor(() => expect(api.bulkTickets).toHaveBeenCalledWith('w', ['a'], { type: 'ARCHIVE', onlyFinished: true }, expect.any(String)))
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(api.unarchiveTicket).toHaveBeenCalledWith('a'))
+    expect(await screen.findByText('1 taken out of the archive')).toBeTruthy()
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Bulk change' })).toBeNull())
+    expect(screen.queryByText(/0 of 0/)).toBeNull()
     dismissNotice()
   })
 
@@ -332,6 +374,71 @@ describe('ordering, blocking and WIP on the Board', () => {
     fireEvent.change(screen.getByLabelText('WIP limit'), { target: { value: '3' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(api.updateWorkflowState).toHaveBeenCalledWith('p', 's-todo', { expectedWorkflowVersion: 7, wipLimit: 3 }))
+  })
+})
+
+describe('children of a Done or archived parent (FEA-126)', () => {
+  const sub = (partial: Partial<ReturnType<typeof ticket>> = {}) =>
+    ticket({ id: 'c', key: 'PFI-011', title: 'Child', hierarchyKind: 'SUBTASK', parentId: 'a', parent: { id: 'a', key: 'PFI-010', title: 'Task A', hierarchyKind: 'TASK' }, statusId: 's-doing', ...partial })
+
+  it('says how many children are open again on a Done parent, and keeps the parent Done', async () => {
+    const parent = ticket({ id: 'a', key: 'PFI-010', title: 'Task A', hierarchyKind: 'TASK', statusId: 's-done', childSummary: { total: 3, done: 1, canceled: 1 } })
+    api.getProjectBoard.mockResolvedValue(fixtureBoard([parent]))
+    api.getTicket.mockResolvedValue(parent)
+    api.getTicketChildren.mockResolvedValue([])
+    mount(`${BOARD_PATH}?panel=ticket:a`)
+    const panel = await screen.findByRole('complementary', { name: 'Ticket detail' })
+    expect(await within(panel).findByText(/1 child ticket\(s\) are open again\. The parent stays Completed/)).toBeTruthy()
+    expect(within(panel).getByText('1 open again. The parent is still Completed.')).toBeTruthy()
+    expect((document.querySelector('select.ticket-status') as HTMLSelectElement).value).toBe('s-done')
+  })
+
+  it('says nothing about open children when every child is finished', async () => {
+    const parent = ticket({ id: 'a', key: 'PFI-010', title: 'Task A', hierarchyKind: 'TASK', statusId: 's-done', childSummary: { total: 2, done: 2, canceled: 0 } })
+    api.getProjectBoard.mockResolvedValue(fixtureBoard([parent]))
+    api.getTicket.mockResolvedValue(parent)
+    api.getTicketChildren.mockResolvedValue([])
+    mount(`${BOARD_PATH}?panel=ticket:a`)
+    await screen.findByRole('complementary', { name: 'Ticket detail' })
+    expect(screen.queryByText(/are open again/)).toBeNull()
+  })
+
+  it('explains an archived parent on its child and lets the admin unarchive it from there', async () => {
+    const parent = ticket({ id: 'a', key: 'PFI-010', title: 'Task A', hierarchyKind: 'TASK', statusId: 's-done', archivedAt: '2026-11-01T00:00:00Z' })
+    api.getProjectBoard.mockResolvedValue({ ...fixtureBoard([sub()]), canManageWorkflow: true })
+    api.getTicket.mockImplementation((id: string) => Promise.resolve(id === 'a' ? parent : sub()))
+    api.unarchiveTicket.mockResolvedValue(undefined)
+    mount(`${BOARD_PATH}?panel=ticket:c`)
+    const note = await screen.findByText(/The parent ticket PFI-010 is archived\. This ticket can only be completed or canceled/)
+    expect(screen.getByRole('button', { name: 'Open parent PFI-010' })).toBeTruthy()
+    expect(screen.queryByText(/Ask one to/)).toBeNull()
+    api.getTicket.mockImplementation((id: string) => Promise.resolve(id === 'a' ? { ...parent, archivedAt: null } : sub()))
+    fireEvent.click(within(note.closest('.parent-archived-note') as HTMLElement).getByRole('button', { name: 'Unarchive' }))
+    await waitFor(() => expect(api.unarchiveTicket).toHaveBeenCalledWith('a'))
+    await waitFor(() => expect(screen.queryByText(/is archived\. This ticket can only be completed or canceled/)).toBeNull())
+  })
+
+  it('tells someone who cannot unarchive who can, and gives them no Unarchive', async () => {
+    const parent = ticket({ id: 'a', key: 'PFI-010', title: 'Task A', hierarchyKind: 'TASK', statusId: 's-done', archivedAt: '2026-11-01T00:00:00Z' })
+    api.getProjectBoard.mockResolvedValue(fixtureBoard([sub()]))
+    api.getTicket.mockImplementation((id: string) => Promise.resolve(id === 'a' ? parent : sub()))
+    mount(`${BOARD_PATH}?panel=ticket:c`)
+    expect(await screen.findByText(/A Project admin can unarchive it/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Unarchive' })).toBeNull()
+  })
+
+  it('shows no note below a parent that is not archived', async () => {
+    const parent = ticket({ id: 'a', key: 'PFI-010', title: 'Task A', hierarchyKind: 'TASK', statusId: 's-done' })
+    api.getProjectBoard.mockResolvedValue(fixtureBoard([sub()]))
+    api.getTicket.mockImplementation((id: string) => Promise.resolve(id === 'a' ? parent : sub()))
+    mount(`${BOARD_PATH}?panel=ticket:c`)
+    await screen.findByRole('complementary', { name: 'Ticket detail' })
+    expect(screen.queryByText(/is archived\. This ticket can only/)).toBeNull()
+  })
+
+  it('uses one message for the refusal on every path (panel, Table menu, drag, the children checkbox)', async () => {
+    const { moveErrorKey } = await import('./moveErrors')
+    expect(moveErrorKey(Object.assign(new Error('x'), { code: 'parent_archived' }))).toBe('work.move.parentArchived')
   })
 })
 

@@ -141,6 +141,7 @@ function AppRoutes() {
           <Route path="/w/:workspaceId/docs" element={<Shell section="docs"><DocsScreen /></Shell>} />
           <Route path="/w/:workspaceId/directory" element={<Shell section="teams"><TeamsPage /></Shell>} />
           <Route path="/w/:workspaceId/directory/members" element={<Shell section="teams"><TeamsPage /></Shell>} />
+          <Route path="/w/:workspaceId/directory/teams" element={<Shell section="teams"><TeamsPage /></Shell>} />
           <Route path="/w/:workspaceId/directory/teams/:teamId" element={<Shell section="teams"><TeamsPage /></Shell>} />
           <Route path="/w/:workspaceId/search" element={<Shell section="search"><SearchPage /></Shell>} />
           <Route path="/w/:workspaceId/settings" element={<Shell section="settings"><SettingsPage /></Shell>} />

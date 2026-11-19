@@ -65,10 +65,10 @@ export function IconButton({
   )
 }
 
-export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+export function Field({ label, hint, badge, children }: { label: string; hint?: string; /** A short mark beside the label (for example "Changed"); decoration only, hidden from assistive technology. */ badge?: string; children: ReactNode }) {
   return (
     <label className="field">
-      <span>{label}</span>
+      <span>{label}{badge ? <em className="field-badge" aria-hidden="true">{badge}</em> : null}</span>
       {children}
       {hint ? <small className="field-hint">{hint}</small> : null}
     </label>
@@ -117,6 +117,8 @@ export function Dialog({
     if (open && !dialog.open) {
       opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
       dialog.showModal()
+      // A confirmation names its safe answer: it, not the dialog's close button, gets the first focus.
+      dialog.querySelector<HTMLElement>('[data-autofocus]')?.focus()
     }
     if (!open && dialog.open) dialog.close()
   }, [open])

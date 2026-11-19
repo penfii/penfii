@@ -2,6 +2,9 @@ import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { newIdempotencyKey } from '@penfii/api-client'
 import { useTicketPanel } from './panelParam'
+import type { MessageKey } from '../../i18n/messages'
+import { moveErrorKey } from './moveErrors'
+import { OpenChildrenNote } from './ParentNotices'
 import type { Ticket } from '@penfii/contracts'
 import { api } from '../../api'
 import { Avatar, Button } from '../../design/ui'
@@ -45,6 +48,7 @@ export function HierarchySection({
   const [collapsed, setCollapsed] = useState(false)
   const { openCreate } = useTicketPanel()
   const [togglingId, setTogglingId] = useState<string | null>(null)
+  const [toggleError, setToggleError] = useState<MessageKey | null>(null)
   const parents = eligibleParents(ticket, ctx.board)
   const states = new Map(ctx.board.states.map((state) => [state.id, state]))
   const doneState = ctx.board.states.find((state) => state.category === 'DONE')
@@ -58,8 +62,10 @@ export function HierarchySection({
     setTogglingId(child.id)
     try {
       await api.changeTicketStatus(child.id, { expectedRevision: child.revisionNo, statusId: target.id }, newIdempotencyKey())
-    } catch {
-      // The list refreshes below, so the row shows the state the server kept.
+      setToggleError(null)
+    } catch (cause) {
+      // The list refreshes below, so the row shows the state the server kept; the reason is said here, next to the row.
+      setToggleError(moveErrorKey(cause))
     } finally {
       setTogglingId(null)
       await refreshTicket(queryClient, child.id, ticket.projectId)
@@ -125,6 +131,8 @@ export function HierarchySection({
               </span>
             ) : null}
           </div>
+          {states.get(ticket.statusId)?.category === 'DONE' ? <OpenChildrenNote summary={summary} short /> : null}
+          {toggleError ? <p className="board-error" role="alert">{t(toggleError)}</p> : null}
           {children.isPending ? <p className="hint" role="status">{t('loading')}</p> : null}
           {children.isError ? <p className="hint" role="alert">{t('work.children.error')}</p> : null}
           {children.isSuccess && children.data.length === 0 ? <p className="hint">{t(`work.children.empty.${kind as 'EPIC' | 'TASK'}`)}</p> : null}

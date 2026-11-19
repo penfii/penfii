@@ -27,6 +27,9 @@ export function ViewBar({
   planning,
   channels,
   projects,
+  density,
+  ownDisplay,
+  onResetDisplay,
   onLayout,
   onSelect,
   onChange,
@@ -52,6 +55,12 @@ export function ViewBar({
   channels?: Channel[]
   /** The Projects of a Team or Workspace scope; absent in a Project. */
   projects?: ScopeProject[]
+  /** The Table's density for this person. */
+  density: 'basic' | 'compact'
+  /** Whether this person has set a layout, density or columns of their own for this View. */
+  ownDisplay: boolean
+  /** Puts the layout, density and columns back to the View's own (or the product's default). */
+  onResetDisplay: () => void
   onLayout: (layout: ViewLayout) => void
   onSelect: (id: string | null) => void
   onChange: (definition: ViewDefinition) => void
@@ -103,13 +112,15 @@ export function ViewBar({
         ) : null}
       </div>
 
-      <div className="view-layouts" role="group" aria-label={t('view.layout')}>
-        {layoutsFor(target).map((item) => (
-          <button key={item} type="button" data-layout={item} className={item === layout ? 'view-layout on' : 'view-layout'} aria-pressed={item === layout} onClick={() => onLayout(item)}>
-            {t(`view.layout.${item}`)}
-          </button>
-        ))}
-      </div>
+      {layoutsFor(target).length > 1 ? (
+        <div className="view-layouts" role="group" aria-label={t('view.layout')}>
+          {layoutsFor(target).map((item) => (
+            <button key={item} type="button" data-layout={item} className={item === layout ? 'view-layout on' : 'view-layout'} aria-pressed={item === layout} onClick={() => onLayout(item)}>
+              {t(`view.layout.${item}`)}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       <div className="view-controls">
         <input
@@ -138,7 +149,7 @@ export function ViewBar({
           </div>
         )}
         <Popover label={t('view.display')} align="end">
-          {() => <DisplayPanel definition={definition} layout={layout} wide={target !== 'PROJECT'} onChange={onChange} />}
+          {() => <DisplayPanel definition={definition} layout={layout} wide={target !== 'PROJECT'} density={density} ownDisplay={ownDisplay} onResetDisplay={onResetDisplay} onChange={onChange} />}
         </Popover>
         {actions}
       </div>
@@ -198,7 +209,7 @@ function SortGroupControls({ definition, groups, onChange }: { definition: ViewD
 }
 
 /** Presentation only: nothing here changes which Tickets a View shows. */
-function DisplayPanel({ definition, layout, wide, onChange }: { definition: ViewDefinition; layout: ViewLayout; wide: boolean; onChange: (definition: ViewDefinition) => void }) {
+function DisplayPanel({ definition, layout, wide, density, ownDisplay, onResetDisplay, onChange }: { definition: ViewDefinition; layout: ViewLayout; wide: boolean; density: 'basic' | 'compact'; ownDisplay: boolean; onResetDisplay: () => void; onChange: (definition: ViewDefinition) => void }) {
   const { t } = useI18n()
   const mobile = useIsMobile()
   const display = definition.display
@@ -224,11 +235,19 @@ function DisplayPanel({ definition, layout, wide, onChange }: { definition: View
         <input type="checkbox" checked={display.subtasks} onChange={(event) => set({ subtasks: event.target.checked })} />
         <span>{t('view.display.subtasks')}</span>
       </label>
-      <label className="filter-choice">
-        <input type="checkbox" checked={display.compact} onChange={(event) => set({ compact: event.target.checked })} />
-        <span>{t('view.display.compact')}</span>
-      </label>
-      {layout === 'TABLE' || (layout === 'LIST' && mobile) ? (
+      {layout === 'TABLE' ? (
+        <fieldset className="filter-group">
+          <legend>{t('view.display.density')}</legend>
+          {(['basic', 'compact'] as const).map((item) => (
+            <label key={item} className="filter-choice">
+              <input type="radio" name="table-density" checked={density === item} disabled={mobile} onChange={() => set({ compact: item === 'compact' })} />
+              <span>{t(`view.display.density.${item}`)}</span>
+            </label>
+          ))}
+          {mobile ? <small className="field-hint">{t('view.display.density.phone')}</small> : null}
+        </fieldset>
+      ) : null}
+      {layout === 'TABLE' ? (
         <fieldset className="filter-group">
           <legend>{mobile ? t('view.display.fields') : t('view.display.columns')}</legend>
           {TABLE_COLUMNS.map((column) => (
@@ -239,6 +258,8 @@ function DisplayPanel({ definition, layout, wide, onChange }: { definition: View
           ))}
         </fieldset>
       ) : null}
+      <p className="field-hint view-display-note">{t('view.display.personal')}</p>
+      {ownDisplay ? <Button type="button" variant="ghost" onClick={onResetDisplay}>{t('view.display.reset')}</Button> : null}
     </div>
   )
 }

@@ -269,8 +269,11 @@ pub enum BulkChange {
     Sprint(Option<Uuid>),
     AddMilestones(Vec<Uuid>),
     RemoveMilestones(Vec<Uuid>),
-    /// Archive or trash: Project admin only, through the single-Ticket lifecycle commands.
-    Archive,
+    /// Archive or trash: Project admin only, through the single-Ticket lifecycle commands. `only_finished` asks the archive to
+    /// refuse (per Ticket, as `not_finished`) one that is not Completed or Canceled when it is processed.
+    Archive {
+        only_finished: bool,
+    },
     Trash,
 }
 
@@ -285,7 +288,13 @@ impl BulkChange {
             Self::Sprint(id) => json!({"type":"SPRINT","sprintId":id}),
             Self::AddMilestones(ids) => json!({"type":"ADD_MILESTONES","milestoneIds":ids}),
             Self::RemoveMilestones(ids) => json!({"type":"REMOVE_MILESTONES","milestoneIds":ids}),
-            Self::Archive => json!({"type":"ARCHIVE"}),
+            // Written only when asked for, so a request without it keeps the fingerprint (and receipts) it always had.
+            Self::Archive {
+                only_finished: true,
+            } => json!({"type":"ARCHIVE","onlyFinished":true}),
+            Self::Archive {
+                only_finished: false,
+            } => json!({"type":"ARCHIVE"}),
             Self::Trash => json!({"type":"TRASH"}),
         }
     }
@@ -407,9 +416,14 @@ async fn change_one(
             }
             planning::set_milestones(pool, actor_id, ticket_id, milestones, key).await
         }
-        BulkChange::Archive => {
-            let (_, notice) =
-                crate::ticket_lifecycle::archive_ticket(pool, actor_id, ticket_id).await?;
+        BulkChange::Archive { only_finished } => {
+            let (_, notice) = crate::ticket_lifecycle::archive_ticket_checked(
+                pool,
+                actor_id,
+                ticket_id,
+                *only_finished,
+            )
+            .await?;
             Ok((current, notice))
         }
         BulkChange::Trash => {

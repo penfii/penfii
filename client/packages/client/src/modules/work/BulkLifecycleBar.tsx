@@ -2,7 +2,8 @@ import type { BulkResult } from '@penfii/contracts'
 import { Button } from '../../design/ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { BulkResultView } from './BulkBar'
-import type { LifecycleAction } from './bulkLifecycle'
+import type { ArchivePlan, LifecycleAction } from './bulkLifecycle'
+import { ArchiveExcluded } from './archiveFeedback'
 
 /**
  * Archive or trash for the Completed/Canceled cards chosen on the Board. The chosen set is one
@@ -11,6 +12,8 @@ import type { LifecycleAction } from './bulkLifecycle'
  */
 export function BulkLifecycleBar({
   count,
+  plan,
+  scope,
   running,
   result,
   last,
@@ -19,6 +22,10 @@ export function BulkLifecycleBar({
   onClear,
 }: {
   count: number
+  /** How many of the chosen an Archive would take, and why the rest stay out. */
+  plan: ArchivePlan
+  /** One line on what the choice covers (the loaded, filtered Tickets). */
+  scope: string
   running: { done: number; total: number } | null
   result: BulkResult | null
   last: LifecycleAction | null
@@ -34,13 +41,15 @@ export function BulkLifecycleBar({
         {count > 0 ? (
           <>
             <strong>{t('bulk.lifecycle.selected', { count: String(count) })}</strong>
-            <Button type="button" disabled={running !== null} onClick={() => onRun('ARCHIVE')}>{t('bulk.lifecycle.archive')}</Button>
+            <Button type="button" disabled={running !== null || plan.ids.length === 0} onClick={() => onRun('ARCHIVE')}>{t('bulk.lifecycle.archiveCount', { count: String(plan.ids.length) })}</Button>
             <Button type="button" variant="secondary" disabled={running !== null} onClick={() => onRun('TRASH')}>{t('bulk.lifecycle.trash')}</Button>
             {failed && last ? <Button type="button" variant="secondary" disabled={running !== null} onClick={() => onRun(last)}>{t('bulk.lifecycle.retry')}</Button> : null}
           </>
         ) : null}
         <Button type="button" variant="ghost" disabled={running !== null} onClick={onClear}>{t(count > 0 ? 'bulk.lifecycle.clear' : 'bulk.lifecycle.dismiss')}</Button>
       </div>
+      <ArchiveExcluded plan={plan} count={count} />
+      {count > 0 ? <p className="bulk-scope">{scope}</p> : null}
       {running ? <p className="hint" role="status">{t('bulk.lifecycle.running', { done: String(running.done), total: String(running.total) })}</p> : null}
       {result ? (
         <p className={failed ? 'board-error' : 'hint'} role={failed ? 'alert' : 'status'}>

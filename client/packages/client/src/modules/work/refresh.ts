@@ -65,13 +65,26 @@ function ticketOf(queryClient: QueryClient, ticketId: string): Ticket | undefine
   return queryClient.getQueryData<Ticket>(queryKeys.ticket(ticketId))
 }
 
+/**
+ * The parent of a Ticket this tab shows: from the Ticket itself when it is held, otherwise from the child list of a parent that
+ * lists it. A child seen only in its parent's list (its own detail never opened) still moves that parent's progress.
+ */
+function parentOf(queryClient: QueryClient, ticketId: string): string | undefined {
+  const held = ticketOf(queryClient, ticketId)?.parentId
+  if (held) return held
+  for (const [key, children] of queryClient.getQueriesData<Ticket[]>({ queryKey: queryKeys.all.ticketChildren })) {
+    if (Array.isArray(children) && children.some((child) => child.id === ticketId)) return key[1] as string
+  }
+  return undefined
+}
+
 /** The queries about one Ticket, by what changed. Another Ticket is touched only where it shows this one: its parent. */
 function ticketQueries(queryClient: QueryClient, change: TicketChange): Array<readonly unknown[]> {
   const { ticketId } = change
   const kind = change.kind ?? ''
   if (COMMENT_KINDS.has(kind)) return [queryKeys.ticketComments(ticketId), queryKeys.ticketActivity(ticketId)]
   if (FILE_KINDS.has(kind)) return [queryKeys.ticketAttachments(ticketId), queryKeys.ticketActivity(ticketId)]
-  const parentId = ticketOf(queryClient, ticketId)?.parentId
+  const parentId = parentOf(queryClient, ticketId)
   const own: Array<readonly unknown[]> = [
     queryKeys.ticket(ticketId),
     queryKeys.ticketChildren(ticketId),

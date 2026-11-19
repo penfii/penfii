@@ -864,7 +864,9 @@ export type BulkChange =
   | { type: 'ADD_LABELS' | 'REMOVE_LABELS'; labelIds: string[] }
   | { type: 'SPRINT'; sprintId: string | null }
   | { type: 'ADD_MILESTONES' | 'REMOVE_MILESTONES'; milestoneIds: string[] }
-  | { type: 'ARCHIVE' | 'TRASH' }
+  /** `onlyFinished` makes the server refuse (as `not_finished`, for that Ticket alone) one that is no longer Completed or Canceled. */
+  | { type: 'ARCHIVE'; onlyFinished?: boolean }
+  | { type: 'TRASH' }
 
 export type BulkItemResult = { ticketId: string; key: string | null; ok: boolean; code: string | null; message: string | null }
 export type BulkResult = { total: number; succeeded: number; failed: number; items: BulkItemResult[] }
@@ -1289,6 +1291,8 @@ export type GanttItem = {
   revisionNo: number
   /** Null means the Ticket is unplanned. `plannedEndAt` is derived from the work calendar. */
   schedule: TicketSchedule | null
+  /** The Ticket's own due date (a plain calendar date, no zone), separate from its plan. A server that does not send it leaves this undefined. */
+  dueOn?: string | null
 }
 
 /** A blocking dependency between two Tickets the viewer can see. */

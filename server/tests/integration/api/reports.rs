@@ -1026,7 +1026,7 @@ async fn the_gantt_list_has_schedules_with_derived_ends_visible_edges_and_pages(
     seoul_calendar(world, &project_id).await;
     let second = leaf(world, &project_id, "p73g-2", "Second", None).await;
     let node = {
-        let (s, t) = make_ticket(world, &project_id, "p73g-3", json!({"title":"Node","schedule":{"plannedStartAt":"2026-11-07T03:00:00Z","durationMinutes":0,"isScheduleMilestone":true}})).await;
+        let (s, t) = make_ticket(world, &project_id, "p73g-3", json!({"title":"Node","dueOn":"2026-11-21","schedule":{"plannedStartAt":"2026-11-07T03:00:00Z","durationMinutes":0,"isScheduleMilestone":true}})).await;
         assert_eq!(s, StatusCode::CREATED, "{t}");
         t["id"].as_str().unwrap().to_owned()
     };
@@ -1061,6 +1061,9 @@ async fn the_gantt_list_has_schedules_with_derived_ends_visible_edges_and_pages(
         item("Second")["schedule"].is_null(),
         "no schedule means unplanned"
     );
+    // The due date is its own fact (a plain date), apart from the plan: a Ticket may have either, both or neither.
+    assert_eq!(item("Node")["dueOn"], "2026-11-21");
+    assert!(item("Second")["dueOn"].is_null() && item("First")["dueOn"].is_null());
     assert_eq!(
         (
             item("First")["statusCategory"].clone(),

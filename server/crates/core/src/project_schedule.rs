@@ -1,7 +1,7 @@
 //! The Gantt list of one Project for the person asking: its Tickets with their planned schedules
 //! and the blocking dependencies between the Tickets they can see.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use penfii_contracts::{
     GanttCalendar, GanttEdge, GanttItem, ProjectSchedule, TicketRef, TicketSchedule,
 };
@@ -32,6 +32,7 @@ struct Facts {
     duration: Option<i64>,
     milestone: bool,
     has_schedule: bool,
+    due_on: Option<NaiveDate>,
 }
 
 struct EdgeFacts {
@@ -56,7 +57,7 @@ async fn load_visible(
         "SELECT t.id, t.public_key, t.title, t.hierarchy_kind, t.parent_id, t.channel_id, s.category,
                 t.revision_no, (SELECT u.display_name FROM penfii.users u WHERE u.id=t.assignee_id) AS assignee,
                 t.project_sequence, ts.planned_start_at, ts.duration_minutes,
-                ts.is_milestone, (ts.ticket_id IS NOT NULL) AS has_schedule
+                ts.is_milestone, (ts.ticket_id IS NOT NULL) AS has_schedule, t.due_on
          FROM penfii.tickets t
          JOIN penfii.workflow_statuses s ON s.id=t.status_id
          LEFT JOIN penfii.ticket_schedules ts ON ts.ticket_id=t.id
@@ -90,6 +91,7 @@ async fn load_visible(
                 .try_get::<Option<bool>, _>("is_milestone")?
                 .unwrap_or(false),
             has_schedule: row.try_get("has_schedule")?,
+            due_on: row.try_get("due_on")?,
         });
     }
     let ids: HashSet<Uuid> = tickets.iter().map(|t| t.id).collect();
@@ -192,6 +194,7 @@ pub async fn schedule(
                 is_schedule_milestone: t.milestone,
                 planned_end_at: end_of.get(&i).copied(),
             }),
+            due_on: t.due_on,
         })
         .collect();
     let edges = visible

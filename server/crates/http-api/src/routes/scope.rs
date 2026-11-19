@@ -109,7 +109,13 @@ fn bulk_change_from(value: &Value) -> Result<scope::BulkChange, ApiError> {
         Some("SPRINT") => Ok(scope::BulkChange::Sprint(optional_id("sprintId")?)),
         Some("ADD_MILESTONES") => Ok(scope::BulkChange::AddMilestones(ids("milestoneIds")?)),
         Some("REMOVE_MILESTONES") => Ok(scope::BulkChange::RemoveMilestones(ids("milestoneIds")?)),
-        Some("ARCHIVE") => Ok(scope::BulkChange::Archive),
+        Some("ARCHIVE") => Ok(scope::BulkChange::Archive {
+            only_finished: match value.get("onlyFinished") {
+                None | Some(Value::Null) => false,
+                Some(Value::Bool(flag)) => *flag,
+                Some(_) => return Err(ApiError::validation("onlyFinished must be true or false")),
+            },
+        }),
         Some("TRASH") => Ok(scope::BulkChange::Trash),
         _ => Err(ApiError::validation("unknown bulk change type")),
     }

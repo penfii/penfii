@@ -34,15 +34,34 @@ export function useFollowScroll(scroller: HTMLElement | null, version: number, r
   const reset = useRef(resetKey)
   const [pending, setPending] = useState(0)
 
+  // The width the list had when the width watcher last looked (see below).
+  const knownWidth = useRef(0)
+
   useLayoutEffect(() => {
     if (!scroller) return
+    knownWidth.current = scroller.clientWidth
     const onScroll = () => {
+      // A change of width re-wraps the lines and the browser may move the scroll position for it; that is not the reader
+      // leaving the bottom. The width watcher (which runs after this event) decides what to do about it.
+      if (scroller.clientWidth !== knownWidth.current) return
       const near = distanceFromBottom(scroller) <= NEAR_BOTTOM
       atBottom.current = near
       if (near) setPending(0)
     }
     scroller.addEventListener('scroll', onScroll, { passive: true })
     return () => scroller.removeEventListener('scroll', onScroll)
+  }, [scroller])
+
+  // A change of width (a thread opening beside the list, a pane being dragged) re-wraps the lines; a reader who was at the bottom stays there.
+  useLayoutEffect(() => {
+    if (!scroller || typeof ResizeObserver === 'undefined') return
+    const watcher = new ResizeObserver(() => {
+      if (scroller.clientWidth === knownWidth.current) return
+      knownWidth.current = scroller.clientWidth
+      if (atBottom.current) scroller.scrollTop = scroller.scrollHeight
+    })
+    watcher.observe(scroller)
+    return () => watcher.disconnect()
   }, [scroller])
 
   useLayoutEffect(() => {

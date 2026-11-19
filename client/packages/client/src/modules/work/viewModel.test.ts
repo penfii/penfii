@@ -16,7 +16,8 @@ import {
   layoutsFor,
   matches,
   paramsWithDraft,
-  paramsWithLayout,
+  layoutOf,
+  startsCompact,
   sameDefinition,
   siblingIds,
   sortTickets,
@@ -311,11 +312,11 @@ describe('hierarchy-aware columns', () => {
 
 describe('layouts follow the place', () => {
   it('offers a Board only in a Project', () => {
-    expect(layoutsFor('PROJECT')).toEqual(['BOARD', 'LIST', 'TABLE'])
-    expect(layoutsFor('TEAM')).toEqual(['LIST', 'TABLE'])
-    expect(layoutsFor('WORKSPACE')).toEqual(['LIST', 'TABLE'])
+    expect(layoutsFor('PROJECT')).toEqual(['BOARD', 'TABLE'])
+    expect(layoutsFor('TEAM')).toEqual(['TABLE'])
+    expect(layoutsFor('WORKSPACE')).toEqual(['TABLE'])
     expect(defaultLayout('PROJECT')).toBe('BOARD')
-    expect(defaultLayout('TEAM')).toBe('LIST')
+    expect(defaultLayout('TEAM')).toBe('TABLE')
   })
 
   it('offers only groups a layout can show', () => {
@@ -334,9 +335,16 @@ describe('layouts follow the place', () => {
     expect(fitLayout(byMilestone, 'PROJECT', 'TABLE').group).toBe('MILESTONE')
   })
 
-  it('writes the layout to the URL only when it differs from the View', () => {
-    expect(paramsWithLayout(new URLSearchParams('v=a'), 'TABLE', 'BOARD').get('layout')).toBe('table')
-    expect(paramsWithLayout(new URLSearchParams('layout=table'), 'BOARD', 'BOARD').has('layout')).toBe(false)
+  it('reads the layout a link asks for, and folds the retired List into the Table', () => {
+    expect(layoutFromParams(new URLSearchParams('layout=list'), 'PROJECT')).toBe('TABLE')
+    expect(layoutOf('LIST', 'PROJECT')).toBe('TABLE')
+    expect(layoutOf('BOARD', 'TEAM')).toBe('TABLE')
+    expect(layoutOf(null, 'PROJECT')).toBe('BOARD')
+    // A List View, and a Team or Workspace with no View yet, start with compact rows; a saved Table does not.
+    expect(startsCompact('LIST', 'PROJECT')).toBe(true)
+    expect(startsCompact(null, 'TEAM')).toBe(true)
+    expect(startsCompact('TABLE', 'PROJECT')).toBe(false)
+    expect(startsCompact(null, 'PROJECT')).toBe(false)
     expect(layoutFromParams(new URLSearchParams('layout=table'), 'PROJECT')).toBe('TABLE')
     // A Board asked for in a Team is not an option there.
     expect(layoutFromParams(new URLSearchParams('layout=board'), 'TEAM')).toBeNull()

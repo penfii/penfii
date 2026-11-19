@@ -24,7 +24,7 @@ export type TicketPatch = {
 
 export type TicketConflict = { patch: TicketPatch; latest: Ticket; again: boolean }
 
-export type EditFailure = 'save' | 'invalidValue' | 'unfinished' | 'notAllowed' | 'move' | 'moveConflict' | 'blocked' | 'blockedCanceled'
+export type EditFailure = 'save' | 'invalidValue' | 'unfinished' | 'notAllowed' | 'move' | 'moveConflict' | 'blocked' | 'blockedCanceled' | 'parentArchived'
 
 /**
  * Edits one Ticket against the revision the person read. A stale revision never overwrites:
@@ -109,7 +109,7 @@ export function useTicketEditor(ticket: Ticket | undefined) {
         return true
       } catch (cause) {
         const code = errorCode(cause)
-        setFailure(code === 'unfinished_subtasks' ? 'unfinished' : code === 'dependency_blocked' ? (Number(errorDetails(cause).canceledBlockers ?? 0) > 0 ? 'blockedCanceled' : 'blocked') : code === 'version_conflict' ? 'moveConflict' : code === 'forbidden' ? 'notAllowed' : 'move')
+        setFailure(code === 'unfinished_subtasks' ? 'unfinished' : code === 'dependency_blocked' ? (Number(errorDetails(cause).canceledBlockers ?? 0) > 0 ? 'blockedCanceled' : 'blocked') : code === 'version_conflict' ? 'moveConflict' : code === 'forbidden' ? 'notAllowed' : code === 'parent_archived' ? 'parentArchived' : 'move')
         void refreshTicket(queryClient, ticket.id, ticket.projectId)
         return false
       } finally {

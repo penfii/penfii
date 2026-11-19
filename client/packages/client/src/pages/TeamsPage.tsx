@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useParams, useSearchParams } from 'react-router'
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Department, Team, WorkspacePerson } from '@penfii/contracts'
@@ -9,7 +9,7 @@ import { useSession } from '../modules/identity'
 import { PersonButton } from '../modules/people/PersonButton'
 import { BatchAssignDialog } from '../modules/spaces/BatchAssignDialog'
 import { OrgStructureEditor } from '../modules/spaces/OrgStructureEditor'
-import { branchCounts, distinctPeople, matchOrg, subtreeIds, type OrgMove } from '../modules/spaces/orgTree'
+import { branchCounts, departmentPath, distinctPeople, matchOrg, subtreeIds, type OrgMove } from '../modules/spaces/orgTree'
 import { TeamArchiveSection, RestoreTeamButton } from '../modules/spaces/TeamArchiveSection'
 import { TeamChannelsTab } from '../modules/spaces/TeamChannelsTab'
 import { TeamInfoForm } from '../modules/spaces/TeamInfoForm'
@@ -26,12 +26,15 @@ import { Work } from '../modules/work/Work'
 import { queryKeys } from '../queryKeys'
 import { queries } from '../queries'
 import { OpenCreate } from '../shell/WorkspaceShell'
+import { AllTeams } from './AllTeams'
+import { useMemberSearchMemory } from './memberSearchMemory'
 
 export function TeamsPage() {
   const { teamId } = useParams()
   const { pathname } = useLocation()
   if (pathname.endsWith('/members')) return <MembersDirectory />
   if (teamId) return <TeamDetail teamId={teamId} />
+  if (pathname.endsWith('/directory/teams')) return <AllTeams />
   return <OrgList />
 }
 
@@ -51,28 +54,65 @@ function OrgList() {
   const [editing, setEditing] = useState(false)
   const [moves, setMoves] = useState<OrgMove[]>([])
   const [showArchived, setShowArchived] = useState(false)
-  const [query, setQuery] = useState('')
-  const [scope, setScope] = useState<'all' | 'mine'>('all')
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [params, setParams] = useSearchParams()
+  const [query, setQueryState] = useState('')
+  const [scope, setScopeState] = useState<'all' | 'mine'>('all')
+  // "View in org chart" arrives with `?focus=team:<id>`: the Team is found, highlighted and its preview opened.
+  const focusParam = params.get('focus')
+  const focusId = focusParam?.startsWith('team:') ? focusParam.slice('team:'.length) : null
+  const [selectedId, setSelectedId] = useState<string | null>(focusId)
+  const endFocus = () =>
+    setParams((current) => {
+      const next = new URLSearchParams(current)
+      next.delete('focus')
+      return next
+    }, { replace: true })
+  // Choosing a search or a scope of your own ends the location: you are looking for something else now.
+  const setQuery = (value: string) => {
+    setQueryState(value)
+    if (focusId) endFocus()
+  }
+  const setScope = (value: 'all' | 'mine') => {
+    setScopeState(value)
+    if (focusId) endFocus()
+  }
+  useEffect(() => {
+    if (focusId) setSelectedId(focusId)
+  }, [focusId])
   const everyone = people.data ?? []
   const mine = new Set(everyone.find((person) => person.userId === session.data?.id)?.teams.map((team) => team.id) ?? [])
   const allTeams = space.data?.teams ?? []
   const hasArchived = allTeams.some(isArchivedTeam)
   const liveTeams = activeTeams(allTeams)
-  const teams = showArchived ? allTeams : liveTeams
+  const focusTeam = focusId ? allTeams.find((team) => team.id === focusId) : undefined
+  // The Team that is looked for must be visible. If the person's own search, scope or archive setting would hide it, those
+  // are set aside for this screen only; they are not changed, and they apply again once the location ends.
+  const relaxed = !editing && focusTeam !== undefined && (query.trim() !== '' || scope === 'mine' || (isArchivedTeam(focusTeam) && !showArchived))
+  const effectiveQuery = relaxed ? '' : query
+  const effectiveScope = relaxed ? 'all' : scope
+  const teams = showArchived || (relaxed && focusTeam !== undefined && isArchivedTeam(focusTeam)) ? allTeams : liveTeams
   const tree = departments.data ?? []
   const roots = tree.filter((department) => department.parentId === null)
-  const filtering = query.trim() !== '' || scope === 'mine'
-  const match = matchOrg(query, tree, teams, everyone)
-  const shownTeams = teams.filter((team) => match.teamIds.has(team.id) && (scope === 'all' || mine.has(team.id)))
+  const filtering = effectiveQuery.trim() !== '' || effectiveScope === 'mine'
+  const match = matchOrg(effectiveQuery, tree, teams, everyone)
+  const shownTeams = teams.filter((team) => match.teamIds.has(team.id) && (effectiveScope === 'all' || mine.has(team.id)))
   // With a filter on, only departments that lead to a shown Team stay.
   const departmentShown = (department: Department) => !filtering || shownTeams.some((team) => subtreeIds(tree, department.id).has(team.departmentId ?? ''))
   const unplaced = shownTeams.filter((team) => !team.departmentId || !tree.some((department) => department.id === team.departmentId))
-  const needle = query.trim().toLowerCase()
+  const needle = effectiveQuery.trim().toLowerCase()
   const unaffiliated = everyone.filter((person) => person.state === 'ACTIVE' && person.teams.length === 0)
   const shownUnaffiliated = unaffiliated.filter((person) => needle === '' || person.displayName.toLowerCase().includes(needle) || person.email.toLowerCase().includes(needle))
   const selected = shownTeams.find((team) => team.id === selectedId) ?? null
-  const nothing = filtering && shownTeams.length === 0 && (scope === 'mine' || shownUnaffiliated.length === 0)
+  const nothing = filtering && shownTeams.length === 0 && (effectiveScope === 'mine' || shownUnaffiliated.length === 0)
+  // Once the Team is on screen, bring it into view and put the keyboard on it.
+  const found = focusTeam !== undefined && shownTeams.some((team) => team.id === focusTeam.id) && !editing
+  useEffect(() => {
+    if (!found || !focusId) return
+    const target = document.querySelector<HTMLElement>(`[data-team-id="${focusId}"]`)
+    target?.scrollIntoView?.({ block: 'center' })
+    target?.querySelector<HTMLElement>('.team-card-name')?.focus({ preventScroll: true })
+  }, [found, focusId])
+  const focusMissing = focusId !== null && space.isSuccess && !focusTeam
   async function toggleEditing() {
     if (editing && moves.length > 0) {
       if (!(await confirm({ title: t('orgEdit.leaveTitle'), body: t('orgEdit.leaveBody', { count: String(moves.length) }), confirmLabel: t('orgEdit.leave') }))) return
@@ -114,12 +154,21 @@ function OrgList() {
       )}
       {space.isPending || departments.isPending ? <p className="hint" role="status">{t('loading')}</p> : null}
       {space.isError || departments.isError || people.isError ? <p className="form-error" role="alert">{t('error.generic')}</p> : null}
+      {!editing && focusId && (focusTeam || focusMissing) ? (
+        <div className="org-focus-banner" role="status">
+          <p>
+            <strong>{focusTeam ? t('org.focus.title', { name: focusTeam.name }) : t('org.focus.missing')}</strong>
+            {focusTeam && relaxed ? <> {t('org.focus.relaxed')}</> : null}
+          </p>
+          <Button type="button" variant="secondary" onClick={endFocus}>{t('org.focus.end')}</Button>
+        </div>
+      ) : null}
       {editing ? (
         <OrgStructureEditor workspaceId={workspaceId} departments={tree} teams={liveTeams} moves={moves} onMoves={setMoves} />
       ) : (
         <>
           {allTeams.length === 0 && tree.length === 0 && space.isSuccess ? <p className="hint">{t('teams.none')}</p> : null}
-          {nothing ? <p className="hint" role="status">{scope === 'mine' && needle === '' ? t('org.noMine') : t('org.noMatch')}</p> : null}
+          {nothing ? <p className="hint" role="status">{effectiveScope === 'mine' && needle === '' ? t('org.noMine') : t('org.noMatch')}</p> : null}
           <div className={selected ? 'org-layout has-preview' : 'org-layout'}>
             <div className="org-tree">
               {roots.filter(departmentShown).map((department) => (
@@ -133,6 +182,7 @@ function OrgList() {
                   people={everyone}
                   mine={mine}
                   selectedId={selectedId}
+                  focusId={found ? focusId : null}
                   onSelect={setSelectedId}
                   visible={departmentShown}
                 />
@@ -140,10 +190,10 @@ function OrgList() {
               {unplaced.length > 0 ? (
                 <section className="card settings-card">
                   <h2>{t('teams.unplaced')}</h2>
-                  <TeamCards workspaceId={workspaceId} teams={unplaced} people={everyone} mine={mine} selectedId={selectedId} onSelect={setSelectedId} />
+                  <TeamCards workspaceId={workspaceId} teams={unplaced} people={everyone} mine={mine} selectedId={selectedId} focusId={found ? focusId : null} onSelect={setSelectedId} />
                 </section>
               ) : null}
-              {scope === 'all' && (needle === '' || shownUnaffiliated.length > 0) ? (
+              {effectiveScope === 'all' && (needle === '' || shownUnaffiliated.length > 0) ? (
                 <section className="card settings-card">
                   <h2>{t('org.unaffiliatedTitle', { count: String(shownUnaffiliated.length) })}</h2>
                   <p className="hint">{t('org.unaffiliatedLead')}</p>
@@ -169,6 +219,7 @@ function DepartmentBranch({
   people,
   mine,
   selectedId,
+  focusId,
   onSelect,
   visible,
 }: {
@@ -182,6 +233,7 @@ function DepartmentBranch({
   people: WorkspacePerson[]
   mine: Set<string>
   selectedId: string | null
+  focusId: string | null
   onSelect: (id: string | null) => void
   visible: (department: Department) => boolean
 }) {
@@ -193,9 +245,9 @@ function DepartmentBranch({
     <section className="department-branch">
       <h2>{department.name}</h2>
       <p className="hint">{t('org.branch', { teams: String(counts.teams), people: String(counts.people) })}</p>
-      <TeamCards workspaceId={workspaceId} teams={here} people={people} mine={mine} selectedId={selectedId} onSelect={onSelect} />
+      <TeamCards workspaceId={workspaceId} teams={here} people={people} mine={mine} selectedId={selectedId} focusId={focusId} onSelect={onSelect} />
       {children.map((child) => (
-        <DepartmentBranch key={child.id} workspaceId={workspaceId} department={child} departments={departments} teams={teams} counted={counted} people={people} mine={mine} selectedId={selectedId} onSelect={onSelect} visible={visible} />
+        <DepartmentBranch key={child.id} workspaceId={workspaceId} department={child} departments={departments} teams={teams} counted={counted} people={people} mine={mine} selectedId={selectedId} focusId={focusId} onSelect={onSelect} visible={visible} />
       ))}
     </section>
   )
@@ -207,6 +259,7 @@ function TeamCards({
   people,
   mine,
   selectedId,
+  focusId = null,
   onSelect,
 }: {
   workspaceId: string
@@ -214,6 +267,8 @@ function TeamCards({
   people: WorkspacePerson[]
   mine: Set<string>
   selectedId: string | null
+  /** The Team that was asked for ("View in org chart"): marked in words as well as by its outline. */
+  focusId?: string | null
   onSelect: (id: string | null) => void
 }) {
   const { t } = useI18n()
@@ -224,10 +279,11 @@ function TeamCards({
         const count = distinctPeople(people, new Set([team.id]))
         const archived = isArchivedTeam(team)
         return (
-          <li key={team.id} className={['card team-card', mine.has(team.id) ? 'is-mine' : '', archived ? 'is-archived' : '', selectedId === team.id ? 'is-selected' : ''].filter(Boolean).join(' ')}>
+          <li key={team.id} data-team-id={team.id} className={['card team-card', mine.has(team.id) ? 'is-mine' : '', archived ? 'is-archived' : '', selectedId === team.id ? 'is-selected' : '', focusId === team.id ? 'is-focus' : ''].filter(Boolean).join(' ')}>
             <button type="button" className="team-card-name" aria-pressed={selectedId === team.id} aria-label={t('org.preview', { name: team.name })} onClick={() => onSelect(selectedId === team.id ? null : team.id)}>
               <strong>{team.name}</strong>
             </button>
+            {focusId === team.id ? <Badge tone="accent">{t('org.focus.tag')}</Badge> : null}
             {archived ? <Badge>{t('teams.archivedTag')}</Badge> : null}
             {mine.has(team.id) ? <span className="hint">{t('teams.mine')}</span> : null}
             {team.description ? <p className="hint team-card-description">{team.description}</p> : null}
@@ -264,7 +320,9 @@ function MembersDirectory() {
   const people = usePeople(workspaceId)
   const space = useQuery(queries.space(workspaceId))
   const assignable = useAssignableTeams(workspaceId)
-  const [query, setQuery] = useState('')
+  // The search text is kept for this history entry in this tab only (never in the address), so Back returns to it.
+  const memory = useMemberSearchMemory(workspaceId, people.isSuccess)
+  const { query, setQuery } = memory
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [assigning, setAssigning] = useState(false)
   // The selection stays while the result is on screen, and is cleared when the dialog closes after a run.
@@ -302,7 +360,7 @@ function MembersDirectory() {
     setParams(params2, { replace: true })
   }
   return (
-    <div className="page-scroll teams-page">
+    <div className="page-scroll teams-page" ref={memory.rootRef} onScroll={memory.onScroll} onClickCapture={memory.onClickCapture}>
       <header className="page-intro">
         <h1>{view === 'none' ? t('teams.unaffiliated') : t('teams.members')}</h1>
         <p className="hint">{t('members.lead')}</p>
@@ -382,7 +440,9 @@ function TeamDetail({ teamId }: { teamId: string }) {
   const roster = useQuery(queries.adminTeamMembers(workspaceId, teamId))
   const projects = useQuery(queries.teamProjects(workspaceId, teamId))
   const [tab, setTab] = useState<TeamTab>('members')
+  const departments = useQuery(queries.departments(workspaceId))
   const team = space.data?.teams.find((item) => item.id === teamId)
+  const teamDepartmentPath = departmentPath(departments.data ?? [], team?.departmentId ?? null)
   const archived = isArchivedTeam(team)
   const workspaceManager = isWorkspaceManager(role)
   const manages = (roster.data ?? []).some((member) => member.userId === session.data?.id && member.role === 'MANAGER')
@@ -398,6 +458,12 @@ function TeamDetail({ teamId }: { teamId: string }) {
           {archived ? <> <Badge>{t('teams.archivedTag')}</Badge></> : null}
           {manages ? <> <Badge tone="accent">{t('teamPage.iManage')}</Badge></> : null}
         </h1>
+        {team ? (
+          <p className="team-location">
+            <span className="hint">{teamDepartmentPath.length > 0 ? `${t('teams.all.path')}: ${teamDepartmentPath.join(' › ')}` : t('teams.unplacedTeam')}</span>
+            <Link to={`/w/${workspaceId}/directory?focus=team:${team.id}`}>{t('teams.viewInOrg')}</Link>
+          </p>
+        ) : null}
         {team?.description ? <p className="team-description">{team.description}</p> : null}
         {roster.data && projects.data ? (
           <p className="hint team-summary">
@@ -446,11 +512,18 @@ function PeopleList({
   adminColumns?: boolean
 }) {
   const { t } = useI18n()
+  const space = useQuery(queries.space(workspaceId))
+  const departments = useQuery(queries.departments(workspaceId))
+  // A Team is told apart by the department above it (two Teams may share a name).
+  const pathOf = (teamId: string) => {
+    const team = space.data?.teams.find((item) => item.id === teamId)
+    return departmentPath(departments.data ?? [], team?.departmentId ?? null).join(' › ')
+  }
   if (people.length === 0) return <p className="hint">{t('members.empty')}</p>
   return (
     <ul className="plain-list">
       {people.map((person) => (
-        <li key={person.userId} className="person-line">
+        <li key={person.userId} className="person-line" data-person-id={person.userId}>
           {selection ? (
             <input
               type="checkbox"
@@ -462,7 +535,16 @@ function PeopleList({
             />
           ) : null}
           <PersonButton workspaceId={workspaceId} person={person} />
-          {person.state === 'ACTIVE' ? <span className="hint">{person.teams.map((team) => team.name).join(', ') || t('teams.unaffiliated')}</span> : null}
+          {person.state === 'ACTIVE' ? (
+            <span className="hint person-teams">
+              {person.teams.length === 0
+                ? t('teams.noTeam')
+                : person.teams.map((team) => {
+                    const path = pathOf(team.id)
+                    return <span key={team.id} className="person-team">{team.name}{path ? <small> · {path}</small> : null}</span>
+                  })}
+            </span>
+          ) : null}
           {adminColumns ? (
             <span className="hint person-admin">
               {t(`admin.role.${person.role as 'OWNER' | 'ADMIN' | 'MEMBER'}`)} · {t(`members.state.${person.state as 'ACTIVE' | 'INACTIVE'}`)}

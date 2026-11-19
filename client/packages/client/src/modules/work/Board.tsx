@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router'
 import { newIdempotencyKey } from '@penfii/api-client'
@@ -10,7 +10,8 @@ import { queryKeys } from '../../queryKeys'
 import { isSamePlace, placeInBoard, placementAt, placementForStep } from './boardMoves'
 import { BoardColumn } from './BoardColumn'
 import { BulkLifecycleBar } from './BulkLifecycleBar'
-import { finishedSelection, restoreFromTrash, useBulkLifecycle, type LifecycleAction } from './bulkLifecycle'
+import { archivePlan, finishedSelection, restoreFromTrash, useBulkLifecycle, type LifecycleAction } from './bulkLifecycle'
+import { announceArchived } from './archiveFeedback'
 import { notify } from '../../design/notices'
 import { useIsMobile } from '../../design/useIsMobile'
 import { useTicketPanel } from './panelParam'
@@ -61,6 +62,22 @@ export function BoardLayout({
     void queryClient.invalidateQueries({ queryKey: queryKeys.projectTrash(projectId) })
   })
   const selectedIds = useMemo(() => finishedSelection(chosen, data), [chosen, data])
+  const finishedStates = useMemo(() => new Set(data.states.filter((state) => state.category === 'DONE' || state.category === 'CANCELED').map((state) => state.id)), [data.states])
+  // What an Archive would take, with the reasons for the rest. The server still decides for every Ticket.
+  const plan = useMemo(() => {
+    const byId = new Map(allTickets(data).map((ticket) => [ticket.id, ticket]))
+    return archivePlan(selectedIds.flatMap((id) => { const ticket = byId.get(id); return ticket ? [{ ...ticket, finished: finishedStates.has(ticket.statusId) }] : [] }), () => data.canManageWorkflow)
+  }, [selectedIds, data, finishedStates])
+  // A choice belongs to the filter, grouping, sorting and view it was made in: when one of those changes the choice is released.
+  const definitionKey = JSON.stringify([definition.filter, definition.group, definition.sort])
+  const seenKey = useRef(definitionKey)
+  useEffect(() => {
+    if (seenKey.current === definitionKey) return
+    seenKey.current = definitionKey
+    if (chosen.size === 0) return
+    setChosen(new Set())
+    notify({ message: t('bulk.selectionReset') })
+  }, [definitionKey, chosen, t])
   const { confirm, dialog: confirmDialog } = useConfirm()
   const mobile = useIsMobile()
   const refreshLifecycle = () => {
@@ -72,8 +89,18 @@ export function BoardLayout({
   async function runLifecycle(action: LifecycleAction) {
     // On a phone the result carries Undo instead of a blocking question (the design's choice for the small screen).
     if (action === 'TRASH' && !mobile && !(await confirm({ title: t('bulk.lifecycle.trashConfirmTitle'), body: t('bulk.lifecycle.trashConfirm', { count: String(selectedIds.length) }), confirmLabel: t('bulk.lifecycle.trash') }))) return
-    const outcome = await lifecycle.run(action, selectedIds)
-    if (!outcome || action !== 'TRASH') return
+    if (action === 'ARCHIVE' && !(await confirm({ title: t('bulk.lifecycle.archiveConfirmTitle'), body: t('bulk.lifecycle.archiveConfirm', { count: String(plan.ids.length) }), confirmLabel: t('bulk.lifecycle.archive') }))) return
+    const outcome = await lifecycle.run(action, action === 'ARCHIVE' ? plan.ids : selectedIds)
+    if (!outcome) return
+    if (action === 'ARCHIVE') {
+      announceArchived(t, outcome, (restored) => {
+        refreshLifecycle()
+        // The bar's "archived" is no longer true once they are back.
+        if (restored > 0) lifecycle.clear()
+      })
+      return
+    }
+    if (action !== 'TRASH') return
     const moved = outcome.items.filter((item) => item.ok).map((item) => item.ticketId)
     if (outcome.failed > 0) {
       notify({ kind: 'error', message: t('bulk.lifecycle.trashPartial', { total: String(outcome.total), ok: String(outcome.succeeded), failed: String(outcome.failed) }) })
@@ -92,6 +119,16 @@ export function BoardLayout({
         },
       })
     }
+  }
+  function pickMany(ticketIds: string[], on: boolean) {
+    setChosen((current) => {
+      const next = new Set(current)
+      for (const id of ticketIds) {
+        if (on) next.add(id)
+        else next.delete(id)
+      }
+      return next
+    })
   }
   function togglePick(ticketId: string) {
     setChosen((current) => {
@@ -270,6 +307,8 @@ export function BoardLayout({
       {data.canManageWorkflow && (selectedIds.length > 0 || lifecycle.result) ? (
         <BulkLifecycleBar
           count={selectedIds.length}
+          plan={plan}
+          scope={t('bulk.lifecycle.scopeBoard')}
           running={lifecycle.running}
           result={lifecycle.result}
           last={lifecycle.last}
@@ -285,7 +324,7 @@ export function BoardLayout({
       {total === 0 ? <p className="board-empty">{t('work.board.empty')}</p> : null}
       <div className="board-viewport">
         <div
-          className="board"
+          className={selectedIds.length > 0 ? 'board is-selecting' : 'board'}
           style={{ ['--board-cols' as string]: columns.length }}
           onDragStart={(event) => setDraggingId((event.target as HTMLElement).closest<HTMLElement>('[data-ticket-id]')?.dataset.ticketId ?? null)}
           onDragEnd={() => setDraggingId(null)}
@@ -329,6 +368,7 @@ export function BoardLayout({
               onSetWip={setWip}
               picked={data.canManageWorkflow ? new Set(selectedIds) : undefined}
               onPick={togglePick}
+              onPickMany={pickMany}
             />
           ))}
         </div>

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { isApiError, isNotFound } from '@penfii/api-client'
 import type { InvitationCreated, Space, Team, TeamRole } from '@penfii/contracts'
@@ -13,6 +13,7 @@ import { queries } from '../queries'
 import { openPendingDm } from './pendingDm'
 import { startedConversation } from './pendingDm'
 import { errorText } from '../ui/errorText'
+import { channelNameProblem, classifyCreateFailure, descriptionProblem, CHANNEL_DESCRIPTION_MAX, CHANNEL_NAME_MAX, type CreateFailure } from './channelName'
 import { useTicketPrefix } from '../modules/work/useTicketPrefix'
 import { PersonPicker } from '../modules/spaces/PersonPicker'
 import { TEAM_ROLES } from '../modules/spaces/TeamMembersPanel'
@@ -83,15 +84,38 @@ function CreateDialogs({
     await queryClient.invalidateQueries({ queryKey: queryKeys.space(workspaceId) })
   }
 
-  async function saved(action: () => Promise<void>) {
+  // One request at a time for every form that goes through `saved`: a second click or Enter while the first is on the
+  // wire would create a second Team, Project or channel. While it runs the dialog also cannot be closed, or a result
+  // the person never saw would leave a channel behind.
+  const working = useRef(false)
+  const [busy, setBusy] = useState(false)
+
+  /** Runs `action`, then closes. A failure is shown above the form, or by `onFailure` when the form says it its own way. */
+  async function saved(action: () => Promise<void>, onFailure?: (caught: unknown) => Promise<void>) {
+    if (working.current) return
+    working.current = true
+    setBusy(true)
     setNotice(null)
     try {
       await action()
       await refresh()
       onClose()
     } catch (caught) {
-      setNotice(isNotFound(caught) ? t('notFound') : errorText(caught, t('error.generic'), t('error.dbUnavailable')))
+      if (onFailure) await onFailure(caught)
+      else setNotice(isNotFound(caught) ? t('notFound') : errorText(caught, t('error.generic'), t('error.dbUnavailable')))
+    } finally {
+      working.current = false
+      setBusy(false)
     }
+  }
+
+  /** The text for a failed channel creation, or the name field's own error. The server's English message is never shown. */
+  async function channelFailure(caught: unknown): Promise<string | null> {
+    const failure: CreateFailure = classifyCreateFailure(caught)
+    if (failure === 'name') return t('channel.nameRejected')
+    if (failure === 'uncertain') await refresh().catch(() => undefined)
+    setNotice(t(`channel.failed.${failure}`))
+    return null
   }
 
   const unavailable = kind === 'task' || kind === 'document'
@@ -115,8 +139,8 @@ function CreateDialogs({
                   : ''
 
   return (
-    <Dialog open={kind != null} title={title} onClose={onClose} presentation="full">
-      {notice ? <p className="form-error">{notice}</p> : null}
+    <Dialog open={kind != null} title={title} onClose={() => { if (!working.current) onClose() }} presentation="full">
+      {notice ? <p className="form-error" role="alert">{notice}</p> : null}
       {unavailable ? (
         <>
           <p>{t('create.unavailableBody')}</p>
@@ -146,11 +170,18 @@ function CreateDialogs({
           projectId={projectId ?? null}
           space={space}
           onClose={onClose}
-          onSubmit={(body) => void saved(async () => {
-            const channel = await api.createChannel(workspaceId, body)
-            if (body.projectId) void navigate(`/w/${workspaceId}/projects/${body.projectId}/chat/${channel.conversationId}`)
-            else void navigate(`/w/${workspaceId}/c/${channel.conversationId}`)
-          })}
+          busy={busy}
+          onSubmit={async (body) => {
+            let fieldError: string | null = null
+            await saved(async () => {
+              const channel = await api.createChannel(workspaceId, body)
+              if (body.projectId) void navigate(`/w/${workspaceId}/projects/${body.projectId}/chat/${channel.conversationId}`)
+              else void navigate(`/w/${workspaceId}/c/${channel.conversationId}`)
+            }, async (caught) => {
+              fieldError = await channelFailure(caught)
+            })
+            return fieldError
+          }}
         />
       ) : null}
       {kind === 'dm' || kind === 'group' ? (
@@ -315,39 +346,96 @@ function ChannelDialog({
   projectId,
   space,
   onClose,
+  busy,
   onSubmit,
 }: {
   projectId: string | null
   space: Space | undefined
   onClose: () => void
-  onSubmit: (body: { name: string; description: string | null; visibility: 'PUBLIC' | 'PRIVATE'; teamId: string | null; projectId: string | null }) => void
+  busy: boolean
+  /** Resolves with the text for the name field when the server refused the name, otherwise null. */
+  onSubmit: (body: { name: string; description: string | null; visibility: 'PUBLIC' | 'PRIVATE'; teamId: string | null; projectId: string | null }) => Promise<string | null>
 }) {
   const { t } = useI18n()
   const [name, setName] = useState('')
+  // Nothing is said about the name before the first submit, nor on blur; after it every keystroke is checked again.
+  const [submitted, setSubmitted] = useState(false)
+  const [serverError, setServerError] = useState<string | null>(null)
+  const nameRef = useRef<HTMLInputElement>(null)
+  const descriptionRef = useRef<HTMLInputElement>(null)
+  const errorId = useId()
+  const problem = submitted ? channelNameProblem(name) : null
+  const nameError = problem
+    ? t(problem === 'blank' ? 'channel.nameRequired' : problem === 'tooLong' ? 'channel.nameTooLong' : 'channel.nameControl')
+    : serverError
   const [description, setDescription] = useState('')
+  const descriptionId = useId()
+  // The server refuses a description it would also refuse for a name's reasons; said here so a refusal is never blamed on the name.
+  const descriptionError = submitted && descriptionProblem(description) ? t('channel.descriptionInvalid') : null
   const [visibility, setVisibility] = useState<'PUBLIC' | 'PRIVATE'>('PUBLIC')
   // A Team narrows a Project's channel to the people who are also in it; it is offered only inside a Project.
   const [teamId, setTeamId] = useState('')
   const teams = activeTeams(space?.teams ?? []).filter((team) => space?.projects.find((item) => item.id === projectId)?.teamIds.includes(team.id))
   return (
     <form
+      noValidate
       onSubmit={(event: FormEvent) => {
         event.preventDefault()
-        onSubmit({
+        if (busy) return
+        setSubmitted(true)
+        setServerError(null)
+        const focusName = () => {
+          nameRef.current?.focus()
+          nameRef.current?.scrollIntoView?.({ block: 'center' })
+        }
+        if (channelNameProblem(name)) {
+          focusName()
+          return
+        }
+        if (descriptionProblem(description)) {
+          descriptionRef.current?.focus()
+          return
+        }
+        void onSubmit({
           name: name.trim(),
           description: description.trim() === '' ? null : description.trim(),
           visibility,
           teamId: projectId && visibility === 'PUBLIC' && teamId ? teamId : null,
           projectId,
+        }).then((fieldError) => {
+          if (fieldError) {
+            setServerError(fieldError)
+            focusName()
+          }
         })
       }}
     >
       <Field label={t('channel.name')}>
-        <input required value={name} onChange={(event) => setName(event.target.value)} />
+        <input
+          ref={nameRef}
+          value={name}
+          maxLength={CHANNEL_NAME_MAX}
+          aria-invalid={nameError ? true : undefined}
+          aria-describedby={nameError ? errorId : undefined}
+          onChange={(event) => {
+            setName(event.target.value)
+            setServerError(null)
+          }}
+        />
       </Field>
+      {/* Outside the label: the field's accessible name stays "Channel name"; aria-describedby adds the error. */}
+      {nameError ? <small id={errorId} className="field-error field-error-block" role="alert">{nameError}</small> : null}
       <Field label={t('shell.channel.description')}>
-        <input value={description} onChange={(event) => setDescription(event.target.value)} />
+        <input
+          ref={descriptionRef}
+          value={description}
+          maxLength={CHANNEL_DESCRIPTION_MAX}
+          aria-invalid={descriptionError ? true : undefined}
+          aria-describedby={descriptionError ? descriptionId : undefined}
+          onChange={(event) => setDescription(event.target.value)}
+        />
       </Field>
+      {descriptionError ? <small id={descriptionId} className="field-error field-error-block" role="alert">{descriptionError}</small> : null}
       <Field label={t('channel.visibility')}>
         <select value={visibility} onChange={(event) => setVisibility(event.target.value === 'PRIVATE' ? 'PRIVATE' : 'PUBLIC')}>
           <option value="PUBLIC">{visibilityLabel(t, 'PUBLIC', projectId !== null)}</option>
@@ -366,8 +454,8 @@ function ChannelDialog({
         </Field>
       ) : null}
       <div className="dialog-actions">
-        <Button type="button" variant="secondary" onClick={onClose}>{t('message.cancel')}</Button>
-        <Button type="submit">{t('shell.channel.create')}</Button>
+        <Button type="button" variant="secondary" disabled={busy} onClick={onClose}>{t('message.cancel')}</Button>
+        <Button type="submit" disabled={busy}>{busy ? t('channel.creating') : t('shell.channel.create')}</Button>
       </div>
     </form>
   )

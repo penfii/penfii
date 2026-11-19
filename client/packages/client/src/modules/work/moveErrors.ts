@@ -10,6 +10,7 @@ export function moveErrorKey(cause: unknown): MessageKey {
     // A canceled predecessor can never finish; say so, because the way out is different.
     return Number(errorDetails(cause).canceledBlockers ?? 0) > 0 ? 'work.move.blockedCanceled' : 'work.move.blocked'
   }
+  if (code === 'parent_archived') return 'work.move.parentArchived'
   if (code === 'stale_anchor') return 'work.move.staleAnchor'
   if (code === 'forbidden') return 'work.move.notAllowed'
   return 'work.move.error'

@@ -44,11 +44,25 @@ const KINDS: HierarchyKind[] = ['EPIC', 'TASK', 'SUBTASK']
 
 /** The layouts a place offers. A Board needs one Project's States, so only a Project has one. */
 export function layoutsFor(target: ViewTargetKind): ViewLayout[] {
-  return target === 'PROJECT' ? ['BOARD', 'LIST', 'TABLE'] : ['LIST', 'TABLE']
+  return target === 'PROJECT' ? ['BOARD', 'TABLE'] : ['TABLE']
 }
 
 export function defaultLayout(target: ViewTargetKind): ViewLayout {
-  return target === 'PROJECT' ? 'BOARD' : 'LIST'
+  return target === 'PROJECT' ? 'BOARD' : 'TABLE'
+}
+
+/**
+ * The List layout was folded into the Table: a saved View or a link that says LIST opens as the same filter, grouping
+ * and sorting in the Table, with its compact rows. The stored value is never rewritten.
+ */
+export function layoutOf(stored: ViewLayout | null | undefined, target: ViewTargetKind): ViewLayout {
+  if (stored === 'LIST') return 'TABLE'
+  return stored && layoutsFor(target).includes(stored) ? stored : defaultLayout(target)
+}
+
+/** Whether the place or the View comes from the List: its Table then starts with compact rows. */
+export function startsCompact(stored: ViewLayout | null | undefined, target: ViewTargetKind): boolean {
+  return stored === 'LIST' || (!stored && target !== 'PROJECT')
 }
 
 /** The groups that make sense for this place and layout. A Board's columns must be able to take a drop. */
@@ -150,7 +164,8 @@ export function normalizeDefinition(definition: ViewDefinition): ViewDefinition 
     },
     group: definition.group,
     sort: { field: definition.sort.field, dir: definition.sort.dir },
-    display: { subtasks: display.subtasks, compact: display.compact, columns: [...display.columns] },
+    // Density and columns are a person's own display (kept on this device); only Subtasks belongs to what a View shows.
+    display: { subtasks: display.subtasks, compact: false, columns: [] },
   }
 }
 
@@ -189,7 +204,7 @@ const list = (value: string | null) => (value ? value.split(',').filter((item) =
  * never disagree.
  */
 export function definitionFromParams(params: URLSearchParams, fallbackGroup: ViewGroup = 'STATUS'): ViewDefinition | null {
-  if (params.get('d') !== '1' && !DRAFT_KEYS.some((key) => key !== 'd' && params.has(key))) return null
+  if (params.get('d') !== '1' && !DRAFT_KEYS.some((key) => key !== 'd' && key !== 'compact' && key !== 'cols' && params.has(key))) return null
   const group = params.get('group')
   const [field, dir] = (params.get('sort') ?? '').split(':')
   const blocked = params.get('blocked')
@@ -219,8 +234,8 @@ export function definitionFromParams(params: URLSearchParams, fallbackGroup: Vie
     },
     display: {
       subtasks: params.get('subtasks') !== '0',
-      compact: params.get('compact') === '1',
-      columns: list(params.get('cols')).filter((item): item is TableColumn => TABLE_COLUMNS.some((column) => column === item)),
+      compact: false,
+      columns: [],
     },
   }
 }
@@ -251,23 +266,13 @@ export function paramsWithDraft(params: URLSearchParams, draft: ViewDefinition, 
   next.set('group', group)
   if (sort.field !== 'RANK' || sort.dir !== 'ASC') next.set('sort', `${sort.field}:${sort.dir}`)
   if (!display.subtasks) next.set('subtasks', '0')
-  if (display.compact) next.set('compact', '1')
-  if (display.columns.length) next.set('cols', display.columns.join(','))
   return next
 }
 
 /** The layout asked for in the URL, if it is one the place offers. */
 export function layoutFromParams(params: URLSearchParams, target: ViewTargetKind): ViewLayout | null {
   const value = params.get('layout')?.toUpperCase()
-  return layoutsFor(target).find((layout) => layout === value) ?? null
-}
-
-/** Writes the layout into the params, or clears it when it is the layout the base View already has. */
-export function paramsWithLayout(params: URLSearchParams, layout: ViewLayout, base: ViewLayout): URLSearchParams {
-  const next = new URLSearchParams(params)
-  if (layout === base) next.delete('layout')
-  else next.set('layout', layout.toLowerCase())
-  return next
+  return value === 'LIST' ? 'TABLE' : (layoutsFor(target).find((layout) => layout === value) ?? null)
 }
 
 // ---- Evaluation -----------------------------------------------------------------------------
