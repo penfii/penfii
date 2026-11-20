@@ -7,7 +7,7 @@ A maintenance release: search recovery and English matching, a restore rehearsal
 ### Upgrading from 0.3.0, 0.2.2, 0.2.1 or 0.2.0
 
 - No database migration, no API change and no new or changed setting. Check out `v0.3.1` and rebuild with the same `docker/.env` (see [Self-hosting](docs/self-hosting.md#from-v020-v021-v022-or-v030-to-v031)); `db-setup` finds the schema current.
-- The search mapping version is now 2. On its first start core-api builds every search index again from PostgreSQL in the background; search keeps answering from the old indices until each new one is ready. OpenSearch needs room for both generations meanwhile, and `admin-cli search-status` shows when every kind is `READY`.
+- The search mapping version is now 2. On its first start core-api builds every search index again from PostgreSQL in the background; search keeps answering from the old indices until each new one is ready. Meanwhile OpenSearch needs room for the new index next to the current one (and a previous generation, if one is left from an earlier rebuild), and `admin-cli search-status` shows when every kind is `READY`.
 
 ### Added
 

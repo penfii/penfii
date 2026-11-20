@@ -7,7 +7,8 @@
 #   scripts/restore-rehearsal.sh backup  DIR   PostgreSQL dump + file store archive + manifest (+ source.env)
 #   scripts/restore-rehearsal.sh restore DIR   a second Compose project from that backup (own volumes, network
 #                                              and port), mail, push and MCP switched off
-#   scripts/restore-rehearsal.sh verify  DIR   compare the restored stack with the manifest, rebuild search
+#   scripts/restore-rehearsal.sh verify  DIR   compare the restored stack with the manifest, rebuild search;
+#                                              what it checked and the result go to DIR/verify.txt
 #   scripts/restore-rehearsal.sh down    DIR   stop the rehearsal project and delete ITS volumes
 #
 # Run from docker/. DIR must be outside this repository (a backup is never something to commit).
@@ -85,6 +86,37 @@ wait_healthy() {
 }
 
 image_id() { docker image inspect --format '{{.Id}}' "$1" 2>/dev/null | cut -c1-19; }
+# The image a service's container runs (empty when there is none).
+container_image() { # service compose-command-words...
+  local id; id="$("${@:2}" ps -a -q "$1" 2>/dev/null | head -1)" || true
+  [ -z "$id" ] || docker inspect --format '{{.Image}}' "$id" 2>/dev/null | cut -c1-19 || true
+}
+
+# The search index kinds of this checkout (server/crates/core/src/search/mapping.rs), one per line.
+search_kinds() {
+  local kinds
+  kinds="$(sed -n 's/^pub const KINDS: &\[&str\] = &\[\(.*\)\];$/\1/p' "$REPO/server/crates/core/src/search/mapping.rs" 2>/dev/null \
+    | tr -d '" ' | tr ',' '\n' | grep -E '^[a-z]+$' || true)"
+  [ -n "$kinds" ] || die "cannot read the search index kinds from server/crates/core/src/search/mapping.rs"
+  echo "$kinds"
+}
+
+# check_search_status KINDS < search-status output: every kind has exactly one line, READY with a live
+# index, and the prefix check passed. Missing, partial or unexpected output fails.
+check_search_status() {
+  local status ok=0 kind lines
+  status="$(cat)"
+  if grep -q '^prefix check:' <<<"$status"; then echo "   FAILED: the index prefix check failed"; ok=1; fi
+  for kind in $1; do
+    lines="$(grep -E "^$kind +phase=" <<<"$status" || true)"
+    if [ -z "$lines" ]; then echo "   FAILED: no status for search index '$kind'"; ok=1
+    elif [ "$(wc -l <<<"$lines")" != 1 ]; then echo "   FAILED: more than one status line for '$kind'"; ok=1
+    elif ! grep -qE "^$kind +phase=READY live=[^- ]" <<<"$lines"; then echo "   FAILED: search index '$kind' is not READY with a live index"; ok=1
+    fi
+  done
+  [ "$ok" = 0 ] && echo "   every index READY: $(echo $1)"
+  return "$ok"
+}
 
 cmd_backup() {
   local dir="${1:?usage: backup DIR (outside the repository)}"
@@ -178,6 +210,7 @@ cmd_restore() {
   if [ -n "$want_api" ] && [ "$want_api" != "$(image_id penfii-core-api:local)" ]; then
     echo "   note: penfii-core-api:local is not the image the backup was taken with (see manifest.txt);"
     echo "         restore with the same release, or a later one whose changelog you have read"
+    echo "         (verify records the images it checked in verify.txt)"
   fi
 
   say "1. PostgreSQL of $REHEARSAL_PROJECT"
@@ -212,6 +245,28 @@ cmd_verify() {
   local env="$dir/rehearsal.env" fail=0
   [ -f "$env" ] || die "run restore first"
 
+  # What was verified: the images the rehearsal runs (which may differ from the backup's, see restore),
+  # recorded in verify.txt next to the manifest.
+  say "versions (recorded in verify.txt)"
+  local result="$dir/verify.txt" svc img want
+  {
+    echo "verified $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "rehearsal_project $REHEARSAL_PROJECT"
+    echo "checkout_git_head $(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
+    echo "checkout_git_describe $(git -C "$REPO" describe --tags --always --dirty 2>/dev/null || echo unknown)"
+    echo "backup_git_describe $(sed -n 's/^git_describe //p' "$dir/manifest.txt")"
+  } > "$result"
+  for svc in core_api web; do
+    img="$(container_image "${svc/_/-}" rh "$env")"
+    want="$(sed -n "s/^image_$svc //p" "$dir/manifest.txt")"
+    echo "image_$svc ${img:-none}" >> "$result"
+    if [ -n "$img" ] && [ "$img" = "$want" ]; then
+      echo "image_${svc}_same_as_backup yes" >> "$result"; echo "   ${svc/_/-} $img (same as the backup)"
+    else
+      echo "image_${svc}_same_as_backup no" >> "$result"; echo "   ${svc/_/-} ${img:-none} (the backup was taken with ${want:-unknown})"
+    fi
+  done
+
   say "readyz"
   if curl -fsS "http://127.0.0.1:$REHEARSAL_PORT/readyz" >/dev/null; then echo "   200"; else echo "   FAILED"; fail=1; fi
 
@@ -230,17 +285,24 @@ cmd_verify() {
   [ "$want" = "$got" ] || { echo "   FAILED"; fail=1; }
 
   say "search: rebuild from PostgreSQL, then status"
-  rh "$env" run --rm admin-cli search-reindex 2>/dev/null | tail -5 || { echo "   FAILED"; fail=1; }
-  local status; status="$(rh "$env" run --rm admin-cli search-status 2>/dev/null)" || fail=1
+  local kinds reindex status
+  kinds="$(search_kinds)"
+  if reindex="$(rh "$env" run --rm admin-cli search-reindex 2>&1)" && grep -q '^rebuilt:' <<<"$reindex"; then
+    grep '^rebuilt:' <<<"$reindex" | sed 's/^/   /'
+  else
+    grep -v '^ Container ' <<<"$reindex" | tail -5; echo "   FAILED: search-reindex"; fail=1
+  fi
+  status="$(rh "$env" run --rm admin-cli search-status 2>/dev/null)" || { echo "   FAILED: search-status"; fail=1; }
   echo "$status" | tail -12
-  if echo "$status" | grep -E '^[a-z]+ +phase=' | grep -vq 'phase=READY'; then echo "   FAILED: not every index is READY"; fail=1; fi
+  if ! check_search_status "$kinds" <<<"$status"; then fail=1; fi
 
   say "event deliveries that were given up on"
   local dead; dead="$(rh "$env" run --rm admin-cli events-dead 2>/dev/null || true)"
   echo "$dead" | tail -3
   echo "$dead" | grep -q 'dead deliveries: 0' || { echo "   FAILED: dead deliveries"; fail=1; }
 
-  [ "$fail" = 0 ] || die "verification failed"
+  if [ "$fail" != 0 ]; then echo "result FAILED" >> "$result"; die "verification failed (see $result)"; fi
+  echo "result OK" >> "$result"
   say "OK (signing in and opening tickets, documents and files in the browser is a separate check; see docs/self-hosting.md)"
 }
 
