@@ -2,7 +2,7 @@
 
 Penfii is an open-source, self-hosted workspace for team chat, projects, tickets, and documentation. Turn a conversation into a ticket, track it on a project board, and record the decision in a document linked to the ticket so teammates can find the context later.
 
-[Quick start](#quick-start) · [Product screenshots](#product-screenshots) · [Self-hosting guide](docs/self-hosting.md) · [Contributing](CONTRIBUTING.md)
+[Quick start](#quick-start) · [Product screenshots](#product-screenshots) · [User guide](docs/user-guide.md) ([한국어](docs/user-guide.ko.md)) · [Self-hosting guide](docs/self-hosting.md) · [Contributing](CONTRIBUTING.md)
 
 ![Harborline Beta project board with assigned tickets across Todo, In Progress, Done, and Canceled](docs/assets/screenshots/project-board.png)
 
@@ -56,10 +56,10 @@ MCP is **off by default**. To enable it, set `PENFII_MCP_ENABLED=1` and configur
 
 You need Git and Docker with Compose v2. Plan for at least 4 GiB of host memory. Docker Compose is the supported deployment method. It builds Penfii from source, so the first start takes several minutes. There are currently no published Penfii container images.
 
-1. Clone the repository and check out the `v0.3.0` release tag.
+1. Clone the repository and check out the `v0.3.1` release tag.
 
    ```sh
-   git clone --branch v0.3.0 https://github.com/penfii/penfii.git
+   git clone --branch v0.3.1 https://github.com/penfii/penfii.git
    cd penfii/docker
    cp .env.example .env
    ```
@@ -79,13 +79,13 @@ You need Git and Docker with Compose v2. Plan for at least 4 GiB of host memory.
 
    The command prompts for a password and confirmation without displaying either. Use 15 to 128 characters and avoid known weak passwords. For automation, pipe the password in with `--password-stdin` and `docker compose run -T` to keep it out of the command line.
 
-4. Open <http://localhost:8080> and sign in. Try creating a project and a ticket, then search for the ticket by title. Add teammates by invitation from Administration.
+4. Open <http://localhost:8080> and sign in. Try creating a project and a ticket, then search for the ticket by title. Add teammates by invitation under **Settings** > **Workspace** > **Invitations**. The [user guide](docs/user-guide.md) ([한국어](docs/user-guide.ko.md)) walks through chat, tickets, documents and search.
 
 Before opening the instance to others, follow the [network and TLS guide](docs/self-hosting.md#network-and-tls). Keep the bundled OpenSearch service internal because its security plugin is disabled. Back up both [PostgreSQL and the file store](docs/self-hosting.md#backup).
 
 ## Project status and upgrades
 
-**v0.3.0 is an early release.** The API, database schema, and settings may change between 0.x releases. Back up before upgrading and check the [upgrade instructions](docs/self-hosting.md#updating) and [changelog](CHANGELOG.md) for your starting version. The web editor saves documents explicitly and has no live co-editing. Run a single API instance for live updates. See [known limitations](docs/known-limitations.md) before hosting Penfii for a team.
+**v0.3.1 is an early release.** The API, database schema, and settings may change between 0.x releases. Back up before upgrading and check the [upgrade instructions](docs/self-hosting.md#updating) and [changelog](CHANGELOG.md) for your starting version. The web editor saves documents explicitly and has no live co-editing. Run a single API instance for live updates. See [known limitations](docs/known-limitations.md) before hosting Penfii for a team.
 
 ## Architecture and documentation
 
@@ -98,7 +98,7 @@ The React and TypeScript web app talks to a Rust API. PostgreSQL holds workspace
 | [`database/`](database) | PostgreSQL migrations. |
 | [`docker/`](docker) | Compose stack and Dockerfiles. |
 
-The [documentation index](docs/README.md) links to the [configuration reference](docs/configuration.md), [operator guide](docs/operations.md), [architecture overview](docs/architecture.md), and [development guide](docs/development.md).
+The [documentation index](docs/README.md) links to the [user guide](docs/user-guide.md), [configuration reference](docs/configuration.md), [operator guide](docs/operations.md), [architecture overview](docs/architecture.md), and [development guide](docs/development.md), which also describes [how releases are made](docs/development.md#releases). To build on the HTTP API, start with [Using the API](docs/api.md).
 
 ## Contributing, security, and license
 

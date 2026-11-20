@@ -71,7 +71,7 @@ The workers (event consumers, reminders, Sprint archive, retention, sweepers, se
 PostgreSQL is the source of truth; the OpenSearch index is derived data and can always be rebuilt (`admin-cli search-reindex`).
 
 - **Without OpenSearch**, core-api starts, logs a warning, and content search answers `503 search_unavailable`. Finding people, teams, projects and channels comes from PostgreSQL and keeps working.
-- **Keeping the index right.** Index updates are an event consumer: while OpenSearch is down, a delivery is retried up to 12 times with growing delays and then marked `DEAD`. A background task also rebuilds any index that is missing or has an old mapping. After an outage, or after changing the analyzer, run `admin-cli search-status` and, if needed, `admin-cli events-retry --consumer search` or `admin-cli search-reindex`.
+- **Keeping the index right.** Index updates are an event consumer: while OpenSearch is down, a delivery is retried up to 12 times with growing delays and then marked `DEAD`. A background task also rebuilds any index that is missing or has an old mapping (an upgrade that changes how text is analyzed does this once on start-up: the old index keeps answering until the new one is promoted, and the previous generation is kept until the next rebuild). After an outage, or after changing the analyzer, run `admin-cli search-status` and, if needed, `admin-cli events-retry --consumer search` or `admin-cli search-reindex`.
 
 ### Search index prefix
 

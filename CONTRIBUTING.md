@@ -8,7 +8,7 @@ Please read the [Code of Conduct](CODE_OF_CONDUCT.md). **Security problems are r
 
 - For a bug, search the [existing issues](https://github.com/penfii/penfii/issues) first and use the bug report form; include the steps to reproduce it. For the web app, include the browser and the signed-in role.
 - For a new feature or a larger change, open an issue and describe the problem first. Penfii is small and opinionated; a discussion saves you from writing code that cannot be merged.
-- The project is at **v0.3.0**, an early release. Behavior, the HTTP API and the database schema can change; say so in your pull request if you change one of them.
+- The project is at **v0.3.1**, an early release. Behavior, the HTTP API and the database schema can change; say so in your pull request if you change one of them.
 
 ## Set up
 
@@ -54,6 +54,13 @@ Never point the server tests at a database you care about: every integration tes
 - Write commit messages that say what changed and why. There is no required format.
 - Fill in the pull request template, and update the documentation in [`docs/`](docs) when behavior changes. A screenshot helps for UI changes.
 - A maintainer will review; expect questions and requests for changes.
+
+## After you open a pull request
+
+- GitHub runs the [CI workflow](.github/workflows/ci.yml) on every pull request: formatting, lints, licences and advisories, the server tests (with PostgreSQL and OpenSearch), the client checks, the API-description check, a Compose and image build, and a secret scan. These are the same steps as `make check` in `server/` and `client/`; the [development guide](docs/development.md#releases) lists the jobs. A pull request should pass them before review.
+- Leave version numbers alone: they change only in a release commit. If your change means an operator has to do something (a migration, a new or changed setting, a different behavior), say so in the pull request (the template has a box for breaking changes) so it can go into the [changelog](CHANGELOG.md).
+- Releases are tagged by the maintainers. How one is made, and what the repository does and does not say about it, is in [Releases](docs/development.md#releases). Documentation changes need no release step.
+- To build something on the HTTP API or MCP rather than change Penfii, start with [Using the API](docs/api.md).
 
 ## License
 

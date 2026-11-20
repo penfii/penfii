@@ -857,6 +857,188 @@ async fn a_full_rebuild_keeps_search_working_and_ends_with_the_same_documents(po
     assert_eq!(ids.len(), 31);
 }
 
+/// FEA-007: what a person types against what the index answers, for the word forms that the
+/// other tests do not cover. Each row is (query, title that must be found, title that must not).
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn fea007_word_forms_proper_nouns_and_exact_matches_answer_as_documented(pool: PgPool) {
+    let world = &World::new(pool).await;
+    let Some(sw) = search_world(world).await else {
+        return;
+    };
+    let ws = workspace(world, &format!("fea007-{}", Uuid::new_v4())).await;
+    let (project_id, _) = new_project(world, ws, "Fea007 Alpha").await;
+    let titles_in = [
+        "서버를 배포했습니다",
+        "데이터베이스 마이그레이션 점검",
+        "로그인 오류 수정",
+        "삼성전자 납품 일정",
+        "Deploying the servers",
+        "Users reported errors",
+        "OpenSearch cluster upgrade",
+        "Kubernetes 클러스터 상태",
+        "마이그레이션을 점검했습니다",
+        "University policy update",
+        "Fix failing login tests",
+    ];
+    for (i, title) in titles_in.iter().enumerate() {
+        make_ticket(
+            world,
+            &project_id,
+            &format!("fea007-t{i}"),
+            json!({ "title": title }),
+        )
+        .await;
+    }
+    index_now(&sw, ws).await;
+    let c = world.owner_cookie.clone();
+    let mut report = String::new();
+    // (query, expected to be found, expected not to be found)
+    let rows: &[(&str, &str, &str)] = &[
+        // Korean particles, endings and compounds.
+        ("서버", "서버를 배포했습니다", "로그인 오류 수정"),
+        ("서버가", "서버를 배포했습니다", "로그인 오류 수정"),
+        ("배포", "서버를 배포했습니다", "로그인 오류 수정"),
+        ("배포하다", "서버를 배포했습니다", "로그인 오류 수정"),
+        (
+            "데이터",
+            "데이터베이스 마이그레이션 점검",
+            "로그인 오류 수정",
+        ),
+        (
+            "마이그레이션",
+            "마이그레이션을 점검했습니다",
+            "로그인 오류 수정",
+        ),
+        (
+            "마이그레이션",
+            "데이터베이스 마이그레이션 점검",
+            "로그인 오류 수정",
+        ),
+        ("오류", "로그인 오류 수정", "서버를 배포했습니다"),
+        ("오류가", "로그인 오류 수정", "서버를 배포했습니다"),
+        ("삼성", "삼성전자 납품 일정", "로그인 오류 수정"),
+        ("삼성전자", "삼성전자 납품 일정", "로그인 오류 수정"),
+        // Proper nouns and mixed text.
+        (
+            "kubernetes",
+            "Kubernetes 클러스터 상태",
+            "OpenSearch cluster upgrade",
+        ),
+        ("클러스터", "Kubernetes 클러스터 상태", "로그인 오류 수정"),
+        (
+            "opensearch",
+            "OpenSearch cluster upgrade",
+            "Kubernetes 클러스터 상태",
+        ),
+        (
+            "OPENSEARCH",
+            "OpenSearch cluster upgrade",
+            "Kubernetes 클러스터 상태",
+        ),
+        // English exact words, prefixes, and the forms that need stemming.
+        ("servers", "Deploying the servers", "Users reported errors"),
+        ("server", "Deploying the servers", "Users reported errors"),
+        ("errors", "Users reported errors", "Deploying the servers"),
+        ("error", "Users reported errors", "Deploying the servers"),
+        (
+            "deploying",
+            "Deploying the servers",
+            "Users reported errors",
+        ),
+        ("deploy", "Deploying the servers", "Users reported errors"),
+        ("deployed", "Deploying the servers", "Users reported errors"),
+        ("report", "Users reported errors", "Deploying the servers"),
+        ("reports", "Users reported errors", "Deploying the servers"),
+        (
+            "upgrade",
+            "OpenSearch cluster upgrade",
+            "Users reported errors",
+        ),
+        (
+            "upgrades",
+            "OpenSearch cluster upgrade",
+            "Users reported errors",
+        ),
+        (
+            "clusters",
+            "OpenSearch cluster upgrade",
+            "Users reported errors",
+        ),
+        ("fail", "Fix failing login tests", "Users reported errors"),
+        ("tests", "Fix failing login tests", "Users reported errors"),
+        ("test", "Fix failing login tests", "Users reported errors"),
+        // A stem must not make two different words one.
+        ("universe", "", "University policy update"),
+    ];
+    for (q, want, not_want) in rows {
+        let (s, b) = find(&sw, &c, ws, q, "ticket").await;
+        assert_eq!(s, StatusCode::OK, "{q}: {b}");
+        let found = titles(&b);
+        let ok = (want.is_empty() || found.iter().any(|t| t == want))
+            && !found.iter().any(|t| t == not_want);
+        report.push_str(&format!(
+            "{} {q:?} -> {found:?}\n",
+            if ok { "OK  " } else { "MISS" }
+        ));
+    }
+    eprintln!("FEA007-REPORT\n{report}");
+    assert!(
+        !report.contains("MISS"),
+        "word forms that do not answer:\n{report}"
+    );
+}
+
+/// FEA-007: an index made with an older mapping keeps answering, is rebuilt by `ensure` +
+/// backfill, and then has the new mapping version (the upgrade from mapping 1 adds English stems).
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn an_index_with_an_older_mapping_is_rebuilt_and_keeps_answering(pool: PgPool) {
+    let world = &World::new(pool).await;
+    let Some(sw) = search_world(world).await else {
+        return;
+    };
+    let ws = workspace(world, &format!("fea007-up-{}", Uuid::new_v4())).await;
+    let (project_id, _) = new_project(world, ws, "Fea007 Upgrade").await;
+    make_ticket(
+        world,
+        &project_id,
+        "fea007-up-1",
+        json!({"title": "Reviewing the deployments"}),
+    )
+    .await;
+    index_now(&sw, ws).await;
+    let c = world.owner_cookie.clone();
+    // Pretend the live ticket index was made by the previous mapping.
+    sqlx::query("UPDATE penfii.search_index_state SET mapping_version = mapping_version - 1 WHERE kind = 'ticket'")
+        .execute(&world.pool)
+        .await
+        .unwrap();
+    let before = sw.engine.indexer.state("ticket").await.unwrap();
+    sw.engine.indexer.ensure().await.unwrap();
+    let during = sw.engine.indexer.state("ticket").await.unwrap();
+    assert!(
+        during.building_index.is_some(),
+        "a stale mapping starts a build"
+    );
+    // The old index still answers while the new one is built.
+    let (s, b) = find(&sw, &c, ws, "deployments", "ticket").await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    assert_eq!(titles(&b), vec!["Reviewing the deployments"], "{b}");
+    sw.engine.indexer.backfill_all().await.unwrap();
+    penfii_core::search::refresh_all(&sw.engine).await.unwrap();
+    let after = sw.engine.indexer.state("ticket").await.unwrap();
+    assert_eq!(
+        after.mapping_version,
+        penfii_core::search::mapping::MAPPING_VERSION
+    );
+    assert_ne!(before.live_index, after.live_index);
+    assert_eq!(after.phase, "READY");
+    // Exact and prefix matches survive, and a word form only the stem field knows now answers.
+    for q in ["deployments", "deploy", "review", "reviewed", "deployment"] {
+        let (_, b) = find(&sw, &c, ws, q, "ticket").await;
+        assert_eq!(titles(&b), vec!["Reviewing the deployments"], "{q}: {b}");
+    }
+}
+
 #[sqlx::test(migrator = "crate::common::GUARD")]
 async fn the_index_prefix_is_validated_recorded_and_checked_against_other_databases(pool: PgPool) {
     use penfii_core::search::client::{DEFAULT_PREFIX, Method, OsClient, OsConfig, valid_prefix};
@@ -890,8 +1072,9 @@ async fn the_index_prefix_is_validated_recorded_and_checked_against_other_databa
         .admin(
             Method::GET,
             &format!(
-                "/{}-v1-*/_mapping?filter_path=*.mappings._meta",
-                test_prefix(&world.pool, "")
+                "/{}-v{}-*/_mapping?filter_path=*.mappings._meta",
+                test_prefix(&world.pool, ""),
+                penfii_core::search::mapping::MAPPING_VERSION
             ),
             None,
         )
@@ -1751,4 +1934,307 @@ async fn fea111_project_and_team_filters_keep_channel_less_tickets_in_the_all_ta
     let (_, outsider) = super::inbox::member(world, ws, "fea111-out").await;
     let (_, seen) = find(&sw, &outsider, ws, "검색결함티켓", "all").await;
     assert!(ids(&seen, "ticket").is_empty(), "{seen}");
+}
+
+/// FEA-129/130: OpenSearch is derived data and not part of a backup, so a restore brings PostgreSQL
+/// back with a search state that names indices a fresh OpenSearch does not have. The service must
+/// notice, rebuild from PostgreSQL and promote the new generation (it used to fail the alias change
+/// with `index_not_found` and answer with nothing).
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_restored_database_with_a_fresh_opensearch_rebuilds_every_index(pool: PgPool) {
+    let world = &World::new(pool).await;
+    let Some(sw) = search_world(world).await else {
+        return;
+    };
+    let workspace_id = workspace(world, &format!("fea129-{}", Uuid::new_v4())).await;
+    let (project_id, _) = new_project(world, workspace_id, "Restore").await;
+    make_ticket(
+        world,
+        &project_id,
+        "fea129-t",
+        json!({"title":"restoredword ticket"}),
+    )
+    .await;
+    let general = channel(world, workspace_id, "restore-room", "PUBLIC").await;
+    send(
+        world,
+        &world.owner_cookie,
+        general,
+        "restoredword in chat",
+        None,
+        None,
+    )
+    .await;
+    sw.engine.indexer.backfill_all().await.unwrap();
+    index_now(&sw, workspace_id).await;
+    let (_, before) = find(
+        &sw,
+        &world.owner_cookie,
+        workspace_id,
+        "restoredword",
+        "all",
+    )
+    .await;
+    assert_eq!(before["results"].as_array().unwrap().len(), 2, "{before}");
+    let live_before = sw.engine.indexer.state("ticket").await.unwrap().live_index;
+
+    // A new, empty OpenSearch: every index is gone, the state in PostgreSQL is not.
+    let (status, body) = sw
+        .engine
+        .indexer
+        .client
+        .admin(
+            penfii_core::search::client::Method::DELETE,
+            &format!("/{}-v*", sw.prefix),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!((200..300).contains(&status), "{body}");
+    assert_eq!(
+        sw.engine.indexer.state("ticket").await.unwrap().live_index,
+        live_before
+    );
+
+    // The maintenance step sees that the live index is missing and starts a rebuild; the rebuild
+    // promotes (no old index to take the alias from).
+    sw.engine.indexer.ensure().await.unwrap();
+    let rebuilding = sw.engine.indexer.state("ticket").await.unwrap();
+    assert!(rebuilding.live_index.is_none(), "forgotten: {rebuilding:?}");
+    assert!(rebuilding.building_index.is_some());
+    sw.engine.indexer.backfill_all().await.unwrap();
+    penfii_core::search::refresh_all(&sw.engine).await.unwrap();
+    for kind in ["ticket", "message"] {
+        let state = sw.engine.indexer.state(kind).await.unwrap();
+        assert_eq!(state.phase, "READY", "{kind}: {state:?}");
+        assert!(state.live_index.is_some() && state.building_index.is_none());
+    }
+    let (s, after) = find(
+        &sw,
+        &world.owner_cookie,
+        workspace_id,
+        "restoredword",
+        "all",
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{after}");
+    assert_eq!(after["results"].as_array().unwrap().len(), 2, "{after}");
+
+    // An operator's `search-reindex` on top of that works as before.
+    sw.engine.indexer.request_reindex("ticket").await.unwrap();
+    sw.engine.indexer.backfill_all().await.unwrap();
+    assert_eq!(
+        sw.engine.indexer.state("ticket").await.unwrap().phase,
+        "READY"
+    );
+}
+
+/// What the index of `kind` that the alias points at was made with: `None` when the alias is
+/// missing, else whether its mapping carries this database's owner (one that Penfii created, not one
+/// that OpenSearch made up on the fly for a write).
+async fn alias_target_is_ours(sw: &SearchWorld, kind: &str) -> Option<bool> {
+    use penfii_core::search::client::Method;
+    let alias = sw.engine.indexer.client.alias(kind);
+    let (status, body) = sw
+        .engine
+        .indexer
+        .client
+        .admin(
+            Method::GET,
+            &format!("/{alias}/_mapping?filter_path=*.mappings._meta"),
+            None,
+        )
+        .await
+        .unwrap();
+    if status == 404 {
+        return None;
+    }
+    let owner = sw.engine.indexer.owner_id().await.unwrap();
+    Some(body.as_object().is_some_and(|m| {
+        m.values()
+            .all(|i| i["mappings"]["_meta"]["owner"] == owner.as_str())
+    }))
+}
+
+/// After OpenSearch lost its data, a write that reaches the old live index name before the
+/// maintenance step runs makes OpenSearch create that index on the fly, with a guessed mapping and
+/// no alias. That index must not count as the live one: the kind is built again with the real
+/// mapping, behind the alias, and both the old and the new content are found.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn an_index_that_opensearch_made_up_for_a_write_is_not_taken_for_the_live_one(pool: PgPool) {
+    use penfii_core::search::client::Method;
+    let world = &World::new(pool).await;
+    let Some(sw) = search_world(world).await else {
+        return;
+    };
+    let ws = workspace(world, &format!("lostwrite-{}", Uuid::new_v4())).await;
+    let room = channel(world, ws, "lost-room", "PUBLIC").await;
+    send(
+        world,
+        &world.owner_cookie,
+        room,
+        "beforeloss words",
+        None,
+        None,
+    )
+    .await;
+    index_now(&sw, ws).await;
+    let (status, _) = sw
+        .engine
+        .indexer
+        .client
+        .admin(Method::DELETE, &format!("/{}-v*", sw.prefix), None)
+        .await
+        .unwrap();
+    assert!((200..300).contains(&status));
+    // A new message is delivered before the maintenance step notices anything.
+    send(
+        world,
+        &world.owner_cookie,
+        room,
+        "afterloss words",
+        None,
+        None,
+    )
+    .await;
+    index_now(&sw, ws).await;
+    let live = sw
+        .engine
+        .indexer
+        .state("message")
+        .await
+        .unwrap()
+        .live_index
+        .unwrap();
+    let (status, _) = sw
+        .engine
+        .indexer
+        .client
+        .admin(Method::HEAD, &format!("/{live}"), None)
+        .await
+        .unwrap();
+    assert_eq!(status, 200, "the write made the old live index up again");
+
+    sw.engine.indexer.ensure().await.unwrap();
+    sw.engine.indexer.backfill_all().await.unwrap();
+    penfii_core::search::refresh_all(&sw.engine).await.unwrap();
+    let state = sw.engine.indexer.state("message").await.unwrap();
+    assert_eq!(state.phase, "READY", "{state:?}");
+    assert_ne!(state.live_index.as_deref(), Some(live.as_str()));
+    assert_eq!(alias_target_is_ours(&sw, "message").await, Some(true));
+    let (s, b) = find(&sw, &world.owner_cookie, ws, "words", "message").await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    assert_eq!(b["results"].as_array().unwrap().len(), 2, "{b}");
+}
+
+/// A rebuild that was half done when OpenSearch lost its data (or the index under construction was
+/// deleted) starts that rebuild over: the saved checkpoint describes an index that is gone, and
+/// resuming from it would leave the first part of the data out for good.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_rebuild_whose_index_was_lost_halfway_starts_over_instead_of_failing_for_ever(
+    pool: PgPool,
+) {
+    use penfii_core::search::client::Method;
+    let world = &World::new(pool).await;
+    let Some(sw) = search_world(world).await else {
+        return;
+    };
+    let ws = workspace(world, &format!("halfway-{}", Uuid::new_v4())).await;
+    let (project_id, _) = new_project(world, ws, "Halfway").await;
+    for n in 0..5 {
+        make_ticket(
+            world,
+            &project_id,
+            &format!("halfway-{n}"),
+            json!({"title": format!("halfwayword {n}")}),
+        )
+        .await;
+    }
+    index_now(&sw, ws).await;
+    sw.engine.indexer.request_reindex("ticket").await.unwrap();
+    let building = sw
+        .engine
+        .indexer
+        .state("ticket")
+        .await
+        .unwrap()
+        .building_index
+        .unwrap();
+    // The scan got past every ticket (the checkpoint says so), then the index was lost.
+    sqlx::query("UPDATE penfii.search_index_state SET checkpoint=jsonb_build_object('after', 'ffffffff-ffff-ffff-ffff-ffffffffffff') WHERE kind='ticket'")
+        .execute(&world.pool)
+        .await
+        .unwrap();
+    sw.engine
+        .indexer
+        .client
+        .admin(Method::DELETE, &format!("/{building}"), None)
+        .await
+        .unwrap();
+    sw.engine.indexer.ensure().await.unwrap();
+    sw.engine.indexer.backfill_all().await.unwrap();
+    penfii_core::search::refresh_all(&sw.engine).await.unwrap();
+    let state = sw.engine.indexer.state("ticket").await.unwrap();
+    assert_eq!(state.phase, "READY", "{state:?}");
+    assert!(state.building_index.is_none());
+    let (_, b) = find(&sw, &world.owner_cookie, ws, "halfwayword", "ticket").await;
+    assert_eq!(b["results"].as_array().unwrap().len(), 5, "{b}");
+}
+
+/// Only one kind's index is lost: only that kind is rebuilt, the others keep their live index.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn losing_one_kinds_index_rebuilds_that_kind_alone(pool: PgPool) {
+    use penfii_core::search::client::Method;
+    let world = &World::new(pool).await;
+    let Some(sw) = search_world(world).await else {
+        return;
+    };
+    let ws = workspace(world, &format!("onekind-{}", Uuid::new_v4())).await;
+    let (project_id, _) = new_project(world, ws, "One kind").await;
+    make_ticket(
+        world,
+        &project_id,
+        "onekind-1",
+        json!({"title": "onekindword"}),
+    )
+    .await;
+    let room = channel(world, ws, "onekind-room", "PUBLIC").await;
+    send(
+        world,
+        &world.owner_cookie,
+        room,
+        "onekindword chat",
+        None,
+        None,
+    )
+    .await;
+    index_now(&sw, ws).await;
+    let message_before = sw.engine.indexer.state("message").await.unwrap();
+    let ticket_live = sw
+        .engine
+        .indexer
+        .state("ticket")
+        .await
+        .unwrap()
+        .live_index
+        .unwrap();
+    sw.engine
+        .indexer
+        .client
+        .admin(Method::DELETE, &format!("/{ticket_live}"), None)
+        .await
+        .unwrap();
+    sw.engine.indexer.ensure().await.unwrap();
+    assert_eq!(
+        sw.engine.indexer.state("message").await.unwrap().live_index,
+        message_before.live_index,
+        "untouched"
+    );
+    let (_, during) = find(&sw, &world.owner_cookie, ws, "onekindword", "message").await;
+    assert_eq!(during["results"].as_array().unwrap().len(), 1, "{during}");
+    sw.engine.indexer.backfill_all().await.unwrap();
+    penfii_core::search::refresh_all(&sw.engine).await.unwrap();
+    let (_, all) = find(&sw, &world.owner_cookie, ws, "onekindword", "all").await;
+    assert_eq!(all["results"].as_array().unwrap().len(), 2, "{all}");
+    assert_eq!(alias_target_is_ours(&sw, "ticket").await, Some(true));
 }

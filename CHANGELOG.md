@@ -1,12 +1,37 @@
 # Changelog
 
+## 0.3.1
+
+A maintenance release: search recovery and English matching, a restore rehearsal, and user and contributor documentation. Back up before you upgrade.
+
+### Upgrading from 0.3.0, 0.2.2, 0.2.1 or 0.2.0
+
+- No database migration, no API change and no new or changed setting. Check out `v0.3.1` and rebuild with the same `docker/.env` (see [Self-hosting](docs/self-hosting.md#from-v020-v021-v022-or-v030-to-v031)); `db-setup` finds the schema current.
+- The search mapping version is now 2. On its first start core-api builds every search index again from PostgreSQL in the background; search keeps answering from the old indices until each new one is ready. OpenSearch needs room for both generations meanwhile, and `admin-cli search-status` shows when every kind is `READY`.
+
+### Added
+
+- `docker/scripts/restore-rehearsal.sh`: a backup of the running Compose stack (PostgreSQL dump and file store archive from the same moment, with a manifest) and a rehearsal of restoring it into a second Compose project with mail, push and MCP switched off, then checking it. See [Self-hosting](docs/self-hosting.md#restore-rehearsal).
+- User guides in English and Korean (`docs/user-guide.md`, `docs/user-guide.ko.md`), an entry point for API integrators (`docs/api.md`) and the release flow in `docs/development.md`.
+- English word forms (`reports` and `reported`, `deploying` and `deployed`) now match in search through an additional light-stemming field (search mapping version 2; see Upgrading).
+
+### Fixed
+
+- Search after a restore or a lost search volume: when PostgreSQL named a live index that OpenSearch no longer had, `admin-cli search-reindex` failed with `search_alias_index_not_found_exception` and search found nothing for that kind. core-api now notices it (also when a write in the meantime made OpenSearch create an index of that name on the fly, without Penfii's mapping) and builds the kind again.
+- A rebuild whose index under construction was lost halfway (OpenSearch lost its data, or the index was deleted) failed for ever with `search_count_mismatch`, because it resumed from a checkpoint into an empty index. It now starts over.
+
+### Development
+
+- Integration tests for search index recovery: a lost OpenSearch, a single lost index, an index made up by a write, and a rebuild lost halfway.
+- End-to-end: `tests/search-quality.spec.ts` checks English word forms, Korean particles, an exact key, a project filter and an outsider in the real app. `tests/multi-user.spec.ts` follows the v0.3.0 Projects page (My projects by default, other Projects under All projects).
+
 ## 0.3.0
 
 A feature release. Penfii is still early software: back up before you upgrade.
 
 ### Upgrading from 0.2.2, 0.2.1 or 0.2.0
 
-- No database migration and no new or changed setting. Check out `v0.3.0` and rebuild with the same `docker/.env` (see [Self-hosting](docs/self-hosting.md#from-v020-v021-or-v022-to-v030)); `db-setup` finds the schema current.
+- No database migration and no new or changed setting. Check out `v0.3.0` and rebuild with the same `docker/.env` (see [Self-hosting](docs/self-hosting.md#from-v020-v021-v022-or-v030-to-v031)); `db-setup` finds the schema current.
 - An MCP client that sends a client credential to the token endpoint is now refused with `401 invalid_client` (see Fixed); before, the credential was ignored.
 - A Ticket whose parent is archived can no longer be moved to a State that is not Completed or Canceled: the request is refused with `409 parent_archived`. Unarchive the parent first.
 

@@ -86,7 +86,7 @@ test('a Project and its channels made by the owner show up only for the people i
   const projectName = `MU Board ${stamp}`
   await owner.act('create the Project in the New project dialog', async () => {
     await owner.page.goto(w('/projects'))
-    await owner.page.getByRole('button', { name: '+ New project' }).click()
+    await owner.page.getByRole('banner').getByRole('button', { name: '+ New project' }).click()
     const dialog = owner.page.getByRole('dialog', { name: 'New project' })
     await dialog.getByRole('textbox', { name: 'Name', exact: true }).fill(projectName)
     await expect(dialog.getByRole('button', { name: 'Create project' })).toBeEnabled()
@@ -99,7 +99,8 @@ test('a Project and its channels made by the owner show up only for the people i
   // design, since v0.1.0): the Project is listed as "Join needed" and its content is closed.
   await together(
     ...[member, member2].map((actor) => () => actor.act('look for the Project before being let in', async () => {
-      await actor.page.goto(w('/projects'))
+      // Since v0.3.0 the Projects page opens on "My projects"; a Project the person is not in is under All projects.
+      await actor.page.goto(w('/projects?browse=all'))
       await expect(projectCard(actor.page, projectName)).toContainText('Join needed')
       await actor.page.goto(projectUrl('/work'))
       await expect(actor.page.getByText('You are not part of this project.')).toBeVisible()
@@ -145,7 +146,7 @@ test('a Project and its channels made by the owner show up only for the people i
   // Everyone looks again at the same moment, after a navigation.
   await together(
     () => member.act('see the Project and both channels', async () => {
-      await member.page.goto(w('/projects'))
+      await member.page.goto(w('/projects?browse=all'))
       await expect(projectCard(member.page, projectName)).toContainText('Taking part')
       await projectCard(member.page, projectName).click()
       await expect(member.page.getByRole('heading', { name: projectName, level: 1 })).toBeVisible()
@@ -154,7 +155,7 @@ test('a Project and its channels made by the owner show up only for the people i
       await expect(sidebar(member.page).getByRole('link', { name: `# ${secret.name}` })).toBeVisible()
     }),
     () => member2.act('see the Project and only the Project-members channel', async () => {
-      await member2.page.goto(w('/projects'))
+      await member2.page.goto(w('/projects?browse=all'))
       await expect(projectCard(member2.page, projectName)).toContainText('Taking part')
       await projectCard(member2.page, projectName).click()
       await expect(member2.page.getByRole('heading', { name: projectName, level: 1 })).toBeVisible()
@@ -163,7 +164,8 @@ test('a Project and its channels made by the owner show up only for the people i
       await expect(sidebar(member2.page).getByRole('link', { name: `# ${secret.name}` })).toHaveCount(0)
     }),
     ...[outsider, admin].map((actor) => () => actor.act('find the Project closed (not taking part)', async () => {
-      await actor.page.goto(w('/projects'))
+      // Since v0.3.0 the Projects page opens on "My projects"; a Project the person is not in is under All projects.
+      await actor.page.goto(w('/projects?browse=all'))
       await expect(projectCard(actor.page, projectName)).toContainText('Join needed')
       await actor.page.goto(projectUrl('/chat'))
       await expect(actor.page.getByText('You are not part of this project.')).toBeVisible()

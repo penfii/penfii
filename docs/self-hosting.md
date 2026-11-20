@@ -2,7 +2,7 @@
 
 `docker/compose.yaml` is the supported way to run Penfii. It starts PostgreSQL, OpenSearch (with the Korean analyzer), MinIO (S3-compatible file storage), the server (`core-api`) and the web app, and builds the server and web images from this checkout. There are no published images.
 
-Penfii is at v0.3.0, an early release: read [Known limitations](known-limitations.md) first.
+Penfii is at v0.3.1, an early release: read [Known limitations](known-limitations.md) first.
 
 ## What you need
 
@@ -16,7 +16,7 @@ Penfii is at v0.3.0, an early release: read [Known limitations](known-limitation
 ```sh
 git clone https://github.com/penfii/penfii.git
 cd penfii
-git checkout v0.3.0      # a release tag; leave this out to run the latest commit of the default branch
+git checkout v0.3.1      # a release tag; leave this out to run the latest commit of the default branch
 cd docker
 cp .env.example .env
 ```
@@ -99,11 +99,35 @@ File objects are removed after the database commit, by a background consumer, an
 
 ### Restore
 
-This checks that the database itself comes back. It does not start core-api against the restored data: that process would send mail, push and talk to object storage and OpenSearch.
+`restore-check.sh` (below) checks that the database itself comes back. It does not start core-api against the restored data. The [restore rehearsal](#restore-rehearsal) does: it starts the whole service on a copy, with mail and push switched off.
 
 Roles are not in the dump. On the cluster you restore into, create them first (`admin-cli db-provision` with `PENFII_PROVISION_DATABASE_URL`), or restore into a scratch database that already has the owner role. `pg_restore` keeps owners when those roles exist; a missing owner role makes it restore objects as the user who runs the restore. Re-run provisioning after a restore so the runtime role's grants and timeouts exist. The script `docker/scripts/restore-check.sh` does this against a scratch server and checks migration history, row counts and that the runtime role can read.
 
 Point-in-time recovery (WAL archiving) is not set up here.
+
+### Restore rehearsal
+
+A backup you have never restored is a guess. `docker/scripts/restore-rehearsal.sh` takes a backup of a running stack and restores it into a **second Compose project** that has its own volumes, network and port, then checks the copy. It does not restore into, delete or reset the stack it backs up. Run it from `docker/`, with a backup directory **outside the repository** (the script refuses one inside it) whose parent exists:
+
+```sh
+mkdir -p ~/penfii-backups
+scripts/restore-rehearsal.sh backup  ~/penfii-backups/2026-11-20   # PostgreSQL dump, file store archive, manifest
+scripts/restore-rehearsal.sh restore ~/penfii-backups/2026-11-20   # project penfii-rehearsal on http://127.0.0.1:18080
+scripts/restore-rehearsal.sh verify  ~/penfii-backups/2026-11-20   # readyz, database and file counts, search rebuild
+scripts/restore-rehearsal.sh down    ~/penfii-backups/2026-11-20   # remove the rehearsal project and its volumes
+```
+
+`SOURCE_PROJECT` (default `penfii`), `SOURCE_ENV` (default `./.env`), `REHEARSAL_PROJECT` (default `penfii-rehearsal`) and `REHEARSAL_PORT` (default `18080`) change the defaults. What it does, and what you need to know before you use it:
+
+- **A short write pause.** `backup` stops core-api and MinIO while it dumps PostgreSQL and archives the file store volume, so the two come from the same moment, then starts them again and waits until they are healthy. Requests fail during that time (about 20 seconds for a small installation). If the backup fails or is interrupted, the two are started again and the script says the backup is incomplete; delete that directory.
+- **The backup holds everything in clear text**: the database, the uploaded files, and `source.env`, a copy of your `.env` with the passwords and `PENFII_WEBHOOK_KEK` the restored data needs (without the key, Signature webhooks stop verifying). The directory is mode 700 and its files 600. Keep it private. The script prints no setting values.
+- **It only ever restores into a new project.** `restore` refuses a project that already has volumes or containers (so it never touches the source or another stack), refuses a port in use, and checks that the database it is about to fill is the rehearsal's and is empty. Roles are not in a dump, so it runs `admin-cli db-provision` first, restores the dump over the empty schema that made, then lets `db-setup` run again for the grants, timeouts and the migration check. `down` deletes only a project that `restore` created (it leaves a marker volume for that). A failed `restore` is cleaned up with `down` and run again.
+- **Nothing reaches the outside.** The rehearsal's `rehearsal.env` empties the SMTP and Web Push settings and turns the MCP gateway off, and the public address is `http://127.0.0.1:<port>`, so no mail, push or OAuth fetch is sent from a copy of your data. Incoming webhooks only receive.
+- **Same release.** Restore with the images the backup was taken with (they are built from your checkout), or with a later release whose changelog you have read. The manifest records the commit, the image ids and the migration checksums, and `restore` says when the image differs. Moving between releases is [Updating](#updating); there is no way back to an older release other than a backup.
+- **Search is rebuilt, not restored.** The new OpenSearch is empty. core-api notices that the indices PostgreSQL names are not there and builds them again in the background (within about a minute for a small installation); until then search says it is still indexing. `verify` also runs `admin-cli search-reindex` and checks that every index is `READY`.
+- **What `verify` proves**: `/readyz` answers, the migration history (with checksums) and the row count of every table except `sessions` equal the manifest, the number of objects in the file bucket equals the archive, every search index is `READY`, and no event delivery is dead. It does not sign in. Do that in the browser at the rehearsal address with a real account: open a ticket and a document, open a file that was uploaded before the backup, upload a new one, and search for something you know is there. A person who may not see a thing must still not find it.
+
+The script is a rehearsal tool and not a backup service: it does not schedule anything, keep generations or copy the backup off the machine. The restore is checked on the data of the stack it ran against; it says nothing about a backup of another installation until you run it there.
 
 ### Upgrading an installation that used one database role
 
@@ -132,16 +156,18 @@ Back up first ([Backup](#backup)), then check out the release and rebuild:
 
 ```sh
 git fetch --tags
-git checkout v0.3.0
+git checkout v0.3.1
 cd docker
 docker compose up -d --build
 ```
 
 `docker compose up` runs the one-shot `db-setup` service again before core-api starts (it is started again when its image is unchanged and re-created when the image changed), and `db-setup` applies pending database migrations with the schema owner's credential. core-api itself never migrates: it checks the history and refuses to start when it is behind. There is no upgrade guarantee between 0.x releases: read the [changelog](../CHANGELOG.md) of every release you move across before you start.
 
-### From v0.2.0, v0.2.1 or v0.2.2 to v0.3.0
+### From v0.2.0, v0.2.1, v0.2.2 or v0.3.0 to v0.3.1
 
-v0.2.1 and v0.2.2 fix defects only, and v0.3.0 adds features. None of them has a database migration or a new or changed setting: check out `v0.3.0` and run `docker compose up -d --build` as above, with the same `docker/.env`. `db-setup` finds the schema current and core-api starts on the v0.2.0 database. Coming from v0.1.0, follow the next section first.
+v0.2.1 and v0.2.2 fix defects, v0.3.0 adds features, and v0.3.1 fixes search recovery and improves English matching. None of them has a database migration or a new or changed setting: check out `v0.3.1` and run `docker compose up -d --build` as above, with the same `docker/.env`. `db-setup` finds the schema current and core-api starts on the v0.2.0 database. Coming from v0.1.0, follow the next section first.
+
+v0.3.1 changes how search analyzes text (search mapping version 2). On its first start, core-api builds every search index again from PostgreSQL in the background. Search keeps answering from the old indices until each new one is ready, so nothing has to be done by hand. For a while OpenSearch needs room for both generations of each index; the previous generation is kept until the next rebuild. `admin-cli search-status` shows when every kind is `READY` again. To check a backup before or after upgrading, see the [restore rehearsal](#restore-rehearsal).
 
 ### From v0.1.0 to v0.2.0
 

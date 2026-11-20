@@ -170,9 +170,25 @@ cargo sqlx prepare --workspace -- --locked
 
 ## Changing the API
 
-`server/api/openapi.json` is maintained by hand and is the reference for the client. A test (`server/tests/contract.rs`) fails when a route and the file disagree, or when a type in `server/crates/contracts` and the schema of the same name disagree on properties, nullability or value kinds.
+To use the API from another program, start with [Using the API](api.md). `server/api/openapi.json` is maintained by hand and is the reference for the client. A test (`server/tests/contract.rs`) fails when a route and the file disagree, or when a type in `server/crates/contracts` and the schema of the same name disagree on properties, nullability or value kinds.
 
 The client keeps a copy at `client/packages/contracts/openapi.json` and its types in `client/packages/contracts/src/index.ts`. After changing the server's file, run `npm run contract:sync` in `client/` (it copies `server/api/openapi.json`, or the file or URL in `$PENFII_OPENAPI`) and then `npm run contract:types` (it rewrites `client/packages/contracts/src/generated.ts`, the TypeScript types of that copy, and fails on a key written twice in one object), then let `npm run typecheck` and `npm test` show where the types disagree. A model whose schema is complete is an alias of its generated type in `index.ts`, so a server change to it is a type error; the others are still written by hand until their schemas say what the server sends (every required field, closed sets of values as `enum`). `make check` fails when `generated.ts` is not what the copy produces. A field that only the client has belongs in the exception tables at the top of `client/packages/contracts/src/openapi.test.ts`, with the reason. CI fails when the copy differs from the server's file.
+
+## Releases
+
+What follows is what the repository itself shows about how Penfii is released. It says nothing about who may merge or tag, and a change that only edits documentation never tags, pushes or deploys anything.
+
+**Versions and tags.** Releases are numbered `MAJOR.MINOR.PATCH` and are all `0.x` for now: the API, the schema and the settings can change between them ([Known limitations](known-limitations.md#stability)). A release is an annotated Git tag `vX.Y.Z` (`v0.1.0` to `v0.3.1` so far) on a commit of `main`; from `v0.2.0` on that commit is named `Release vX.Y.Z`. The public repository on GitHub carries `main` and those tags. The release notes are the [changelog](../CHANGELOG.md). People install from a tag ([Self-hosting](self-hosting.md#install)).
+
+**What a release commit changes.** Look at any `Release vX.Y.Z` commit (`git show --stat v0.3.0`):
+
+- `CHANGELOG.md` gets a `## X.Y.Z` section: an *Upgrading from …* part first (anything an operator has to do, such as a migration or a setting; "none" is said when none), then *Added*, *Changed*, *Fixed*, *Security* or *Development* as they apply.
+- The version is set in the manifest of every crate under `server/apps/` and `server/crates/` and in `Cargo.lock`, and in every `package.json` under `client/` and `package-lock.json`.
+- The sentence that names the current release is updated in `README.md`, `SECURITY.md`, `CONTRIBUTING.md`, `docs/README.md`, `docs/known-limitations.md` and `docs/self-hosting.md`, which also gets a *From … to …* section under [Updating](self-hosting.md#updating) and the new tag in its commands.
+
+**Checks.** A release commit is held to the same checks as any change: `make check` in [Server](#server-server) and [Client](#client-client), and the CI workflow below. A migration that is part of a release is never edited afterwards ([Changing the schema](#changing-the-schema)). There is no down migration, so going back to an older release means restoring a backup ([Backup](self-hosting.md#backup) and [Restore](self-hosting.md#restore)); those procedures are kept there, not repeated here.
+
+**CI.** `.github/workflows/ci.yml` runs on every pull request and on pushes to `dev` and `main`. Its jobs are `server-quick` (rustfmt, clippy, licences, unused dependencies, notices), `server-deny` (RustSec advisories and licences), `server-test` (the whole server suite on PostgreSQL 17 and OpenSearch with `nori`, containing the API contract test), `client-check` (licences, typecheck, lint, knip, tests, build), `client-audit` (`npm audit` of what ships to the browser), `contract` (the client's `openapi.json` equals the server's), `docker` (the Compose file is valid and the three images build) and `gitleaks`. Dependabot proposes cargo, npm, GitHub Actions and Docker base image updates weekly (`.github/dependabot.yml`). `.forgejo/workflows/ci.yml` is the maintainers' own copy of the same checks for their private server; it also hands a passing `dev` build to a private development environment. Contributors do not need it, and nothing in a pull request depends on it.
 
 ## Database use
 

@@ -1,6 +1,12 @@
 # Penfii documentation
 
-Penfii is at v0.3.0, an early release. These documents describe the repository as it is today; where something is not decided or not documented yet, the page says so.
+Penfii is at v0.3.1, an early release. These documents describe the repository as it is today; where something is not decided or not documented yet, the page says so.
+
+## For people who use Penfii
+
+| Page | What it covers |
+|---|---|
+| [User guide](user-guide.md) · [사용자 가이드](user-guide.ko.md) | Joining a workspace, channels and threads, making a ticket from a message, the Board and Table, linking tickets and documents, search, Inbox, and personal settings. The same guide in English and Korean |
 
 ## For people who run Penfii
 
@@ -17,7 +23,16 @@ Penfii is at v0.3.0, an early release. These documents describe the repository a
 |---|---|
 | [Architecture](architecture.md) | The parts of the system and the rules that hold them together |
 | [Development](development.md) | Local setup, running the server and the web app, the checks, migrations, the API description |
-| [Contributing](../CONTRIBUTING.md) | How to propose and submit a change |
+| [Contributing](../CONTRIBUTING.md) | How to propose and submit a change, and what happens to a pull request |
+| [Releases](development.md#releases) | How a release is numbered, tagged and recorded, and which CI checks run where |
+
+## For people who build on Penfii
+
+| Page | What it covers |
+|---|---|
+| [Using the API](api.md) | Where the API is described, how to sign in, the headers a change needs, errors, and the pointers to MCP and incoming webhooks |
+| [`server/api/openapi.json`](../server/api/openapi.json) | The API description: every route with its parameters, bodies and errors |
+| [MCP gateway](self-hosting.md#the-mcp-gateway-optional) · [its settings](configuration.md#mcp-gateway) | Letting AI clients act for a person who approves them |
 
 ## Also in this repository
 
@@ -29,6 +44,4 @@ Penfii is at v0.3.0, an early release. These documents describe the repository a
 
 These are planned and are not covered anywhere yet:
 
-- A reference for the HTTP API beyond [`server/api/openapi.json`](../server/api/openapi.json).
-- End-user documentation for the web app.
-- A documented release process. Changes per release are listed in the [changelog](../CHANGELOG.md).
+- A hand-written reference for every HTTP endpoint. The API is described by [`server/api/openapi.json`](../server/api/openapi.json), with [Using the API](api.md) as the way in.

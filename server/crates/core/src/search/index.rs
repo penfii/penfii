@@ -84,25 +84,78 @@ impl Indexer {
     /// Creates what is missing and marks kinds whose mapping is out of date. Safe to call often.
     pub async fn ensure(&self) -> Result<(), CoreError> {
         for kind in KINDS {
-            let state = self.state(kind).await?;
+            let mut state = self.state(kind).await?;
+            // OpenSearch is derived data and is not part of a backup: after a restore into a new
+            // OpenSearch, or after its volume was lost, PostgreSQL can name a live index that the
+            // alias no longer points at. It may be gone, or a write may have made OpenSearch create
+            // an index of that name on the fly (with a guessed mapping and no alias). Either way it
+            // does not answer searches: forget it, and the kind is built again below.
+            if let Some(live) = state.live_index.clone()
+                && !self.alias_points_at(kind, &live).await?
+            {
+                sqlx::query(
+                    "UPDATE penfii.search_index_state SET live_index=NULL, phase='BUILDING', updated_at=now() WHERE kind=$1 AND live_index=$2",
+                )
+                .bind(kind)
+                .bind(&live)
+                .execute(&self.pool)
+                .await?;
+                tracing::warn!(kind, index = %live, "the live search index is missing in OpenSearch; rebuilding it from PostgreSQL");
+                state = self.state(kind).await?;
+            }
             let stale = state.live_index.is_some() && state.mapping_version != MAPPING_VERSION;
             let needs_build =
                 state.building_index.is_none() && (state.live_index.is_none() || stale);
             if needs_build {
                 self.start_build(kind, state.live_index.is_some()).await?;
-            } else if let Some(building) = &state.building_index {
-                // The index may have been deleted underneath us; recreate it.
-                let (status, _) = self
-                    .client
-                    .admin(Method::HEAD, &format!("/{building}"), None)
-                    .await
-                    .map_err(map_os)?;
-                if status == 404 {
-                    self.create_index(kind, building).await?;
-                }
+            } else if let Some(building) = &state.building_index
+                && !self.made_here(building).await?
+            {
+                // The index under construction was deleted underneath us (or made up by a write
+                // after that). Its checkpoint describes documents that are gone, so the build starts
+                // over under a new name instead of resuming into an empty index.
+                tracing::warn!(kind, index = %building, "the search index under construction is missing; starting its build again");
+                self.start_build(kind, state.live_index.is_some()).await?;
             }
         }
         Ok(())
+    }
+
+    /// Whether the alias of `kind` points at `index` (false when either is missing).
+    async fn alias_points_at(&self, kind: &str, index: &str) -> Result<bool, CoreError> {
+        let alias = self.client.alias(kind);
+        let (status, _) = self
+            .client
+            .admin(Method::HEAD, &format!("/{index}/_alias/{alias}"), None)
+            .await
+            .map_err(map_os)?;
+        match status {
+            200 => Ok(true),
+            404 => Ok(false),
+            other => Err(CoreError::Internal(format!("search_alias_check_{other}"))),
+        }
+    }
+
+    /// Whether `index` exists and was created by `create_index` for this database, not made up by
+    /// OpenSearch for a write that named it.
+    async fn made_here(&self, index: &str) -> Result<bool, CoreError> {
+        let (status, body) = self
+            .client
+            .admin(
+                Method::GET,
+                &format!("/{index}/_mapping?filter_path=*.mappings._meta"),
+                None,
+            )
+            .await
+            .map_err(map_os)?;
+        match status {
+            200 => {
+                let owner = self.owner_id().await?;
+                Ok(body[index]["mappings"]["_meta"]["owner"].as_str() == Some(owner.as_str()))
+            }
+            404 => Ok(false),
+            other => Err(CoreError::Internal(format!("search_index_check_{other}"))),
+        }
     }
 
     /// Names this database to the indices it creates, so another database that uses the same
@@ -440,7 +493,11 @@ impl Indexer {
         let state = self.state(kind).await?;
         let alias = self.client.alias(kind);
         let mut actions = Vec::new();
-        if let Some(old) = &state.live_index {
+        if let Some(old) = &state.live_index
+            && self.alias_points_at(kind, old).await?
+        {
+            // Only an index the alias is on can give it up: naming one that is gone (see `ensure`)
+            // would make the whole alias change fail with index_not_found.
             actions.push(json!({"remove": {"index": old, "alias": alias}}));
         }
         actions.push(json!({"add": {"index": building, "alias": alias}}));

@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 
-pub const MAPPING_VERSION: i32 = 1;
+pub const MAPPING_VERSION: i32 = 2;
 
 pub const KINDS: &[&str] = &["message", "ticket", "space", "file", "view", "doc"];
 
@@ -12,7 +12,9 @@ fn text() -> Value {
         "analyzer": "ko_text",
         "fields": {
             "ngram": {"type": "text", "analyzer": "ko_ngram", "search_analyzer": "ko_ngram"},
-            "raw": {"type": "text", "analyzer": "raw_token"}
+            "raw": {"type": "text", "analyzer": "raw_token"},
+            // Version 2: English word forms (plural, -ed, -ing) meet by their stem.
+            "en": {"type": "text", "analyzer": "en_text"}
         }
     })
 }
@@ -35,12 +37,17 @@ pub fn settings() -> Value {
                 "ko_nori": {"type": "nori_tokenizer", "decompound_mode": "mixed"},
                 "ngram_2_3": {"type": "ngram", "min_gram": 2, "max_gram": 3, "token_chars": ["letter", "digit"]}
             },
-            "filter": {"ko_pos": {"type": "nori_part_of_speech"}},
+            "filter": {
+                "ko_pos": {"type": "nori_part_of_speech"},
+                "en_possessive": {"type": "stemmer", "language": "possessive_english"},
+                "en_light": {"type": "stemmer", "language": "light_english"}
+            },
             "normalizer": {"lc": {"type": "custom", "filter": ["lowercase"]}},
             "analyzer": {
                 "ko_text": {"type": "custom", "tokenizer": "ko_nori", "filter": ["lowercase", "ko_pos"]},
                 "ko_ngram": {"type": "custom", "tokenizer": "ngram_2_3", "filter": ["lowercase"]},
-                "raw_token": {"type": "custom", "tokenizer": "whitespace", "filter": ["lowercase"]}
+                "raw_token": {"type": "custom", "tokenizer": "whitespace", "filter": ["lowercase"]},
+                "en_text": {"type": "custom", "tokenizer": "standard", "filter": ["lowercase", "en_possessive", "en_light"]}
             }
         }
     })
