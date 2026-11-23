@@ -312,6 +312,8 @@ fn failure(error: CoreError) -> (String, String) {
         CoreError::ReauthRequired { .. } => {
             ("reauth_required".into(), "sign in again to continue".into())
         }
+        CoreError::MfaRequired => ("mfa_required".into(), "sign in again".into()),
+        CoreError::MfaCodeInvalid => ("mfa_code_invalid".into(), "the code is not valid".into()),
         CoreError::RateLimited { .. } => ("rate_limited".into(), "too many attempts".into()),
         CoreError::DbUnavailable(cause) => {
             tracing::warn!(cause, "bulk change item: database unavailable");

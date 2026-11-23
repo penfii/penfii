@@ -1179,6 +1179,8 @@ fn to_message(
     }
 }
 
+/// A channel's content auditor counts only while they are an active member of the Workspace with an
+/// enabled account.
 async fn channel_auditor(
     conn: &mut PgConnection,
     channel_id: Uuid,
@@ -1186,8 +1188,12 @@ async fn channel_auditor(
 ) -> Result<bool, CoreError> {
     let exists = sqlx::query_scalar(
         "SELECT EXISTS(
-            SELECT 1 FROM penfii.channel_content_auditors
-            WHERE channel_id = $1 AND user_id = $2
+            SELECT 1 FROM penfii.channel_content_auditors a
+            JOIN penfii.conversations c ON c.id = a.channel_id
+            JOIN penfii.workspace_members wm
+              ON wm.workspace_id = c.workspace_id AND wm.user_id = a.user_id AND wm.state = 'ACTIVE'
+            JOIN penfii.users u ON u.id = a.user_id AND u.disabled_at IS NULL
+            WHERE a.channel_id = $1 AND a.user_id = $2
          )",
     )
     .bind(channel_id)

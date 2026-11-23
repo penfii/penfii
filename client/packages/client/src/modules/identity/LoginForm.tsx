@@ -22,6 +22,9 @@ export function LoginForm() {
   const queryClient = useQueryClient()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  // The second step of an account with two-step verification: the server asked for a code after the password.
+  const [needsCode, setNeedsCode] = useState(false)
+  const [code, setCode] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const redirectError = useAuthRedirectError()
@@ -34,11 +37,14 @@ export function LoginForm() {
     setBusy(true)
     setError(null)
     try {
-      await api.login({ email, password })
+      await api.login(needsCode ? { email, password, code: code.trim() } : { email, password })
       await queryClient.invalidateQueries({ queryKey: queryKeys.me })
       void navigate(takeReturn('/', queryClient.getQueryData<Me>(queryKeys.me)?.id))
     } catch (caught) {
-      if (isApiError(caught) && caught.status === 401) setError(t('login.failed'))
+      if (isApiError(caught) && caught.code === 'mfa_required') {
+        setNeedsCode(true)
+        setCode('')
+      } else if (isApiError(caught) && caught.status === 401) setError(t(needsCode ? 'login.codeFailed' : 'login.failed'))
       else if (isApiError(caught) && caught.status === 429) setError(t('login.tooManyAttempts', { minutes: String(retryMinutes(caught)) }))
       else if (isDbUnavailable(caught)) setError(t('error.dbUnavailable'))
       else setError(t('error.generic'))
@@ -65,10 +71,24 @@ export function LoginForm() {
           onChange={(event) => setPassword(event.target.value)}
         />
       </label>
+      {needsCode ? (
+        <>
+          <p className="hint">{t('login.codeLead')}</p>
+          <label>
+            {t('login.code')}
+            <input autoComplete="one-time-code" autoFocus required value={code} onChange={(event) => setCode(event.target.value)} />
+          </label>
+        </>
+      ) : null}
       {error ?? redirectError ? <p className="form-error">{error ?? redirectError}</p> : null}
       <button type="submit" disabled={busy}>
         {t('login.submit')}
       </button>
+      {needsCode ? (
+        <button type="button" className="secondary" onClick={() => { setNeedsCode(false); setCode(''); setError(null) }}>
+          {t('login.back')}
+        </button>
+      ) : null}
       {canReset ? <Link to="/forgot-password">{t('login.forgot')}</Link> : null}
       <ProviderButtons intent="login" returnTo={peekReturn()} />
     </form>

@@ -482,6 +482,9 @@ pub async fn remove_member(
         )
         .await?;
     }
+    // What was explicitly given in this Workspace goes too; coming back starts from nothing. Their own
+    // work, direct messages and the audit trail stay.
+    let revoked = crate::membership::revoke_explicit_access(&mut tx, workspace_id, target).await?;
     let cleared_private = cleared.iter().filter(|m| m.private).count();
     // Their pending sign-in invitations for this Workspace stay; an unused invitation is managed in its own list.
     audit(
@@ -491,12 +494,12 @@ pub async fn remove_member(
         "member.removed",
         "USER",
         target,
-        json!({
+        revoked.audit_with(json!({
             "userId": target,
             "role": member.role,
             "clearedChannels": {"private": cleared_private, "public": cleared.len() - cleared_private},
             "channelsWithoutManager": channels_without_manager,
-        }),
+        })),
     )
     .await?;
     tx.commit().await?;
@@ -694,18 +697,16 @@ pub struct WorkspaceImpact {
     pub channels: Vec<crate::conversation::recovery::ChannelImpact>,
 }
 
-/// Revokes every session, OAuth grant and token of the user.
+/// Revokes every session, OAuth grant and token of the user. What a disabled account, a password reset
+/// (by link or by the operator) and the operator's recovery do: the person signs in and connects again.
+/// `reason` is kept on the grants. Enabling the account later brings none of it back (a revoked row is
+/// never un-revoked).
 pub(crate) async fn end_all_access(
     conn: &mut PgConnection,
     user_id: Uuid,
     reason: &str,
 ) -> Result<(), CoreError> {
-    sqlx::query(
-        "UPDATE penfii.sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL",
-    )
-    .bind(user_id)
-    .execute(&mut *conn)
-    .await?;
+    crate::identity::end_sessions(&mut *conn, user_id, None).await?;
     sqlx::query(
         "UPDATE penfii.oauth_tokens SET revoked_at = now()
          WHERE revoked_at IS NULL
@@ -1004,6 +1005,20 @@ pub async fn add_team_member(
     if before.as_deref() == Some("MANAGER") {
         require_other_manager(&mut tx, team_id, user_id).await?;
     }
+    // Adding another person is ordinary. Adding oneself to a Team that carries the admin role of a
+    // Project one does not administer already would be a way to promote oneself; refused. A role change
+    // inside the Team (before is set) changes no Project role and is not looked at.
+    let admin_gained = if before.is_none() {
+        crate::project_access::admin_projects_gained_by_team(&mut tx, team_id, user_id).await?
+    } else {
+        Vec::new()
+    };
+    if actor == user_id && !admin_gained.is_empty() {
+        return Err(CoreError::rule(
+            "team_self_promotion",
+            "you cannot add yourself to a Team that makes you an admin of a Project you do not administer; ask another manager or the Project's admin",
+        ));
+    }
     sqlx::query(
         "INSERT INTO penfii.team_members (team_id, user_id, role) VALUES ($1, $2, $3)
          ON CONFLICT (team_id, user_id) DO UPDATE SET role = EXCLUDED.role",
@@ -1024,7 +1039,7 @@ pub async fn add_team_member(
         },
         "TEAM",
         team_id,
-        json!({"userId": user_id, "role": role}),
+        json!({"userId": user_id, "role": role, "projectAdminGained": admin_gained}),
     )
     .await?;
     tx.commit().await?;

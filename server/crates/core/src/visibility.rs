@@ -142,7 +142,8 @@ pub async fn messages(
 }
 
 /// A File is visible when it is available, not deleted, in a Workspace the person belongs to, and
-/// either attached to a live message the person can read, or to a live Ticket they can open, or the
+/// either attached to a live message the person can read, to a live Ticket they can open, to a live Doc
+/// comment on a page they can read, or the
 /// person's own upload that is not attached yet. Attachments of older message versions give no access.
 pub async fn files(
     conn: &mut PgConnection,
@@ -193,6 +194,10 @@ pub async fn files(
         }
     }
     let in_knowledge = attached_to_knowledge(conn, ids).await?;
+    // A File on a Doc comment is as visible as the live comment on a page the person can read, and
+    // is never the uploader's loose upload.
+    let (on_doc_comments, doc_comment_readable) = doc_comment_files(conn, actor, ids).await?;
+    attached_anywhere.extend(on_doc_comments);
     let mut by_file: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
     for row in attachments {
         by_file
@@ -217,7 +222,7 @@ pub async fn files(
             visible.insert(id);
             continue;
         }
-        if ticket_files.contains(&id) {
+        if ticket_files.contains(&id) || doc_comment_readable.contains(&id) {
             visible.insert(id);
             continue;
         }
@@ -480,6 +485,41 @@ pub async fn doc_files(
         }
     }
     Ok(out)
+}
+
+/// Files on Doc comments: every file that sits on one (readable or not), and those whose live comment
+/// is on a page the person can read.
+async fn doc_comment_files(
+    conn: &mut PgConnection,
+    actor: Uuid,
+    ids: &[Uuid],
+) -> Result<(HashSet<Uuid>, HashSet<Uuid>), CoreError> {
+    let rows = sqlx::query(
+        "SELECT cf.file_id, c.page_id, (c.deleted_at IS NULL) AS live
+         FROM penfii.doc_comment_files cf
+         JOIN penfii.doc_comments c ON c.id = cf.comment_id
+         WHERE cf.file_id = ANY($1)",
+    )
+    .bind(ids)
+    .fetch_all(&mut *conn)
+    .await?;
+    let pages: Vec<Uuid> = rows
+        .iter()
+        .map(|r| r.try_get("page_id"))
+        .collect::<Result<_, _>>()?;
+    let readable_pages = docs(conn, actor, &pages).await?;
+    let mut bound = HashSet::new();
+    let mut readable = HashSet::new();
+    for row in rows {
+        let file: Uuid = row.try_get("file_id")?;
+        bound.insert(file);
+        if row.try_get::<bool, _>("live")?
+            && readable_pages.contains(&row.try_get::<Uuid, _>("page_id")?)
+        {
+            readable.insert(file);
+        }
+    }
+    Ok((bound, readable))
 }
 
 /// Files that are attached to a Doc page at all (readable or not). Such a file

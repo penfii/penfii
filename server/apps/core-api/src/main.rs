@@ -48,7 +48,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let objects = penfii_core::files::ObjectStore::from_env()?;
-    if let Some(store) = &objects
+    // The bucket is made by whoever sets the storage up. The Compose `minio-setup` service does it with the
+    // storage root key and sets PENFII_S3_ENSURE_BUCKET=0, so the app key needs no bucket-creation right;
+    // without that setting (development, a hand-made MinIO) the server still tries once, as it always did.
+    if penfii_core::config::boolean(lookup, "PENFII_S3_ENSURE_BUCKET")?.unwrap_or(true)
+        && let Some(store) = &objects
         && let Err(error) = store.ensure_bucket().await
     {
         tracing::warn!("object storage bucket was not confirmed: {error}");

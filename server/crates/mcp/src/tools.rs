@@ -59,6 +59,8 @@ impl From<CoreError> for Failure {
             CoreError::ReauthRequired { .. } => {
                 Self::new("reauth_required", "recent authentication is required")
             }
+            CoreError::MfaRequired => Self::new("mfa_required", "a verification code is required"),
+            CoreError::MfaCodeInvalid => Self::new("mfa_code_invalid", "the code is not valid"),
             CoreError::RateLimited { .. } => Self::new("rate_limited", "too many requests"),
             CoreError::DbUnavailable(cause) => {
                 tracing::warn!(cause, "mcp tool: database unavailable");

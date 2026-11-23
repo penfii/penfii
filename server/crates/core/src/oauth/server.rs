@@ -126,18 +126,53 @@ pub fn redirect_with(
     url.to_string()
 }
 
+/// How many times the sign-in limit of an address one address may start authorizations in the same
+/// window.
+const AUTHORIZE_PER_ADDRESS_FACTOR: i32 = 4;
+
 /// Validates the whole request server-side and stores it.
 pub async fn begin_authorization(
     pool: &PgPool,
     config: &OAuthConfig,
     params: AuthorizeParams,
+    lookup: client::Lookup<'_>,
 ) -> Result<AuthorizeResult, CoreError> {
+    // The request is unauthenticated and stores a row: one address cannot make them without bound.
+    match crate::identity::check_address(pool, "oauth_authorize", lookup.address).await {
+        Ok(()) => {}
+        Err(CoreError::RateLimited { .. }) => {
+            return Ok(AuthorizeResult::Page(
+                "Too many requests from this address. Try again in a few minutes.".into(),
+            ));
+        }
+        Err(error) => return Err(error),
+    }
+    // A counter of its own (`oauth_authorize_ip`), and a limit of its own: several times the sign-in
+    // limit of an address, so people behind one shared address can still connect their apps.
+    let authorize_limits = crate::limits::ThrottleLimits {
+        address: crate::limits::Bucket {
+            max_failures: lookup
+                .throttle
+                .address
+                .max_failures
+                .saturating_mul(AUTHORIZE_PER_ADDRESS_FACTOR),
+            ..lookup.throttle.address
+        },
+        ..*lookup.throttle
+    };
+    crate::identity::record_address_failure(
+        pool,
+        "oauth_authorize",
+        lookup.address,
+        &authorize_limits,
+    )
+    .await?;
     let Some(client_id) = params.client_id.as_deref().filter(|id| !id.is_empty()) else {
         return Ok(AuthorizeResult::Page(
             "The request has no client_id.".into(),
         ));
     };
-    let client = match client::resolve(pool, config, client_id).await {
+    let client = match client::resolve(pool, config, client_id, lookup).await {
         Ok(client) => client,
         Err(CoreError::Internal(message)) => return Err(CoreError::Internal(message)),
         Err(error) => {
@@ -146,6 +181,7 @@ pub async fn begin_authorization(
             let reason = match &error {
                 CoreError::Validation(message) => message.as_str(),
                 CoreError::NotFound => "unknown or disabled client",
+                CoreError::RateLimited { .. } => "too many client lookups from this address",
                 _ => "client lookup failed",
             };
             let shown: String = client_id.chars().take(200).collect();
@@ -238,6 +274,13 @@ pub struct ConsentView {
     pub id: Uuid,
     pub client_name: String,
     pub client_id: String,
+    /// How the app is known: `cimd` (a metadata document published at `client_id`; `client_host` is
+    /// the host that vouches for the name), `dcr` (the app registered itself, nothing verifies the
+    /// name it gave) or `preregistered`.
+    pub client_kind: String,
+    /// The host of the metadata document, for a `cimd` client. The name is the document's own claim;
+    /// this is where it was published.
+    pub client_host: Option<String>,
     pub redirect_host: String,
     pub loopback: bool,
     pub scopes: Vec<ConsentScope>,
@@ -341,6 +384,14 @@ pub async fn consent_view(
         id: request_id,
         client_name: request.client.name.clone(),
         client_id: request.client.client_id.clone(),
+        client_host: (request.client.kind == "cimd")
+            .then(|| {
+                Url::parse(&request.client.client_id)
+                    .ok()
+                    .and_then(|url| url.host_str().map(str::to_string))
+            })
+            .flatten(),
+        client_kind: request.client.kind.clone(),
         redirect_host: host,
         loopback: client::is_loopback_redirect(&request.redirect_uri),
         scopes: request

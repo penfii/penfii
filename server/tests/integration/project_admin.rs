@@ -315,10 +315,11 @@ async fn a_direct_admin_who_cannot_act_does_not_count_as_one_that_stays(pool: Pg
     ] {
         assert_eq!(code(&reply), Some("last_project_admin"), "{}", reply.body);
     }
-    // The grants of people who cannot act can still be tidied.
+    // The grant of a person who left went with their membership (FEA-149); that of a disabled
+    // account, still a member, can be tidied.
     assert_eq!(
         env.ungrant(&env.owner, &project, removed.id).await.status,
-        StatusCode::NO_CONTENT
+        StatusCode::NOT_FOUND
     );
     assert_eq!(
         env.ungrant(&env.owner, &project, disabled.id).await.status,
@@ -510,11 +511,11 @@ async fn an_admin_through_a_team_or_a_group_is_an_active_admin_and_a_disabled_on
         Some("project_has_admin")
     );
     assert!(env.reads(&by_team, &project).await);
-    // They are not a direct admin: the grant of the person who left can be tidied away, and they can
+    // They are not a direct admin: the grant of the person who left went with them, and they can
     // name themself a direct admin, without the rule about the last direct admin standing in the way.
     assert_eq!(
         env.ungrant(&by_team, &project, lead.id).await.status,
-        StatusCode::NO_CONTENT
+        StatusCode::NOT_FOUND
     );
     assert!(
         env.grant(&by_team, &project, by_team.id, "ADMIN")
@@ -935,4 +936,27 @@ async fn a_disabled_manager_does_not_keep_a_team_or_a_channel_run(pool: PgPool) 
     assert_eq!(stuck.body["code"], "last_manager");
     env.enable(&other).await;
     assert_eq!(leave().await.status, StatusCode::NO_CONTENT);
+}
+
+/// The former admins of a Project without one come from each person's latest removal only: someone who
+/// administered it, left, came back without the role and left again is not named for it.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn former_admins_come_from_the_latest_removal_of_each_person(pool: PgPool) {
+    let env = setup(pool).await;
+    let back = env.person("back", "MEMBER").await;
+    let project = led_by(&env, &back).await;
+    env.remove(&back).await;
+    let listed = env.without_admin(&env.owner).await;
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0]["formerAdmins"][0]["displayName"], "back");
+
+    // Back as a plain member (no role in the Project), then removed again.
+    penfii_core::membership::join_workspace_as_operator(&env.pool, env.ws, back.id, "MEMBER")
+        .await
+        .unwrap();
+    env.remove(&back).await;
+    let listed = env.without_admin(&env.owner).await;
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0]["id"], json!(project));
+    assert_eq!(listed[0]["formerAdmins"], json!([]), "{listed:?}");
 }

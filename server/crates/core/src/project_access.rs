@@ -71,6 +71,33 @@ pub(crate) const ACTIVE_ADMIN_SOURCES: &str = "(
     JOIN penfii.users u ON u.id = s.user_id AND u.disabled_at IS NULL
 )";
 
+/// The Projects where being in this Team makes the person a Project admin they are not already
+/// (by a direct grant, another Team or a Group): the Team's own admin participation and the admin
+/// grants of the Group behind it. For the person about to join the Team; asked before the row exists.
+pub(crate) async fn admin_projects_gained_by_team(
+    conn: &mut PgConnection,
+    team_id: Uuid,
+    user_id: Uuid,
+) -> Result<Vec<Uuid>, CoreError> {
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT t.project_id FROM (
+             SELECT pt.project_id FROM penfii.project_teams pt
+              WHERE pt.team_id = $1 AND pt.access_role IN ('ADMIN', 'OWNER')
+             UNION
+             SELECT pg.project_id FROM penfii.project_group_grants pg
+               JOIN penfii.groups gr ON gr.id = pg.group_id AND gr.deleted_at IS NULL
+              WHERE gr.system_team_id = $1 AND pg.role IN ('ADMIN', 'OWNER')
+         ) t
+         WHERE NOT EXISTS (SELECT 1 FROM {ACTIVE_ADMIN_SOURCES} a
+                           WHERE a.project_id = t.project_id AND a.user_id = $2)
+         ORDER BY t.project_id"
+    ))
+    .bind(team_id)
+    .bind(user_id)
+    .fetch_all(&mut *conn)
+    .await?)
+}
+
 /// Whether the Project has an active admin by any source, not counting `ignoring` (the person who is
 /// about to leave, when asking what their leaving would do).
 pub(crate) async fn has_active_admin(
@@ -140,8 +167,8 @@ pub async fn set_grant(
     let mut tx = pool.begin().await?;
     let workspace = admin_of(&mut tx, project_id, actor).await?;
     let active: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM penfii.workspace_members
-                       WHERE workspace_id = $1 AND user_id = $2 AND state = 'ACTIVE')",
+        "SELECT EXISTS(SELECT 1 FROM (SELECT 1 FROM penfii.workspace_members
+                       WHERE workspace_id = $1 AND user_id = $2 AND state = 'ACTIVE' FOR SHARE) m)",
     )
     .bind(workspace)
     .bind(user_id)
@@ -461,10 +488,29 @@ pub async fn projects_without_admin(
     crate::admin::require_manager(&mut conn, workspace_id, actor).await?;
     let rows = sqlx::query_as::<_, (Uuid, String, String, sqlx::types::Json<Vec<FormerAdminRow>>)>(&format!(
         "SELECT p.id, p.name, p.ticket_prefix,
-                COALESCE((SELECT jsonb_agg(jsonb_build_object('userId', u.id, 'displayName', u.display_name)
-                                           ORDER BY u.display_name, u.id)
-                          FROM penfii.project_user_grants g JOIN penfii.users u ON u.id = g.user_id
-                          WHERE g.project_id = p.id AND g.role IN ('ADMIN', 'OWNER')), '[]'::jsonb)
+                COALESCE((SELECT jsonb_agg(jsonb_build_object('userId', f.id, 'displayName', f.display_name)
+                                           ORDER BY f.display_name, f.id)
+                          FROM (
+                              SELECT u.id, u.display_name
+                                FROM penfii.project_user_grants g JOIN penfii.users u ON u.id = g.user_id
+                               WHERE g.project_id = p.id AND g.role IN ('ADMIN', 'OWNER')
+                              UNION
+                              -- People removed from the Workspace lose their grant; the audit entry of the
+                              -- removal remembers which Projects they administered directly. Only each
+                              -- person's latest removal counts: an earlier one is from before they came
+                              -- back, and what they held then says nothing about the latest stay.
+                              SELECT u.id, u.display_name
+                                FROM (SELECT DISTINCT ON (ae.target_id) ae.target_id, ae.data
+                                        FROM penfii.audit_entries ae
+                                       WHERE ae.workspace_id = p.workspace_id
+                                         AND ae.action_code IN ('member.removed', 'member.access_cleaned')
+                                       ORDER BY ae.target_id, ae.occurred_at DESC, ae.id DESC) last
+                                JOIN penfii.users u ON u.id = last.target_id
+                               WHERE last.data -> 'directAdminOf' ? p.id::text
+                                 AND NOT EXISTS (SELECT 1 FROM penfii.workspace_members wm
+                                                 WHERE wm.workspace_id = p.workspace_id
+                                                   AND wm.user_id = u.id AND wm.state = 'ACTIVE')
+                          ) f), '[]'::jsonb)
          FROM penfii.projects p
          WHERE p.workspace_id = $1 AND p.archived_at IS NULL
            AND NOT EXISTS (SELECT 1 FROM {ACTIVE_ADMIN_SOURCES} a WHERE a.project_id = p.id)
@@ -536,7 +582,8 @@ pub async fn recover_admin(
     let target: Option<bool> = sqlx::query_scalar(
         "SELECT u.disabled_at IS NOT NULL
          FROM penfii.workspace_members wm JOIN penfii.users u ON u.id = wm.user_id
-         WHERE wm.workspace_id = $1 AND wm.user_id = $2 AND wm.state = 'ACTIVE'",
+         WHERE wm.workspace_id = $1 AND wm.user_id = $2 AND wm.state = 'ACTIVE'
+         FOR SHARE OF wm",
     )
     .bind(workspace)
     .bind(user_id)

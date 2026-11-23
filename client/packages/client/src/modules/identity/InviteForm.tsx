@@ -9,6 +9,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { errorText } from '../../ui/errorText'
 import { NotFoundState } from '../../ui/NotFoundState'
 import { useSession } from './useSession'
+import { useReauth } from './reauth'
 import { JoinedCard } from './InviteJoined'
 import { ProviderButtons, useAuthRedirectError } from './ProviderButtons'
 import { queries } from '../../queries'
@@ -25,6 +26,7 @@ export function InviteForm({ token }: { token: string }) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const session = useSession()
+  const reauth = useReauth()
   const signedIn = session.data
   const redirectError = useAuthRedirectError()
   const preview = useQuery(queries.invitationPreview(token))
@@ -46,11 +48,15 @@ export function InviteForm({ token }: { token: string }) {
     setBusy(true)
     setError(null)
     try {
-      const accepted = await api.acceptInvitation({
-        token,
-        displayName: invitation.accountExists && signedIn ? signedIn.displayName : displayName,
-        password: signedIn ? undefined : password,
-      })
+      // An invitation to OWNER or ADMIN asks a signed-in person to confirm it is them first.
+      const accepted = await reauth.run(() =>
+        api.acceptInvitation({
+          token,
+          displayName: invitation.accountExists && signedIn ? signedIn.displayName : displayName,
+          password: signedIn ? undefined : password,
+        }),
+      )
+      if (!accepted) return
       setTeamOutcome(accepted.team)
       setJoined(accepted.workspaceId)
     } catch (caught) {
@@ -104,7 +110,9 @@ export function InviteForm({ token }: { token: string }) {
     )
   }
 
+  // The dialog stays outside the form: a portal's submit event would bubble into the form's handler.
   return (
+    <>
     <form className="card" onSubmit={(event) => void onSubmit(event)}>
       <h1>{t('invite.title')}</h1>
       {lead}
@@ -129,5 +137,7 @@ export function InviteForm({ token }: { token: string }) {
       </Button>
       {signedIn ? null : <ProviderButtons intent="invite" invitationToken={token} returnTo="/invite/joined" />}
     </form>
+    {reauth.dialog}
+    </>
   )
 }

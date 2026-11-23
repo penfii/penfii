@@ -81,7 +81,20 @@ describe('Team members of an archived Team', () => {
     expect(screen.queryByLabelText(/Select Ann/)).toBeNull()
   })
 
+  it('tells the person adding which Project roles the Team carries, and warns about self-promotion', async () => {
+    api.listTeamMembers.mockResolvedValue(roster)
+    api.listTeamProjects.mockResolvedValue([
+      { projectId: 'p1', name: 'Payment', ticketPrefix: 'PAY', archivedAt: null, teamRole: 'ADMIN', canOpen: true, myRole: null, mySources: [] },
+      { projectId: 'p2', name: 'Platform', ticketPrefix: 'PLT', archivedAt: null, teamRole: null, canOpen: true, myRole: null, mySources: [] },
+    ])
+    wrap(<TeamMembersPanel workspaceId="w1" teamId="t1" canManage />)
+    expect(await screen.findByText(/Payment \(Admin\)/)).toBeTruthy()
+    expect(screen.queryByText(/Platform \(/)).toBeNull()
+    expect(screen.getByText(/Adding yourself to a Team that makes you a Project admin/)).toBeTruthy()
+  })
+
   it('refuses to start a batch removal that would take out the last manager', async () => {
+    api.listTeamProjects.mockResolvedValue([])
     api.listTeamMembers.mockResolvedValue(roster)
     wrap(<TeamMembersPanel workspaceId="w1" teamId="t1" canManage />)
     fireEvent.click(await screen.findByLabelText('Select Ann'))

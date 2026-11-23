@@ -741,9 +741,13 @@ fn candidates_from(response: &Value) -> Vec<Candidate> {
                 .filter_map(|hit| {
                     let source = &hit["_source"];
                     let id = Uuid::parse_str(source["id"].as_str()?).ok()?;
+                    // A comment can be edited or deleted without the index knowing yet (a comment is
+                    // no new version of its Ticket or Doc), so its text is never taken from the index:
+                    // a hit through a comment shows the excerpt PostgreSQL gives instead.
                     let highlight = hit["highlight"]
                         .as_object()
-                        .and_then(|h| h.values().next())
+                        .and_then(|h| h.iter().find(|(field, _)| !field.starts_with("comments")))
+                        .map(|(_, fragments)| fragments)
                         .and_then(|v| v.get(0))
                         .and_then(Value::as_str)
                         .map(str::to_owned);

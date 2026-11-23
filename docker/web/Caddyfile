@@ -1,5 +1,5 @@
 # Serves the built SPA and forwards /v1 (HTTP and WebSocket), the MCP OAuth endpoints and /mcp to core-api.
-# TLS terminates at the outer reverse proxy, so this listens on plain HTTP.
+# TLS terminates at the outer reverse proxy, so this listens on plain HTTP, on 8080 (the container is not root, so not 80).
 {
 	admin off
 	auto_https off
@@ -24,7 +24,7 @@
 	}
 }
 
-:80 {
+:8080 {
 	# File bytes are streamed with Range. Compressing them would make a 206 body not match the
 	# ranges a video player seeks, so those paths are left as core-api sent them.
 	@pages not path /v1/files/* /v1/attachments/*
@@ -37,13 +37,13 @@
 	# Strict-Transport-Security belongs to the outer proxy that terminates TLS.
 	# File responses keep the CSP core-api set for them (`sandbox`, no script). The page policy
 	# would replace it, and a file opened on its own would then be a page of this origin.
-	# The page a password-reset mail opens gets `no-referrer`: its token is in the address fragment, which
+	# The pages a password-reset or e-mail confirmation mail opens get `no-referrer`: the token is in the address fragment, which
 	# a browser never sends to a server or in a Referer, and this is the second guard, so nothing the page
 	# opens can learn even the address. Every other page keeps `strict-origin-when-cross-origin`.
-	@reset path /reset-password
+	@reset path /reset-password /confirm-email
 	@pages_default {
 		not path /v1/files/* /v1/attachments/*
-		not path /reset-password
+		not path /reset-password /confirm-email
 	}
 	import page_headers @pages_default strict-origin-when-cross-origin
 	import page_headers @reset no-referrer

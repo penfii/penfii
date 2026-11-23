@@ -191,3 +191,112 @@ async fn recent_authentication_sessions_and_throttle(pool: PgPool) {
     .unwrap();
     assert_eq!(label.as_deref(), Some("Chrome on Linux"));
 }
+
+// ---- FEA-139: a socket that is already open follows its session --------------------------------
+
+/// The router served on a real port, with sockets that look at their session every 100 ms.
+async fn serve_with_fast_recheck(pool: &PgPool) -> (axum::Router, std::net::SocketAddr) {
+    common::setup(pool).await;
+    let app = penfii_http_api::router_from(penfii_http_api::RouterConfig {
+        ws_session_recheck: std::time::Duration::from_millis(100),
+        ..penfii_http_api::RouterConfig::new(pool.clone(), limits(), false)
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let served = app.clone();
+    tokio::spawn(async move {
+        axum::serve(listener, served).await.unwrap();
+    });
+    (app, addr)
+}
+
+type Socket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+async fn open_user_socket(addr: std::net::SocketAddr, cookie: &str) -> Socket {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut request = format!("ws://{addr}/v1/ws/user")
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("cookie", cookie.parse().unwrap());
+    let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    // `user.ready` first.
+    use futures_util::StreamExt;
+    let first = socket.next().await.unwrap().unwrap();
+    assert!(first.to_text().unwrap().contains("user.ready"));
+    socket
+}
+
+/// What ends the socket: the close code, or `None` when it is still open after `wait`.
+async fn closed_within(socket: &mut Socket, wait: std::time::Duration) -> Option<u16> {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(left, socket.next()).await {
+            Err(_) => return None,
+            Ok(None) | Ok(Some(Err(_))) => return Some(1006),
+            Ok(Some(Ok(Message::Close(frame)))) => {
+                return Some(frame.map(|f| u16::from(f.code)).unwrap_or(1005));
+            }
+            Ok(Some(Ok(_))) => continue,
+        }
+    }
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn an_open_socket_ends_with_its_session_and_only_then(pool: PgPool) {
+    let (app, addr) = serve_with_fast_recheck(&pool).await;
+    let (_, here) = login(&app, "owner@penfii.test", "owner-test-passphrase").await;
+    let (_, there) = login(&app, "owner@penfii.test", "owner-test-passphrase").await;
+    let (here, there) = (here.unwrap(), there.unwrap());
+    let mut here_socket = open_user_socket(addr, &here).await;
+    let mut there_socket = open_user_socket(addr, &there).await;
+
+    // A live session keeps its socket across many checks.
+    assert_eq!(
+        closed_within(&mut here_socket, std::time::Duration::from_millis(600)).await,
+        None
+    );
+
+    // Signing the other device out ends that socket (4401, "session ended"), not this one.
+    let (_, listed, _) = call(&app, "GET", "/v1/me/sessions", Some(&here), None).await;
+    let other = listed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["current"] == false)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (status, _, _) = call(
+        &app,
+        "DELETE",
+        &format!("/v1/me/sessions/{other}"),
+        Some(&here),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        closed_within(&mut there_socket, std::time::Duration::from_secs(5)).await,
+        Some(4401)
+    );
+    assert_eq!(
+        closed_within(&mut here_socket, std::time::Duration::from_millis(400)).await,
+        None
+    );
+
+    // A password reset (here: the operator's) ends every web session, and so this socket.
+    identity::admin_set_password(&pool, "owner@penfii.test", "operator set passphrase")
+        .await
+        .unwrap();
+    assert_eq!(
+        closed_within(&mut here_socket, std::time::Duration::from_secs(5)).await,
+        Some(4401)
+    );
+}

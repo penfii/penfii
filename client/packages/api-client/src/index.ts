@@ -2,6 +2,7 @@ import type {
   AdminRecovery,
   OffboardingImpact,
   ChannelWithoutManager,
+  DocWithoutManager,
   ManagedChannel,
   ManagerRecovery,
   ProjectWithoutAdmin,
@@ -145,11 +146,15 @@ export type SessionInfo = {
   lastReauthAt: string | null
   expiresAt: string
 }
+export type MfaStatus = { enabled: boolean; enabledAt: string | null; recoveryCodesRemaining: number; setupPending: boolean }
+export type MfaSetup = { secret: string; otpauthUri: string }
 export type SessionsView = { items: SessionInfo[]; reauthMethods: string[]; reauthWindowSeconds: number }
 export type ConsentView = {
   id: string
   clientName: string
   clientId: string
+  clientKind: 'cimd' | 'dcr' | 'preregistered'
+  clientHost: string | null
   redirectHost: string
   loopback: boolean
   scopes: { scope: string; highRisk: boolean; change: boolean }[]
@@ -242,6 +247,9 @@ export function endSession(): void {
 
 let unauthorizedHandler: UnauthorizedHandler | null = null
 
+/** The error code of a wrong code given to a signed-in two-step verification action. */
+const MFA_CODE_INVALID = 'mfa_code_invalid'
+
 export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): void {
   unauthorizedHandler = handler
 }
@@ -284,6 +292,8 @@ type RequestOptions = {
   query?: Query
   /** A 401 here answers a password the caller sent; it does not say the session ended. */
   answersUnauthorized?: boolean
+  /** A 401 with this error code answers a code the caller sent; any other 401 still means the session ended. */
+  answersUnauthorizedCode?: string
   /** Aborts the request (a query that is no longer needed). */
   signal?: AbortSignal
   /** The request is finished by the browser even if the page is left or reloaded meanwhile (small bodies only). */
@@ -373,6 +383,7 @@ async function send(path: string, options: RequestOptions, method: string, heade
   if (
     response.status === 401 &&
     !options.answersUnauthorized &&
+    !(options.answersUnauthorizedCode !== undefined && errorBody(text, 401).code === options.answersUnauthorizedCode) &&
     path !== '/v1/session/login' &&
     path !== '/v1/me/reauth/password'
   ) {
@@ -429,6 +440,7 @@ function normalizeMe(payload: unknown): Me {
     statusText: typeof payload.statusText === 'string' ? payload.statusText : null,
     statusClearAt: typeof payload.statusClearAt === 'string' ? payload.statusClearAt : null,
     hasAvatar: payload.hasAvatar === true,
+    emailVerifiedAt: typeof payload.emailVerifiedAt === 'string' ? payload.emailVerifiedAt : null,
   }
 }
 
@@ -842,12 +854,20 @@ function normalizeOrganizationDirectory(payload: unknown): OrganizationDirectory
   }
 }
 
+function recoveryCodes(payload: unknown): string[] {
+  if (!isRecord(payload) || !Array.isArray(payload.recoveryCodes) || !payload.recoveryCodes.every((code) => typeof code === 'string')) {
+    throw new ApiError(500, 'invalid_response', 'Expected recovery codes')
+  }
+  return payload.recoveryCodes as string[]
+}
+
 export function createPenfiiClient() {
   return {
     serverInfo(): Promise<ServerInfo> {
       return request('/v1/server-info').then(normalizeServerInfo)
     },
-    login(body: { email: string; password: string }): Promise<void> {
+    /** `code` (an authenticator or recovery code) is sent on the second step of an account with two-step verification: the first answer is 401 `mfa_required`. */
+    login(body: { email: string; password: string; code?: string }): Promise<void> {
       return request('/v1/session/login', { method: 'POST', body }).then(() => undefined)
     },
     /** Asks for a password reset mail. The answer is the same whether or not the address has an account; 404 when the server sends no e-mail. */
@@ -951,6 +971,13 @@ export function createPenfiiClient() {
     recoverChannelManager(channelId: string, userId: string): Promise<ManagerRecovery> {
       return request(`/v1/channels/${channelId}/manager-recovery`, { method: 'POST', body: { userId } }).then((payload) => payload as ManagerRecovery)
     },
+    listDocsWithoutManager(workspaceId: string): Promise<DocWithoutManager[]> {
+      return request(`/v1/workspaces/${workspaceId}/docs-without-manager`).then((payload) => itemsOf<DocWithoutManager>(payload))
+    },
+    /** Names a manager for a Doc page that has none who can act. Needs a recent sign-in. */
+    recoverDocManager(docId: string, userId: string): Promise<ManagerRecovery> {
+      return request(`/v1/docs/${docId}/manager-recovery`, { method: 'POST', body: { userId } }).then((payload) => payload as ManagerRecovery)
+    },
     listInvitations(workspaceId: string): Promise<InvitationSummary[]> {
       return request(`/v1/workspaces/${workspaceId}/invitations`).then((payload) => itemsOf<InvitationSummary>(payload))
     },
@@ -1015,6 +1042,18 @@ export function createPenfiiClient() {
         return payload.url
       })
     },
+    /** Mails a confirmation link to a new address; the account keeps its address until the link is opened. 409 `email_change_unavailable` when the server sends no e-mail. */
+    requestEmailChange(email: string): Promise<{ email: string; expiresAt: string }> {
+      return request('/v1/me/email-change', { method: 'POST', body: { email } }) as Promise<{ email: string; expiresAt: string }>
+    },
+    /** The e-mail change that waits for its link, or null. */
+    pendingEmailChange(): Promise<{ email: string; expiresAt: string } | null> {
+      return request('/v1/me/email-change').then((payload) => (isRecord(payload) && typeof payload.email === 'string' ? (payload as { email: string; expiresAt: string }) : null))
+    },
+    /** Uses the link mailed to the new address (409 `email_change_token_invalid` when it is used, replaced or expired). */
+    confirmEmailChange(token: string): Promise<void> {
+      return request('/v1/auth/email-change/confirm', { method: 'POST', body: { token } }).then(() => undefined)
+    },
     reauthPassword(password: string): Promise<void> {
       return request('/v1/me/reauth/password', { method: 'POST', body: { password } }).then(() => undefined)
     },
@@ -1032,6 +1071,23 @@ export function createPenfiiClient() {
     },
     removePassword(): Promise<void> {
       return request('/v1/me/password', { method: 'DELETE' }).then(() => undefined)
+    },
+    mfaStatus(): Promise<MfaStatus> {
+      return request('/v1/me/mfa') as Promise<MfaStatus>
+    },
+    /** Starts the setup: a new secret that protects nothing until `mfaEnable`. Needs a recent proof (`reauth_required`). */
+    mfaSetup(): Promise<MfaSetup> {
+      return request('/v1/me/mfa/setup', { method: 'POST' }) as Promise<MfaSetup>
+    },
+    /** A wrong code is 401 `mfa_code_invalid` here and is an answer; any other 401 means the session ended. Returns the recovery codes, once. */
+    mfaEnable(code: string): Promise<string[]> {
+      return request('/v1/me/mfa/enable', { method: 'POST', body: { code }, answersUnauthorizedCode: MFA_CODE_INVALID }).then(recoveryCodes)
+    },
+    mfaDisable(code: string): Promise<void> {
+      return request('/v1/me/mfa/disable', { method: 'POST', body: { code }, answersUnauthorizedCode: MFA_CODE_INVALID }).then(() => undefined)
+    },
+    mfaRecoveryCodes(code: string): Promise<string[]> {
+      return request('/v1/me/mfa/recovery-codes', { method: 'POST', body: { code }, answersUnauthorizedCode: MFA_CODE_INVALID }).then(recoveryCodes)
     },
     sessions(): Promise<SessionsView> {
       return request('/v1/me/sessions') as Promise<SessionsView>

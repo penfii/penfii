@@ -14,6 +14,7 @@ import { InvitationsSection } from './InvitationsSection'
 import { MembersSection } from './MembersSection'
 import { ProjectsWithoutAdminSection } from './ProjectsWithoutAdminSection'
 import { ChannelsWithoutManagerSection } from './ChannelsWithoutManagerSection'
+import { DocsWithoutManagerSection } from './DocsWithoutManagerSection'
 import { TeamMembersSection } from './TeamMembersSection'
 import { McpPolicySettings } from '../identity'
 import { ADMIN_SECTIONS, adminSectionLabel, adminSectionPath, type AdminSection } from './adminSections'
@@ -55,6 +56,7 @@ export function WorkspaceAdmin({ workspaceId, section = 'general' }: { workspace
           <p className="field-hint">{t('admin.recovery.lead')}</p>
           <ProjectsWithoutAdminSection workspaceId={workspaceId} />
           <ChannelsWithoutManagerSection workspaceId={workspaceId} />
+          <DocsWithoutManagerSection workspaceId={workspaceId} />
         </>
       ) : null}
       {section === 'integrations' ? <McpPolicySettings workspaceId={workspaceId} whenOff={<p className="hint" role="status">{t('admin.integrations.off')}</p>} /> : null}

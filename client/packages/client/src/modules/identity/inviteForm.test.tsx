@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, screen } from '@testing-library/react'
 import { Route, Routes } from 'react-router'
+import { ApiError } from '@penfii/api-client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const api = vi.hoisted(() => ({
@@ -8,6 +9,7 @@ const api = vi.hoisted(() => ({
   me: vi.fn(),
   authProviders: vi.fn(),
   logout: vi.fn(),
+  reauthPassword: vi.fn(),
 }))
 vi.mock('../../api', () => ({ api }))
 
@@ -57,10 +59,28 @@ describe('invitation link', () => {
     expect(api.acceptInvitation).toHaveBeenCalledWith({ token: 'tok', displayName: 'Dana', password: undefined })
   })
 
+  it('an administrator invitation asks the signed-in person to confirm, then joins', async () => {
+    api.previewInvitation.mockResolvedValue({ ...preview, role: 'ADMIN' })
+    api.me.mockResolvedValue({ id: 'u', email: 'dana@example.com', displayName: 'Dana' })
+    api.acceptInvitation
+      .mockRejectedValueOnce(new ApiError(403, 'reauth_required', 'x', { methods: ['password'] }))
+      .mockResolvedValueOnce({ workspaceId: 'w1', team: null })
+    api.reauthPassword.mockResolvedValue(undefined)
+    mount()
+    fireEvent.click(await screen.findByRole('button', { name: 'Join' }))
+    fireEvent.change(await screen.findByLabelText('Password'), { target: { value: 'my current passphrase' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+    expect(await screen.findByRole('button', { name: 'Continue' })).toBeTruthy()
+    expect(api.reauthPassword).toHaveBeenCalledWith('my current passphrase')
+    expect(api.acceptInvitation).toHaveBeenCalledTimes(2)
+  })
+
   it.each([
     ['JOINED', /joined the Core Team as a member/],
     ['ARCHIVED', /archived or no longer exists, so you were not added/],
     ['GONE', /archived or no longer exists, so you were not added/],
+    ['ALREADY_MEMBER', /did not add you to the Core Team/],
+    ['SELF_PROMOTION', /did not add you to the Core Team/],
   ] as const)('says what became of the invitation\'s Team: %s', async (status, text) => {
     api.previewInvitation.mockResolvedValue(preview)
     api.me.mockResolvedValue({ id: 'u', email: 'dana@example.com', displayName: 'Dana' })

@@ -2,7 +2,6 @@
 //! registrations and the redirect URI rule.
 
 use std::collections::VecDeque;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -20,6 +19,11 @@ const MAX_DOCUMENT_BYTES: usize = 64 * 1024;
 const MIN_TTL_SECONDS: i64 = 60;
 const MAX_TTL_SECONDS: i64 = 86_400;
 const FETCHES_PER_MINUTE: usize = 30;
+/// Lookups of one host per minute. The budget above is shared by everyone, so one host (a page that
+/// keeps pointing at itself, a person trying many ids on it) must not be able to use all of it up.
+const FETCHES_PER_HOST_PER_MINUTE: usize = 6;
+/// Hosts the per-host budget remembers at once; the oldest idle ones are forgotten beyond it.
+const HOSTS_REMEMBERED: usize = 512;
 
 /// The only way the Authorization Server reaches a client's metadata document. Tests inject a
 /// fake; production uses [`HttpClientFetcher`].
@@ -37,43 +41,7 @@ pub struct Client {
     pub redirect_uris: Vec<String>,
 }
 
-/// Public means a routable unicast address: not loopback, private, link-local (which holds the
-/// cloud metadata address), unique-local, carrier-grade NAT, documentation, multicast or
-/// unspecified.
-pub fn is_public_address(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => is_public_v4(ip),
-        IpAddr::V6(ip) => {
-            if let Some(mapped) = ip.to_ipv4_mapped() {
-                return is_public_v4(mapped);
-            }
-            let first = ip.segments()[0];
-            !(ip.is_loopback()
-                || ip.is_unspecified()
-                || ip.is_multicast()
-                || first & 0xfe00 == 0xfc00 // unique local
-                || first & 0xffc0 == 0xfe80 // link local
-                || (first == 0x2001 && ip.segments()[1] == 0x0db8)
-                || ip == Ipv6Addr::LOCALHOST)
-        }
-    }
-}
-
-fn is_public_v4(ip: Ipv4Addr) -> bool {
-    let [a, b, c, _] = ip.octets();
-    !(ip.is_loopback()
-        || ip.is_private()
-        || ip.is_link_local()
-        || ip.is_unspecified()
-        || ip.is_broadcast()
-        || ip.is_multicast()
-        || ip.is_documentation()
-        || a == 0
-        || (a == 100 && (64..128).contains(&b)) // carrier-grade NAT
-        || (a == 192 && b == 0 && c == 0)
-        || (a == 198 && (18..20).contains(&b))
-        || a >= 240)
-}
+pub use crate::net::is_public_address;
 
 /// Validates a CIMD URL before any network access.
 pub fn check_cimd_url(raw: &str) -> Result<Url, CoreError> {
@@ -99,6 +67,7 @@ pub fn check_cimd_url(raw: &str) -> Result<Url, CoreError> {
 /// rebinding), every resolved address public, no redirects, bounded size and time.
 pub struct HttpClientFetcher {
     recent: Mutex<VecDeque<Instant>>,
+    by_host: Mutex<std::collections::HashMap<String, VecDeque<Instant>>>,
     private_hosts: Vec<String>,
 }
 
@@ -106,6 +75,7 @@ impl HttpClientFetcher {
     pub fn new() -> Self {
         Self {
             recent: Mutex::new(VecDeque::new()),
+            by_host: Mutex::new(std::collections::HashMap::new()),
             // Checked when the process started (`config::startup_checks`).
             private_hosts: crate::config::hosts(
                 &crate::config::process_env,
@@ -113,6 +83,24 @@ impl HttpClientFetcher {
             )
             .unwrap_or_default(),
         }
+    }
+
+    fn allow_host(&self, host: &str) -> bool {
+        let mut hosts = self.by_host.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        hosts.retain(|_, times| {
+            times.retain(|at| now.duration_since(*at) <= Duration::from_secs(60));
+            !times.is_empty()
+        });
+        if hosts.len() >= HOSTS_REMEMBERED && !hosts.contains_key(host) {
+            return false;
+        }
+        let times = hosts.entry(host.to_string()).or_default();
+        if times.len() >= FETCHES_PER_HOST_PER_MINUTE {
+            return false;
+        }
+        times.push_back(now);
+        true
     }
 
     fn allow_fetch(&self) -> bool {
@@ -144,7 +132,8 @@ impl ClientFetcher for HttpClientFetcher {
         Box::pin(async move {
             let url = check_cimd_url(&raw)?;
             let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
-            if !self.allow_fetch() {
+            // The host's own budget first, so that a refused one does not cost the shared one.
+            if !self.allow_host(&host) || !self.allow_fetch() {
                 return Err(CoreError::validation("too many client lookups"));
             }
             let mut addresses: Vec<std::net::SocketAddr> =
@@ -163,6 +152,7 @@ impl ClientFetcher for HttpClientFetcher {
             let http = reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(5))
+                .no_proxy()
                 .resolve(&host, address)
                 .user_agent("penfii-oauth")
                 .build()
@@ -386,12 +376,24 @@ pub fn parse_document(url: &str, document: &Value) -> Result<(String, Vec<String
     Ok((name.chars().take(100).collect(), uris))
 }
 
+/// Who is asking, for the budget of lookups that cost a request to another server.
+#[derive(Clone, Copy)]
+pub struct Lookup<'a> {
+    /// The client address of the (unauthenticated) request, if it is known.
+    pub address: Option<&'a str>,
+    pub throttle: &'a crate::limits::ThrottleLimits,
+}
+
 /// A client by its `client_id`: a CIMD URL (fetched once, cached by headers) or an id issued by
-/// this server. An unknown or disabled client is `NotFound` and never reveals more.
+/// this server. An unknown or disabled client is `NotFound` and never reveals more. A document that
+/// has gone stale is fetched again; when that cannot be done (the host is down, the asker's budget of
+/// lookups is used, the shared budget is) the client that was known goes on being known from the
+/// stored copy, so a busy or hostile moment does not lock out a client that was working.
 pub async fn resolve(
     pool: &PgPool,
     config: &OAuthConfig,
     client_id: &str,
+    lookup: Lookup<'_>,
 ) -> Result<Client, CoreError> {
     let cached = sqlx::query(
         "SELECT id, client_id, kind, client_name, redirect_uris, expires_at, disabled_at,
@@ -417,7 +419,19 @@ pub async fn resolve(
         return Err(CoreError::NotFound);
     }
     check_cimd_url(client_id)?;
-    let (document, ttl) = config.fetcher.fetch(client_id).await?;
+    let fetched = fetch_within_budget(pool, config, client_id, lookup).await;
+    let (document, ttl) = match (fetched, &cached) {
+        (Ok(found), _) => found,
+        (Err(error), Some(row)) => {
+            tracing::warn!(
+                client_id,
+                ?error,
+                "client metadata not refreshed; using the stored copy"
+            );
+            return from_row(row);
+        }
+        (Err(error), None) => return Err(error),
+    };
     let (name, uris) = parse_document(client_id, &document)?;
     let hash = Sha256::digest(document.to_string().as_bytes()).to_vec();
     let row = sqlx::query(
@@ -439,6 +453,20 @@ pub async fn resolve(
     .fetch_one(pool)
     .await?;
     from_row(&row)
+}
+
+/// The fetch, after the asker's own budget: every lookup of a document not held counts against their
+/// address (`oauth_lookup`), so one address cannot keep the server fetching and storing.
+async fn fetch_within_budget(
+    pool: &PgPool,
+    config: &OAuthConfig,
+    client_id: &str,
+    lookup: Lookup<'_>,
+) -> Result<(Value, i64), CoreError> {
+    crate::identity::check_address(pool, "oauth_lookup", lookup.address).await?;
+    crate::identity::record_address_failure(pool, "oauth_lookup", lookup.address, lookup.throttle)
+        .await?;
+    config.fetcher.fetch(client_id).await
 }
 
 fn from_row(row: &sqlx::postgres::PgRow) -> Result<Client, CoreError> {
@@ -463,29 +491,6 @@ fn from_row(row: &sqlx::postgres::PgRow) -> Result<Client, CoreError> {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn private_and_special_addresses_are_refused() {
-        for blocked in [
-            "127.0.0.1",
-            "10.1.2.3",
-            "172.16.0.9",
-            "192.168.1.1",
-            "169.254.169.254",
-            "100.64.0.1",
-            "0.0.0.0",
-            "::1",
-            "fc00::1",
-            "fe80::1",
-            "::ffff:10.0.0.1",
-            "224.0.0.1",
-        ] {
-            assert!(!is_public_address(blocked.parse().unwrap()), "{blocked}");
-        }
-        for open in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
-            assert!(is_public_address(open.parse().unwrap()), "{open}");
-        }
-    }
 
     #[test]
     fn cimd_url_rules() {

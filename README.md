@@ -56,10 +56,10 @@ MCP is **off by default**. To enable it, set `PENFII_MCP_ENABLED=1` and configur
 
 You need Git and Docker with Compose v2. Plan for at least 4 GiB of host memory. Docker Compose is the supported deployment method. It builds Penfii from source, so the first start takes several minutes. There are currently no published Penfii container images.
 
-1. Clone the repository and check out the `v0.3.1` release tag.
+1. Clone the repository and check out the `v0.4.0` release tag.
 
    ```sh
-   git clone --branch v0.3.1 https://github.com/penfii/penfii.git
+   git clone --branch v0.4.0 https://github.com/penfii/penfii.git
    cd penfii/docker
    cp .env.example .env
    ```
@@ -85,7 +85,7 @@ Before opening the instance to others, follow the [network and TLS guide](docs/s
 
 ## Project status and upgrades
 
-**v0.3.1 is an early release.** The API, database schema, and settings may change between 0.x releases. Back up before upgrading and check the [upgrade instructions](docs/self-hosting.md#updating) and [changelog](CHANGELOG.md) for your starting version. The web editor saves documents explicitly and has no live co-editing. Run a single API instance for live updates. See [known limitations](docs/known-limitations.md) before hosting Penfii for a team.
+**v0.4.0 is an early release.** The API, database schema, and settings may change between 0.x releases. Back up before upgrading and check the [upgrade instructions](docs/self-hosting.md#updating) and [changelog](CHANGELOG.md) for your starting version. The web editor saves documents explicitly and has no live co-editing. Run a single API instance for live updates. See [known limitations](docs/known-limitations.md) before hosting Penfii for a team.
 
 ## Architecture and documentation
 

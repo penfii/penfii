@@ -109,7 +109,7 @@ Open **Settings**. Under **My settings**:
 | Page | What it is for |
 |---|---|
 | **Profile** | Your display name, title, time zone, photo and status. Other members see the display name and your local time. |
-| **Account and security** | Your e-mail, password and **Signed-in devices** (you can sign out others). |
+| **Account and security** | Your e-mail, password, optional **Two-step verification** (an authenticator app; you get ten single-use recovery codes, shown once) and **Signed-in devices** (you can sign out others). |
 | **Notifications** | What reaches your Inbox, quiet hours, muted channels, push. |
 | **Display** | **Language** (English or 한국어) and **Theme**. They are saved in this browser, not on your account, so set them again on another browser. The first visit follows the browser's language. The log-in page has the same language button. |
 | **Connected apps** | AI apps you connected through MCP. **Disconnect** ends an app's access at once. |

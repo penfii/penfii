@@ -171,6 +171,46 @@ jobs:
       - name: gitleaks
         run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 detect --source /repo --redact --no-banner --verbose
 
+  # Supply chain, for exactly this commit: a CycloneDX SBOM of the source (Cargo.lock, package-lock.json) and of the
+  # core-api and web images the Compose file builds, each stamped with the commit, the tag (when the ref is a tag) and
+  # the image id and checked against the CycloneDX schema; then a container vulnerability report (Grype). The SBOM step
+  # fails when an SBOM is missing, invalid or unstamped. The report only reports: findings never fail this job, and a
+  # scanner that cannot fetch its database is written down as UNAVAILABLE. This job is not a condition of `deploy`
+  # until it has proved stable. It describes the images built here from this checkout, not images another pipeline
+  # builds for a deployment. Same commands locally: docker/scripts/supply-chain.sh.
+  supply-chain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Images
+        run: docker compose --env-file docker/.env.example -f docker/compose.yaml build core-api web
+      - name: SBOM
+        env:
+          COMMIT: ${{ github.sha }}
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: docker/scripts/supply-chain.sh sbom supply-chain
+      - name: Vulnerability report (report only)
+        continue-on-error: true
+        env:
+          COMMIT: ${{ github.sha }}
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: docker/scripts/supply-chain.sh scan supply-chain
+      - name: Keep the SBOMs and the report
+        if: always()
+        # Forgejo's own fork of upload-artifact (the GitHub one does not work against Forgejo). Not checked on this runner yet.
+        continue-on-error: true
+        uses: https://code.forgejo.org/forgejo/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # v4.3.1
+        with:
+          name: supply-chain-${{ github.sha }}
+          path: supply-chain/
+          # A re-run of the job replaces the artifact of the first run instead of failing on the name.
+          overwrite: true
+          if-no-files-found: warn
+          retention-days: 90
+
   # Starts the Dev Deploy pipeline of penfii/infra in Woodpecker for exactly this commit, once all the checks above
   # passed. Only a push to dev gets here (not a manual run, not a pull request). The Woodpecker token is the Actions
   # secret WOODPECKER_TOKEN; the Docker socket and the NAS mounts stay in Woodpecker. The call returns at once:

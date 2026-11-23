@@ -17,11 +17,12 @@ export function TrashTicketButton({ ticketId, ticketKey, projectId, onDone }: { 
     void perform(
       () => api.trashTicket(ticketId),
       async () => {
+        // Close the panel first: its Ticket, child and dependency reads then have no observer, so the live refresh that the
+        // trash sets off (and the reads below) cannot ask the server for a Ticket that is gone (it answers 404 since FEA-135).
+        onDone()
+        await queryClient.invalidateQueries({ queryKey: queryKeys.ticket(ticketId), refetchType: 'none' })
         await queryClient.invalidateQueries({ queryKey: queryKeys.projectBoard(projectId) })
         await queryClient.invalidateQueries({ queryKey: queryKeys.projectTrash(projectId) })
-        // The open panel is about to close; marking the Ticket stale (not refetching it) avoids asking for a Ticket that is gone.
-        await queryClient.invalidateQueries({ queryKey: queryKeys.ticket(ticketId), refetchType: 'none' })
-        onDone()
       },
     )
   }

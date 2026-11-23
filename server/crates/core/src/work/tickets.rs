@@ -112,14 +112,52 @@ pub(super) fn document_is_valid(value: &Value, allow_null: bool) -> bool {
     value.is_object() || (allow_null && value.is_null())
 }
 
+/// The most a ticket description or comment body may take, as JSON. Far above what people write (the web
+/// editor and MCP text input stay in the tens of kilobytes) and below the request body limit; it keeps one
+/// write from being megabytes of stored, indexed and broadcast text. Only writes are checked: what is
+/// stored already is read as it is.
+pub(super) const RICHTEXT_MAX_BYTES: usize = 512 * 1024;
+/// How deep a document may nest, counting every JSON object and array (a node and its `content` are two
+/// levels). Real documents (lists in quotes in lists) use a fraction of it; this stops a payload that is
+/// small but nests deeply from being walked recursively by readers. (The JSON parser's own limit, 128,
+/// already applies to what arrives in a request.)
+const RICHTEXT_MAX_DEPTH: usize = 96;
+
+/// The size and nesting limits of a description or comment body. It looks at no node type or key, so every
+/// shape the web editors, MCP and older clients write (ProseMirror, `penfii.doc`) passes as before.
+pub(super) fn check_document_bounds(value: &Value, what: &str) -> Result<(), CoreError> {
+    let mut stack = vec![(value, 1usize)];
+    while let Some((node, depth)) = stack.pop() {
+        if depth > RICHTEXT_MAX_DEPTH {
+            return Err(CoreError::validation(format!(
+                "{what} is nested too deeply"
+            )));
+        }
+        match node {
+            Value::Array(items) => stack.extend(items.iter().map(|item| (item, depth + 1))),
+            Value::Object(map) => stack.extend(map.values().map(|item| (item, depth + 1))),
+            _ => {}
+        }
+    }
+    let bytes = serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len());
+    if bytes > RICHTEXT_MAX_BYTES {
+        return Err(CoreError::validation(format!(
+            "{what} is too large ({} KiB at most)",
+            RICHTEXT_MAX_BYTES / 1024
+        )));
+    }
+    Ok(())
+}
+
 /// A description in the Docs format (`penfii.doc` v1, what the web editor saves) is checked and
 /// canonicalised the way a page is, so a link or block a page would refuse is not stored on a ticket
 /// either. The older ProseMirror shape is kept as it is.
 fn clean_description(value: Value) -> Result<Value, CoreError> {
+    check_document_bounds(&value, "description")?;
     if value.get("schema").and_then(Value::as_str) != Some(crate::docs::content::SCHEMA) {
         return Ok(value);
     }
-    crate::docs::content::sanitize(&value, usize::MAX)
+    crate::docs::content::sanitize(&value, RICHTEXT_MAX_BYTES)
         .map(|(clean, _)| clean)
         .map_err(|error| CoreError::validation(format!("description: {}", error.0)))
 }

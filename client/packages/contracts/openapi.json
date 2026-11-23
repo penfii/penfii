@@ -899,11 +899,11 @@
       },
       "InvitationTeamOutcome": {
         "type": "object",
-        "description": "What became of an invitation's Team step. JOINED: the person is in the Team as MEMBER. ARCHIVED or GONE: the person joined the Workspace only.",
+        "description": "What became of an invitation's Team step. JOINED: the person is in the Team as MEMBER. ARCHIVED or GONE: the Team is archived or gone. ALREADY_MEMBER: the person was already an active member of the Workspace, so the Team is left to a Team manager. SELF_PROMOTION: the inviter accepted their own invitation into a Team that would make them an admin of a Project they do not administer. Every status but JOINED means the person joined the Workspace only.",
         "properties": {
           "teamId": { "type": ["string", "null"], "format": "uuid" },
           "teamName": { "type": "string" },
-          "status": { "type": "string", "enum": ["JOINED", "ARCHIVED", "GONE"] }
+          "status": { "type": "string", "enum": ["JOINED", "ARCHIVED", "GONE", "ALREADY_MEMBER", "SELF_PROMOTION"] }
         },
         "required": ["teamId", "teamName", "status"]
       },
@@ -934,7 +934,7 @@
           },
           "team": {
             "$ref": "#/components/schemas/InvitationTeamOutcome",
-            "description": "Present when the invitation named a Team: JOINED, or ARCHIVED / GONE (Workspace only)."
+            "description": "Present when the invitation named a Team: JOINED, or ARCHIVED / GONE / ALREADY_MEMBER / SELF_PROMOTION (Workspace only)."
           }
         }
       },
@@ -1483,6 +1483,10 @@
           },
           "password": {
             "type": "string"
+          },
+          "code": {
+            "type": ["string", "null"],
+            "description": "The authenticator or recovery code, for an account with two-step verification on."
           }
         }
       },
@@ -3021,6 +3025,19 @@
           "createdAt"
         ]
       },
+      "DocWithoutManager": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "title": { "type": "string" },
+          "visibility": { "type": "string", "enum": ["PROJECT", "RESTRICTED"] },
+          "createdBy": { "type": "string", "format": "uuid" },
+          "createdByName": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        },
+        "required": ["id", "title", "visibility", "createdBy", "createdByName", "createdAt", "updatedAt"]
+      },
       "ManagerRecovery": {
         "type": "object",
         "properties": {
@@ -3669,7 +3686,7 @@
             }
           },
           "401": {
-            "description": "invalid credentials",
+            "description": "invalid credentials (a wrong password or code, and an unknown account, answer alike), or code `mfa_required`: the password was right and the account has two-step verification on, so send the same request again with `code`",
             "content": {
               "application/json": {
                 "schema": {
@@ -3781,7 +3798,7 @@
     "/v1/auth/password-reset/confirm": {
       "post": {
         "operationId": "confirmPasswordReset",
-        "summary": "Set a new password with the token of a reset link. The password follows the usual rule (15 to 128 characters, not a known weak one); a password that breaks it is refused with 400 and the link stays usable. On success every session of the account ends, and the person signs in again; nothing signs them in. A token that is unknown, used, replaced or expired, or whose account is disabled, is refused the same way (409 reset_token_invalid).",
+        "summary": "Set a new password with the token of a reset link. The password follows the usual rule (15 to 128 characters, not a known weak one); a password that breaks it is refused with 400 and the link stays usable. On success every session of the account and every connected app (OAuth/MCP grant) ends, and the person signs in again; nothing signs them in. A token that is unknown, used, replaced or expired, or whose account is disabled, is refused the same way (409 reset_token_invalid).",
         "requestBody": {
           "required": true,
           "content": {
@@ -3833,6 +3850,153 @@
                 "schema": {
                   "$ref": "#/components/schemas/Error"
                 }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client"
+          }
+        ],
+        "security": []
+      }
+    },
+    "/v1/me/email-change": {
+      "get": {
+        "operationId": "getPendingEmailChange",
+        "summary": "The e-mail change of the caller that is waiting for its link to be opened, or null. The account keeps its current address until then.",
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": {
+            "description": "the waiting change, or null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "nullable": true,
+                  "type": "object",
+                  "properties": {
+                    "email": { "type": "string" },
+                    "expiresAt": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "requestEmailChange",
+        "summary": "Start changing the caller's e-mail address: a confirmation link is mailed to the new address, and the address changes only when it is opened (POST /v1/auth/email-change/confirm). Until then the account signs in and recovers with its current address. Needs a recent authentication (403 reauth_required) and a server that sends e-mail (409 email_change_unavailable: ask the instance operator, who uses admin-cli user-set-email). 409 account_exists when another account has the address, 429 when asked too often. Asking again replaces the waiting change.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["email"],
+                "properties": {
+                  "email": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "202": {
+            "description": "the link was mailed; the change is waiting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "email": { "type": "string" },
+                    "expiresAt": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "validation",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "403": {
+            "description": "reauth_required or csrf",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "409": {
+            "description": "email_change_unavailable, account_exists or email_not_sent",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/email-change/confirm": {
+      "post": {
+        "operationId": "confirmEmailChange",
+        "summary": "Use the link mailed to a new address: the address becomes the account's, verified, and the old address is told. The link is the proof, so no session is needed (it is often opened on another device). A token that is unknown, used, replaced or expired, or whose account is disabled, is refused the same way (409 email_change_token_invalid).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["token"],
+                "properties": {
+                  "token": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "204": {
+            "description": "the address was changed"
+          },
+          "409": {
+            "description": "email_change_token_invalid, or account_exists when the address was taken meanwhile",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
               }
             }
           }
@@ -3899,7 +4063,7 @@
       },
       "patch": {
         "operationId": "updateMe",
-        "summary": "Change the caller's profile",
+        "summary": "Change the caller's profile: display name and password. The e-mail field must be the account's current address (in any letter case): a different one is refused with 409 email_change_requires_verification, use POST /v1/me/email-change. A changed password keeps this session and ends the account's other web sessions; connected apps (MCP) stay.",
         "parameters": [],
         "requestBody": {
           "required": true,
@@ -12401,7 +12565,7 @@
       },
       "put": {
         "operationId": "uploadFileContent",
-        "summary": "Send the bytes of an upload",
+        "summary": "Send the bytes of an upload. The file must be a pending upload of the caller with this exact size (otherwise 404 or 409 before the body is read). While many uploads are in flight the call may wait for a share of memory and then answer 503 `upload_busy` (`retryAfterSeconds` in the body); send it again. A body that sends nothing for 30 seconds is refused with 408 `upload_timeout`; send it again.",
         "parameters": [
           {
             "name": "id",
@@ -12449,6 +12613,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "upload_timeout: the body stopped arriving",
             "content": {
               "application/json": {
                 "schema": {
@@ -14682,6 +14856,413 @@
         }
       }
     },
+    "/v1/me/mfa": {
+      "get": {
+        "operationId": "getMfaStatus",
+        "summary": "Two-step verification of the caller: whether it is on and how many recovery codes are left",
+        "responses": {
+          "200": {
+            "description": "status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "enabled",
+                    "enabledAt",
+                    "recoveryCodesRemaining",
+                    "setupPending"
+                  ],
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "enabledAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "date-time"
+                    },
+                    "recoveryCodesRemaining": {
+                      "type": "integer"
+                    },
+                    "setupPending": {
+                      "type": "boolean",
+                      "description": "A setup was started and not confirmed; it protects nothing yet."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/DbUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/me/mfa/setup": {
+      "post": {
+        "operationId": "startMfaSetup",
+        "summary": "Start setting up an authenticator app: a new secret that protects nothing until enabled. Needs a recent authentication",
+        "responses": {
+          "200": {
+            "description": "secret and provisioning URI",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "secret",
+                    "otpauthUri"
+                  ],
+                  "properties": {
+                    "secret": {
+                      "type": "string",
+                      "description": "The shared secret as grouped Base32 text."
+                    },
+                    "otpauthUri": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reauth_required or csrf",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "mfa_already_enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/DbUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/me/mfa/enable": {
+      "post": {
+        "operationId": "enableMfa",
+        "summary": "Turn two-step verification on with a current code of the new secret. Ends the caller's other web sessions (this one and connected apps stay) and returns the recovery codes once",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "description": "A current authenticator code (6 digits) or an unused recovery code."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "recovery codes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "recoveryCodes"
+                  ],
+                  "properties": {
+                    "recoveryCodes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Ten single-use codes, shown only in this answer."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "mfa_code_invalid: the code is wrong (the session is still valid); unauthenticated: the session ended",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reauth_required or csrf",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "mfa_setup_not_started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/DbUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/me/mfa/disable": {
+      "post": {
+        "operationId": "disableMfa",
+        "summary": "Turn two-step verification off. Needs a recent authentication and a current authenticator or recovery code. Ends the caller's other web sessions (this one and connected apps stay)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "description": "A current authenticator code (6 digits) or an unused recovery code."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "done"
+          },
+          "400": {
+            "description": "validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "mfa_code_invalid: the code is wrong (the session is still valid); unauthenticated: the session ended",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reauth_required or csrf",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "mfa_not_enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/DbUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/me/mfa/recovery-codes": {
+      "post": {
+        "operationId": "regenerateMfaRecoveryCodes",
+        "summary": "Replace all recovery codes by ten new ones. Needs a recent authentication and a current authenticator or recovery code",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "description": "A current authenticator code (6 digits) or an unused recovery code."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "recovery codes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "recoveryCodes"
+                  ],
+                  "properties": {
+                    "recoveryCodes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Ten single-use codes, shown only in this answer."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "mfa_code_invalid: the code is wrong (the session is still valid); unauthenticated: the session ended",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reauth_required or csrf",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "mfa_not_enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/DbUnavailable"
+          }
+        }
+      }
+    },
     "/v1/me/reauth/password": {
       "post": {
         "summary": "Prove the signed-in person with their password (opens the recent-authentication window)",
@@ -15647,6 +16228,15 @@
                     },
                     "clientId": {
                       "type": "string"
+                    },
+                    "clientKind": {
+                      "type": "string",
+                      "enum": ["cimd", "dcr", "preregistered"],
+                      "description": "how the app is known: cimd (a metadata document published at clientId), dcr (the app registered itself; nothing verifies the name it gave) or preregistered"
+                    },
+                    "clientHost": {
+                      "type": ["string", "null"],
+                      "description": "for a cimd app, the host that publishes the metadata document the name comes from"
                     },
                     "redirectHost": {
                       "type": "string"
@@ -17277,6 +17867,16 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "team_self_promotion: adding yourself would make you an admin of a Project you do not administer yet (through the Team's admin role on it); another manager or the Project's admin adds you, or you are named by the Project's own recovery",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -17649,6 +18249,160 @@
           "401": { "description": "unauthenticated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
           "403": { "description": "Project admin required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
           "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        },
+        "security": [{ "sessionCookie": [] }]
+      }
+    },
+    "/v1/workspaces/{id}/docs-without-manager": {
+      "get": {
+        "operationId": "listDocsWithoutManager",
+        "summary": "Doc pages (not deleted) shared with a Project or with invited people that have no active manager, for example after their last manager was removed from the Workspace. A manager is active when they are an active member of the Workspace with an enabled account. Pages open to the whole Workspace are not listed. Title, creator and times only, never content. Workspace owner or admin only.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": {
+            "description": "Pages without a manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/DocWithoutManager" }
+                    }
+                  },
+                  "required": ["items"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not owner or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [{ "sessionCookie": [] }]
+      }
+    },
+    "/v1/docs/{id}/manager-recovery": {
+      "post": {
+        "operationId": "recoverDocManager",
+        "summary": "A Workspace owner or admin names a manager for a Doc page that is shared with a Project or with invited people and has no active manager. Only that: it gives the caller no access to the page, and the named person (who may be the caller) becomes its manager and so can read and edit it (`newAccess` says whether they could not read it before). A page with an active manager is refused (409 `doc_has_manager`), and so is one open to the whole Workspace (409 `doc_not_restricted`). Needs a recent sign-in. Audited as `doc.manager_recovered`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": { "userId": { "type": "string", "format": "uuid" } },
+                "additionalProperties": false,
+                "required": ["userId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "200": {
+            "description": "recovered",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ManagerRecovery" }
+              }
+            }
+          },
+          "400": {
+            "description": "the person is not an active member of the Workspace, or their account is disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not owner or admin, or reauth_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no such page or not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "doc_has_manager, or doc_not_restricted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
         },
         "security": [{ "sessionCookie": [] }]
       }

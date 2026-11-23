@@ -8,7 +8,7 @@ import { Button, Field } from '../design/ui'
 import { applyTheme, readTheme, saveTheme, type ThemeMode } from '../design/theme'
 import { NotificationSettings } from '../modules/attention/NotificationSettings'
 import { LocaleToggle, useI18n } from '../i18n/I18nProvider'
-import { ConnectedApps, SignInMethods, useReauth, useSession } from '../modules/identity'
+import { ConnectedApps, EmailChange, SignInMethods, TwoFactor, useReauth, useSession } from '../modules/identity'
 import { queryKeys } from '../queryKeys'
 import { queries } from '../queries'
 import { ResponsiveShell } from '../shell/ResponsiveShell'
@@ -76,7 +76,9 @@ function AccountScreen() {
       </header>
       <div className="account-grid">
         <AccountForm />
+        <EmailChange />
         <SignInMethods />
+        <TwoFactor />
       </div>
     </div>
   )
@@ -101,39 +103,38 @@ function AccountForm() {
   const session = useSession()
   const queryClient = useQueryClient()
   const [displayName, setDisplayName] = useState('')
-  const [email, setEmail] = useState('')
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const [saved, setSaved] = useState(false)
+  const [saved, setSaved] = useState<'idle' | 'saved' | 'passwordChanged'>('idle')
   const [busy, setBusy] = useState(false)
   const { run, dialog } = useReauth()
 
   useEffect(() => {
     if (!session.data) return
     setDisplayName(session.data.displayName)
-    setEmail(session.data.email)
   }, [session.data])
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault()
     setBusy(true)
     setError(null)
-    setSaved(false)
+    setSaved('idle')
     try {
       // The password is optional now: without it the server asks for a recent proof when needed.
-      const saved = await run(() =>
+      const result = await run(() =>
         api.updateMe({
           displayName,
-          email,
+          // Always the current address: a new one goes through the confirmation link (EmailChange).
+          email: session.data?.email ?? '',
           currentPassword: currentPassword === '' ? undefined : currentPassword,
           newPassword: newPassword.trim() === '' ? null : newPassword,
         }),
       )
-      if (!saved) return
+      if (!result) return
       setCurrentPassword('')
       setNewPassword('')
-      setSaved(true)
+      setSaved(newPassword.trim() === '' ? 'saved' : 'passwordChanged')
       await queryClient.invalidateQueries({ queryKey: queryKeys.me })
     } catch (caught) {
       if (isApiError(caught) && caught.status === 401) {
@@ -154,7 +155,8 @@ function AccountForm() {
     <form className="card settings-card" onSubmit={(event) => void onSubmit(event)}>
       <h2>{t('account.loginInfo')}</h2>
       <Field label={t('account.email')}>
-        <input type="email" required autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} />
+        {/* Shown, not edited here: changing the address is confirmed from the new address first. */}
+        <input type="email" readOnly autoComplete="username" value={session.data?.email ?? ''} />
       </Field>
       <Field label={t('account.currentPassword')} hint={t('account.currentPasswordHint')}>
         <input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} />
@@ -163,7 +165,8 @@ function AccountForm() {
         <input type="password" autoComplete="new-password" minLength={15} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />
       </Field>
       {error ? <p className="form-error">{error}</p> : null}
-      {saved ? <p>{t('account.saved')}</p> : null}
+      {saved === 'saved' ? <p>{t('account.saved')}</p> : null}
+      {saved === 'passwordChanged' ? <p role="status">{t('account.passwordChanged')}</p> : null}
       <button type="submit" disabled={busy}>{t('account.save')}</button>
     </form>
     {/* Outside the form: the dialog has a form of its own, and a form inside a form does not submit. */}

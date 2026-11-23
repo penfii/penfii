@@ -3,8 +3,10 @@
 //! The request is anonymous, so it must not tell whether an account exists: not by what it answers
 //! and not by how long it takes. The handler therefore does the same work for every well-formed
 //! request (count it, then hand the rest to a background task) and answers at once; whether a mail is
-//! sent is decided in the task, where nobody can observe it. A request for an unknown, disabled or
-//! password-less account (one that only signs in through an external provider) ends there silently.
+//! sent is decided in the task, where nobody can observe it. A request for an unknown, disabled,
+//! password-less (it only signs in through an external provider) or unverified-address account (an
+//! operator set the address, FEA-140) ends there silently: nothing is mailed to an address nobody has
+//! proved to be theirs.
 //!
 //! A reset token is 256 bits of randomness, kept only as a hash, good for one use and for
 //! [`TOKEN_MINUTES`] minutes. A newer request replaces the older token. Using one sets the new
@@ -63,7 +65,8 @@ async fn try_process(pool: &PgPool, mailer: &Mailer, email_key: &str) -> Result<
         "SELECT u.id, u.email, u.locale
          FROM penfii.users u
          JOIN penfii.password_credentials p ON p.user_id = u.id
-         WHERE u.email_key = $1 AND u.kind = 'HUMAN' AND u.disabled_at IS NULL",
+         WHERE u.email_key = $1 AND u.kind = 'HUMAN' AND u.disabled_at IS NULL
+           AND u.email_verified_at IS NOT NULL",
         email_key
     )
     .fetch_optional(pool)
@@ -187,14 +190,9 @@ pub async fn confirm(pool: &PgPool, token: &str, password: &str) -> Result<(), C
         .bind(token_id)
         .execute(&mut *tx)
         .await?;
-    // The password changed, so whoever held a session (the person, or someone who had got in) is
-    // signed out everywhere.
-    sqlx::query(
-        "UPDATE penfii.sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL",
-    )
-    .bind(user_id)
-    .execute(&mut *tx)
-    .await?;
+    // The password changed, so whoever held a session or a connected app (the person, or someone who
+    // had got in) is signed out everywhere and has to connect again.
+    crate::admin::end_all_access(&mut tx, user_id, "password_reset").await?;
     audit(&mut tx, user_id, "user.password_reset").await?;
     tx.commit().await?;
     Ok(())

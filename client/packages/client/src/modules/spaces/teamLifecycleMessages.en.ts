@@ -89,6 +89,7 @@ export const teamLifecycleEn: Record<keyof typeof teamLifecycleKo, string> = {
   'admin.invitations.teamGone': '{name} · gone',
   'admin.invitations.teamGoneNote': 'The Team named in the invitation no longer exists. Joining now joins the Workspace only.',
   'invite.result.joined': 'You joined the {team} Team as a member. Projects the Team has a role in show on your home.',
+  'invite.result.notPlaced': 'This invitation did not add you to the {team} Team. Ask a Team manager if you need it.',
   'invite.result.skipped': 'The Team named in the invitation is archived or no longer exists, so you were not added. Tell an admin if you need a Team.',
   'invite.joinedWorkspace': 'You joined the Workspace',
   'shortcuts.title': 'Keyboard shortcuts',

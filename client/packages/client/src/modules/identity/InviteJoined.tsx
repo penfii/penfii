@@ -12,7 +12,11 @@ export function JoinedCard({ outcome, onContinue }: { outcome: InvitationTeamOut
       <p>{t('invite.done')}</p>
       {outcome ? (
         <p role="status" className="invite-team-outcome">
-          {outcome.status === 'JOINED' ? t('invite.result.joined', { team: outcome.teamName }) : t('invite.result.skipped')}
+          {outcome.status === 'JOINED'
+            ? t('invite.result.joined', { team: outcome.teamName })
+            : outcome.status === 'ALREADY_MEMBER' || outcome.status === 'SELF_PROMOTION'
+              ? t('invite.result.notPlaced', { team: outcome.teamName })
+              : t('invite.result.skipped')}
         </p>
       ) : null}
       <Button type="button" onClick={onContinue}>{t('invite.continue')}</Button>

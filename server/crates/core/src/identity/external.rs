@@ -154,12 +154,24 @@ pub struct StartInput<'a> {
     pub throttle: &'a crate::limits::ThrottleLimits,
 }
 
-/// Creates the attempt and returns the provider URL the browser goes to.
+/// What starting an attempt gives the caller: where the browser goes, and the secret that ties the
+/// attempt to this browser. The caller sets it as a short-lived `HttpOnly` cookie on the response of the
+/// start and hands it back to [`callback`]; without it the attempt is not consumed.
+#[derive(Debug)]
+pub struct StartedAttempt {
+    pub url: String,
+    pub browser_binding: String,
+}
+
+/// How long the cookie that binds an attempt to its browser lives: as long as the attempt.
+pub const ATTEMPT_COOKIE_SECONDS: i64 = ATTEMPT_TTL_SECONDS;
+
+/// Creates the attempt and returns the provider URL the browser goes to, with the browser binding.
 pub async fn start(
     pool: &PgPool,
     providers: &AuthProviders,
     input: StartInput<'_>,
-) -> Result<String, CoreError> {
+) -> Result<StartedAttempt, CoreError> {
     // Every start counts against the address: an attempt row and a provider round trip per call.
     super::check_address(pool, "auth_start", input.address).await?;
     super::record_address_failure(pool, "auth_start", input.address, input.throttle).await?;
@@ -225,14 +237,15 @@ pub async fn start(
     let verifier = random_url_token();
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     let nonce = random_url_token();
+    let browser_binding = random_url_token();
     sqlx::query("DELETE FROM penfii.auth_attempts WHERE created_at < now() - interval '1 day'")
         .execute(pool)
         .await?;
     sqlx::query(
         "INSERT INTO penfii.auth_attempts
             (id, state_hash, provider_id, intent, pkce_verifier, nonce, user_id, session_id,
-             invitation_id, return_to, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now() + make_interval(secs => $11))",
+             invitation_id, return_to, expires_at, browser_hash)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now() + make_interval(secs => $11), $12)",
     )
     .bind(Uuid::new_v4())
     .bind(token_hash(&state))
@@ -245,10 +258,11 @@ pub async fn start(
     .bind(invitation_id)
     .bind(safe_return_to(input.return_to))
     .bind(ATTEMPT_TTL_SECONDS as f64)
+    .bind(token_hash(&browser_binding))
     .execute(pool)
     .await?;
 
-    provider
+    let url = provider
         .authorize_url(AuthorizeRequest {
             redirect_uri: &redirect_uri,
             state: &state,
@@ -257,7 +271,11 @@ pub async fn start(
             force_login: input.intent == Intent::Reauth,
             want_email: input.intent == Intent::Invite,
         })
-        .await
+        .await?;
+    Ok(StartedAttempt {
+        url,
+        browser_binding,
+    })
 }
 
 pub struct CallbackInput<'a> {
@@ -269,6 +287,9 @@ pub struct CallbackInput<'a> {
     /// The browser's current session cookie, if any.
     pub session_token: Option<&'a str>,
     pub device: Option<&'a str>,
+    /// The value of the cookie the start set in this browser. An attempt is only consumed by the browser
+    /// that started it, so a callback link made in one browser and opened in another does nothing.
+    pub browser_binding: Option<&'a str>,
 }
 
 #[derive(Debug)]
@@ -359,12 +380,14 @@ pub async fn callback(
         "UPDATE penfii.auth_attempts a SET consumed_at = now()
          FROM penfii.auth_providers p
          WHERE a.state_hash = $1 AND a.consumed_at IS NULL AND a.expires_at > now()
+           AND a.browser_hash = $3
            AND p.id = a.provider_id AND p.provider_key = $2
          RETURNING a.provider_id, a.intent, a.pkce_verifier, a.nonce, a.user_id, a.session_id,
                    a.invitation_id, a.return_to",
     )
     .bind(token_hash(state))
     .bind(input.provider_key)
+    .bind(input.browser_binding.map(token_hash))
     .fetch_optional(pool)
     .await;
     let attempt = match consumed {
@@ -472,6 +495,7 @@ async fn act(
                 None => sign_up(&mut tx, provider, &profile, attempt.provider_id).await?,
             };
             let token = insert_session(&mut tx, user_id, ttl, provider.key(), device).await?;
+            audit_login(&mut tx, user_id, provider.key()).await?;
             tx.commit().await?;
             revoke_presented(pool, presented).await?;
             Ok(CallbackOutcome {
@@ -563,9 +587,11 @@ async fn act(
                 invitation_id,
                 invited_team,
                 invited_team_name.as_deref(),
+                None,
             )
             .await?;
             let token = insert_session(&mut tx, user_id, ttl, provider.key(), device).await?;
+            audit_login(&mut tx, user_id, provider.key()).await?;
             tx.commit().await?;
             revoke_presented(pool, presented).await?;
             // The Team step's outcome travels with the redirect so the page can say it.
@@ -592,6 +618,15 @@ async fn act(
                 require_recent_authentication(pool, &session).await?;
                 let mut tx = pool.begin().await?;
                 insert_identity(&mut tx, session.user.id, &profile, attempt.provider_id).await?;
+                super::audit_user(
+                    &mut tx,
+                    session.user.id,
+                    Some(session.user.id),
+                    "user.sign_in_method_added",
+                    "OK",
+                    serde_json::json!({"method": provider.key()}),
+                )
+                .await?;
                 tx.commit().await?;
                 Ok(CallbackOutcome {
                     redirect: with_query(&back, "auth", "linked"),
@@ -627,6 +662,24 @@ async fn act(
             }
         }
     }
+}
+
+/// The `user.login` entry of a sign-in through a provider: which provider, nothing of the identity.
+/// A second factor, if any, is the provider's.
+async fn audit_login(
+    conn: &mut PgConnection,
+    user_id: Uuid,
+    provider_key: &str,
+) -> Result<(), CoreError> {
+    super::audit_user(
+        conn,
+        user_id,
+        Some(user_id),
+        "user.login",
+        "OK",
+        serde_json::json!({"method": provider_key}),
+    )
+    .await
 }
 
 /// First sign-in with an identity nobody linked. Only when the operator turned sign-up on for this provider
@@ -830,6 +883,15 @@ async fn remove_method(
             "this is the only way to sign in to the account",
         ));
     }
+    super::audit_user(
+        &mut tx,
+        session.user.id,
+        Some(session.user.id),
+        "user.sign_in_method_removed",
+        "OK",
+        serde_json::json!({"method": provider_key.unwrap_or("password")}),
+    )
+    .await?;
     tx.commit().await?;
     Ok(())
 }
@@ -851,6 +913,8 @@ pub struct AdminIdentities {
     pub user_id: Uuid,
     pub disabled: bool,
     pub has_password: bool,
+    /// Two-step verification is on (a locked-out person is recovered with `user-mfa-reset`).
+    pub mfa_enabled: bool,
     pub identities: Vec<IdentityInfo>,
 }
 
@@ -859,7 +923,8 @@ pub async fn admin_identities(pool: &PgPool, email: &str) -> Result<AdminIdentit
     let (_, email_key) = normalize_email(email)?;
     let row = sqlx::query(
         "SELECT u.id, u.disabled_at IS NOT NULL AS disabled,
-                EXISTS (SELECT 1 FROM penfii.password_credentials p WHERE p.user_id = u.id) AS has_password
+                EXISTS (SELECT 1 FROM penfii.password_credentials p WHERE p.user_id = u.id) AS has_password,
+                EXISTS (SELECT 1 FROM penfii.mfa_totp m WHERE m.user_id = u.id AND m.enabled_at IS NOT NULL) AS mfa_enabled
          FROM penfii.users u WHERE u.email_key = $1",
     )
     .bind(&email_key)
@@ -871,6 +936,7 @@ pub async fn admin_identities(pool: &PgPool, email: &str) -> Result<AdminIdentit
         user_id,
         disabled: row.try_get("disabled")?,
         has_password: row.try_get("has_password")?,
+        mfa_enabled: row.try_get("mfa_enabled")?,
         identities: list_identities(pool, user_id).await?,
     })
 }
@@ -902,12 +968,9 @@ pub async fn admin_set_password(
     .bind(&password_hash)
     .execute(&mut *tx)
     .await?;
-    sqlx::query(
-        "UPDATE penfii.sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL",
-    )
-    .bind(user_id)
-    .execute(&mut *tx)
-    .await?;
+    // The operator set the password (a recovery): sessions and connected apps end, the person signs in
+    // and connects again.
+    crate::admin::end_all_access(&mut tx, user_id, "password_set").await?;
     sqlx::query(
         "INSERT INTO penfii.audit_entries
             (id, actor_user_id, action_code, outcome_code, target_kind, target_id, data)

@@ -119,10 +119,12 @@ pub async fn purge(pool: &PgPool, retention: Retention) -> Result<PurgeReport, C
     .await?
     .rows_affected();
     let clients = sqlx::query(
-        "DELETE FROM penfii.oauth_clients c WHERE c.kind = 'dcr' AND c.fetched_at < now() - interval '7 days'
+        "DELETE FROM penfii.oauth_clients c WHERE c.kind IN ('dcr', 'cimd') AND c.fetched_at < now() - interval '7 days'
+           AND c.disabled_at IS NULL
            AND NOT EXISTS (SELECT 1 FROM penfii.oauth_grants g WHERE g.client_pk = c.id)
            AND NOT EXISTS (SELECT 1 FROM penfii.oauth_authorization_requests r WHERE r.client_pk = c.id)
-           AND NOT EXISTS (SELECT 1 FROM penfii.oauth_codes k WHERE k.client_pk = c.id)",
+           AND NOT EXISTS (SELECT 1 FROM penfii.oauth_codes k WHERE k.client_pk = c.id)
+           AND NOT EXISTS (SELECT 1 FROM penfii.mcp_call_log l WHERE l.client_pk = c.id)",
     )
     .execute(pool)
     .await?

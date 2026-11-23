@@ -16,6 +16,8 @@ const view = {
   id: 'r1',
   clientName: 'Codex',
   clientId: 'https://codex.example/c.json',
+  clientKind: 'cimd' as const,
+  clientHost: 'codex.example',
   redirectHost: '127.0.0.1',
   loopback: true,
   scopes: [
@@ -76,6 +78,16 @@ describe('consent page', () => {
       expect(api.consentDecision).toHaveBeenLastCalledWith('r1', { approve: true, scopes: ['workspace:read', 'ticket:read', 'ticket:write'] }),
     )
     vi.unstubAllGlobals()
+  })
+
+  it('says where the app name comes from, and that a self-registered app is unverified', async () => {
+    api.consentRequest.mockResolvedValue(view)
+    mount()
+    expect(await screen.findByText(/information published at codex\.example/)).toBeTruthy()
+    cleanup()
+    api.consentRequest.mockResolvedValue({ ...view, clientKind: 'dcr', clientHost: null })
+    mount()
+    expect(await screen.findByText(/registered itself, and nothing confirms its name/)).toBeTruthy()
   })
 
   it('deny posts no scopes', async () => {

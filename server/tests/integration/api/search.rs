@@ -2238,3 +2238,64 @@ async fn losing_one_kinds_index_rebuilds_that_kind_alone(pool: PgPool) {
     assert_eq!(all["results"].as_array().unwrap().len(), 2, "{all}");
     assert_eq!(alias_target_is_ours(&sw, "ticket").await, Some(true));
 }
+
+/// A hit through a comment never shows the comment's text from the index: a comment edited or deleted
+/// since the document was indexed (it is no new version of the Ticket) must not come back as a snippet.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_deleted_ticket_comment_does_not_come_back_as_a_search_snippet(pool: PgPool) {
+    let world = &World::new(pool).await;
+    let Some(sw) = search_world(world).await else {
+        return;
+    };
+    let ws = workspace(world, &format!("c5-{}", Uuid::new_v4())).await;
+    let (project_id, _) = new_project(world, ws, "Snippets").await;
+    let (_, ticket) = make_ticket(
+        world,
+        &project_id,
+        "c5-1",
+        json!({"title": "snippet ticket", "description": {"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"plain description"}]}]}}),
+    )
+    .await;
+    let ticket_id = ticket["id"].as_str().unwrap().to_owned();
+    let owner = world.owner_cookie.clone();
+    let (s, comment, _) = call(
+        &world.app,
+        "POST",
+        &format!("/v1/tickets/{ticket_id}/comments"),
+        Some(&owner),
+        None,
+        Some(json!({"body":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"quokkasecretphrase"}]}]}})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{comment}");
+    index_now(&sw, ws).await;
+    let (_, b) = find(&sw, &owner, ws, "quokkasecretphrase", "ticket").await;
+    assert_eq!(titles(&b), vec!["snippet ticket"], "{b}");
+    assert!(
+        !b["results"][0]["snippet"]
+            .to_string()
+            .contains("quokkasecretphrase"),
+        "{b}"
+    );
+    // Deleted now, and the index is not told yet: the hit may still come, the text must not.
+    let (s, _, _) = call(
+        &world.app,
+        "DELETE",
+        &format!(
+            "/v1/tickets/{ticket_id}/comments/{}",
+            comment["id"].as_str().unwrap()
+        ),
+        Some(&owner),
+        None,
+        None,
+    )
+    .await;
+    assert!(s.is_success(), "{s}");
+    let (_, b) = find(&sw, &owner, ws, "quokkasecretphrase", "ticket").await;
+    assert!(
+        !b["results"][0]["snippet"]
+            .to_string()
+            .contains("quokkasecretphrase"),
+        "{b}"
+    );
+}

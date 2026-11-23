@@ -1,6 +1,6 @@
 [package]
 name = "penfii-core"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2024"
 publish = false
 license = "GPL-3.0-only"
@@ -28,6 +28,7 @@ rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha1 = { workspace = true }
 sha2 = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }

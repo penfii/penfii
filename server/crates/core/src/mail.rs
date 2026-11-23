@@ -334,6 +334,40 @@ pub fn password_reset_message(locale: &str, link: &str, valid_minutes: i64) -> (
     }
 }
 
+/// `(subject, body)` of the confirmation mailed to the *new* address of an e-mail change.
+pub fn email_change_message(locale: &str, link: &str, valid_hours: i64) -> (String, String) {
+    if english(locale) {
+        (
+            "Confirm your new Penfii e-mail address".to_string(),
+            format!(
+                "Someone asked to use this e-mail address for a Penfii account.\n\nOpen this link to confirm it:\n{link}\n\nThe link works once and for {valid_hours} hours. Until you confirm, the account keeps its current address. If it was not you, ignore this message: nothing changes.\n"
+            ),
+        )
+    } else {
+        (
+            "Penfii 새 이메일 주소 확인".to_string(),
+            format!(
+                "이 이메일 주소를 Penfii 계정에 사용하려는 요청이 있었습니다.\n\n아래 링크를 열어 확인하세요:\n{link}\n\n링크는 한 번만, {valid_hours}시간 동안 사용할 수 있습니다. 확인하기 전까지 계정은 기존 주소를 그대로 사용합니다. 본인이 요청한 것이 아니라면 이 메일을 무시하세요. 아무것도 바뀌지 않습니다.\n"
+            ),
+        )
+    }
+}
+
+/// `(subject, body)` of the notice to the *old* address once the change stands.
+pub fn email_changed_notice(locale: &str) -> (String, String) {
+    if english(locale) {
+        (
+            "The e-mail address of your Penfii account was changed".to_string(),
+            "The e-mail address of your Penfii account was changed to a new one, which was confirmed from that address. You sign in with the new address from now on.\n\nIf this was not you, ask the instance operator for help and change your password.\n".to_string(),
+        )
+    } else {
+        (
+            "Penfii 계정의 이메일 주소가 변경되었습니다".to_string(),
+            "Penfii 계정의 이메일 주소가 새 주소로 변경되었습니다. 새 주소에서 확인이 완료되었으며, 이제부터 새 주소로 로그인합니다.\n\n본인이 한 일이 아니라면 인스턴스 운영자에게 도움을 요청하고 비밀번호를 변경하세요.\n".to_string(),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -782,7 +782,7 @@ struct Prepared {
     invite_seen: bool,
     /// The account of the invited e-mail, as it was read: its id and password hash.
     account: Option<(Uuid, Option<String>)>,
-    /// The existing account accepts as itself (its recent session or the right password).
+    /// The existing account accepts as itself (its own session, recent for an OWNER/ADMIN role).
     accepted_as_account: bool,
     /// The hash of the new account's password, when there was no account yet.
     new_hash: Option<String>,
@@ -805,14 +805,14 @@ async fn prepare_acceptance(
         accepted_as_account: false,
         new_hash: None,
     };
-    let email_key: Option<String> = sqlx::query_scalar(
-        "SELECT email_key FROM penfii.workspace_invitations
+    let open: Option<(String, String)> = sqlx::query_as(
+        "SELECT email_key, role FROM penfii.workspace_invitations
          WHERE token_hash = $1 AND revoked_at IS NULL AND accepted_at IS NULL AND expires_at > now()",
     )
     .bind(token_hash)
     .fetch_optional(pool)
     .await?;
-    let Some(email_key) = email_key else {
+    let Some((email_key, role)) = open else {
         return Ok(prepared);
     };
     prepared.invite_seen = true;
@@ -828,18 +828,18 @@ async fn prepare_acceptance(
     match account {
         Some((id, disabled_at, hash)) => {
             if disabled_at.is_none() {
+                // An existing account accepts as itself, signed in: the invitation token alone
+                // never is enough, and the password is never checked here (so an invitation link
+                // cannot be used to guess it). Only an invitation that grants OWNER or ADMIN asks
+                // for a recent authentication; joining as a MEMBER needs just the sign-in.
                 prepared.accepted_as_account = match session {
-                    // An existing account accepts as itself: its own session (recently authenticated,
-                    // because this adds a Workspace), or the password inline. The token alone is never
-                    // enough.
                     Some(session) if session.user.id == id => {
-                        identity::require_recent_authentication(pool, session).await?;
+                        if matches!(role.as_str(), "OWNER" | "ADMIN") {
+                            identity::require_recent_authentication(pool, session).await?;
+                        }
                         true
                     }
-                    _ => match hash.as_deref() {
-                        Some(hash) => identity::verify_password(password, hash).await,
-                        None => false,
-                    },
+                    _ => false,
                 };
             }
             prepared.account = Some((id, hash));
@@ -887,7 +887,7 @@ async fn accept_prepared(
     let display_name = display_name.to_string();
     let mut tx = pool.begin().await?;
     let invite = sqlx::query_as::<_, InviteRow>(
-        "SELECT id, workspace_id, email_key, role, team_id, team_name
+        "SELECT id, workspace_id, email_key, role, team_id, team_name, created_by
          FROM penfii.workspace_invitations
          WHERE token_hash = $1
            AND revoked_at IS NULL
@@ -925,9 +925,9 @@ async fn accept_prepared(
     .await?;
 
     let user = if let Some(existing) = existing {
-        // An existing account accepts as itself: its own session (recently authenticated, because
-        // this adds a Workspace), or the password inline. The token alone is never enough.
-        // A disabled account cannot accept; the answer is the same as for a wrong password.
+        // An existing account accepts as itself, through its own session (see `prepare_acceptance`).
+        // The token alone is never enough. A disabled account cannot accept; the answer is the same
+        // as for a signed-out request.
         if existing.disabled_at.is_some() {
             return Err(CoreError::conflict(
                 "account_exists",
@@ -992,7 +992,7 @@ async fn accept_prepared(
 
     // The shared join rule: a person who was removed earlier comes back with the invited role, an
     // active member keeps theirs (the invitation is still accepted).
-    crate::membership::join_workspace(
+    let joined = crate::membership::join_workspace(
         &mut tx,
         invite.workspace_id,
         user.id,
@@ -1010,6 +1010,17 @@ async fn accept_prepared(
     .execute(&mut *tx)
     .await?;
     let workspace_id = invite.workspace_id;
+    // The Team step is for a person coming into the Workspace by this invitation. An active member
+    // (the address became theirs after the invitation was sent) is not placed: Team membership is
+    // then a Team manager's decision, not the invitation's. Neither is an inviter who accepts their
+    // own invitation into a Team that would make them an admin of a Project they do not administer.
+    let skip = if !joined.changed() {
+        Some("ALREADY_MEMBER")
+    } else if invite.created_by == user.id {
+        Some("SELF_PROMOTION")
+    } else {
+        None
+    };
     let team = place_invited_team(
         &mut tx,
         workspace_id,
@@ -1017,6 +1028,7 @@ async fn accept_prepared(
         invite.id,
         invite.team_id,
         invite.team_name.as_deref(),
+        skip,
     )
     .await?;
     tx.commit().await?;
@@ -1030,6 +1042,10 @@ async fn accept_prepared(
 /// The Team step of an accepted invitation, in the transaction of the Workspace membership: the person
 /// joins the Team as `MEMBER` if it exists, is active and belongs to the Workspace; otherwise the Team
 /// is skipped and the outcome says why. Joining the Workspace never fails because of it.
+///
+/// `skip` names a reason the caller already has not to place the person: `ALREADY_MEMBER` always
+/// skips an active Team; `SELF_PROMOTION` skips it only when the Team would make the person an admin
+/// of a Project they do not administer already (the same rule as adding oneself to a Team).
 pub(crate) async fn place_invited_team(
     tx: &mut sqlx::PgConnection,
     workspace_id: Uuid,
@@ -1037,6 +1053,7 @@ pub(crate) async fn place_invited_team(
     invitation_id: Uuid,
     team_id: Option<Uuid>,
     team_name: Option<&str>,
+    skip: Option<&'static str>,
 ) -> Result<Option<penfii_contracts::InvitationTeamOutcome>, CoreError> {
     if team_id.is_none() && team_name.is_none() {
         return Ok(None);
@@ -1055,12 +1072,21 @@ pub(crate) async fn place_invited_team(
         }
         None => None,
     };
+    let skip = match (&team, skip) {
+        (Some((team_id, _, false)), Some("SELF_PROMOTION")) => {
+            let gained =
+                crate::project_access::admin_projects_gained_by_team(&mut *tx, *team_id, user_id)
+                    .await?;
+            (!gained.is_empty()).then_some("SELF_PROMOTION")
+        }
+        (_, skip) => skip,
+    };
     let (status, name) = match &team {
-        Some((_, name, false)) => ("JOINED", name.clone()),
+        Some((_, name, false)) => (skip.unwrap_or("JOINED"), name.clone()),
         Some((_, name, true)) => ("ARCHIVED", name.clone()),
         None => ("GONE", team_name.unwrap_or_default().to_string()),
     };
-    if let Some((team_id, _, false)) = team {
+    if let Some((team_id, _, false)) = team.filter(|_| status == "JOINED") {
         sqlx::query(
             "INSERT INTO penfii.team_members (team_id, user_id, role) VALUES ($1, $2, 'MEMBER')
              ON CONFLICT (team_id, user_id) DO NOTHING",
@@ -1130,9 +1156,10 @@ pub async fn create_team(
         return Err(CoreError::validation("a Team needs at least one MANAGER"));
     }
     for member in members {
+        // Share-locked, as for a grant: a removal running at the same time is ordered before or after.
         let active: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM penfii.workspace_members
-                           WHERE workspace_id = $1 AND user_id = $2 AND state = 'ACTIVE')",
+            "SELECT EXISTS(SELECT 1 FROM (SELECT 1 FROM penfii.workspace_members
+                           WHERE workspace_id = $1 AND user_id = $2 AND state = 'ACTIVE' FOR SHARE) m)",
         )
         .bind(workspace_id)
         .bind(member.user_id)
@@ -1805,6 +1832,7 @@ struct InviteRow {
     role: String,
     team_id: Option<Uuid>,
     team_name: Option<String>,
+    created_by: Uuid,
 }
 
 #[derive(sqlx::FromRow)]

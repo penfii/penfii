@@ -29,6 +29,7 @@ pub mod identity;
 pub mod inbox;
 pub mod knowledge;
 pub mod membership;
+pub mod net;
 pub mod notify;
 pub mod oauth;
 pub mod organization;
@@ -59,8 +60,8 @@ pub mod work_history;
 pub use error::CoreError;
 pub use limits::{Bucket, Limits, ThrottleLimits};
 pub use migrate::{
-    apply_migrations, connect, migration_url_from_env, protect_history, require_current_schema,
-    run_migrator,
+    MigrationRun, apply_migrations, connect, migration_url_from_env, protect_history,
+    require_current_schema, run_migrator,
 };
 pub use platform::ChangeNotice;
 

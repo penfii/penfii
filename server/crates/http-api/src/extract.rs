@@ -173,6 +173,30 @@ pub fn idempotency_key(headers: &HeaderMap) -> Result<String, ApiError> {
     Ok(value.to_string())
 }
 
+/// The cookie that ties an external sign-in attempt to the browser that started it. It is only sent to
+/// the sign-in endpoints (`Path=/v1/auth`), lives as long as the attempt, and is `Lax` so that the
+/// provider's redirect back (a top-level GET) carries it.
+pub const AUTH_BINDING_COOKIE: &str = "penfii_auth_bind";
+
+pub fn auth_binding_cookie(value: &str, max_age: i64, secure: bool) -> String {
+    let mut cookie = format!(
+        "{AUTH_BINDING_COOKIE}={value}; HttpOnly; SameSite=Lax; Path=/v1/auth; Max-Age={max_age}"
+    );
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
+pub fn auth_binding(headers: &HeaderMap) -> Option<String> {
+    let raw = headers.get(http::header::COOKIE)?.to_str().ok()?;
+    let prefix = format!("{AUTH_BINDING_COOKIE}=");
+    raw.split(';')
+        .filter_map(|part| part.trim().strip_prefix(prefix.as_str()))
+        .find(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 pub fn session_token(headers: &HeaderMap) -> Option<String> {
     let raw = headers.get(http::header::COOKIE)?.to_str().ok()?;
     for part in raw.split(';') {
@@ -382,7 +406,62 @@ fn is_trusted(ranges: &Ranges, ip: std::net::IpAddr) -> bool {
 /// trusted proxy; then the rightmost entry that is not itself a trusted proxy is the client.
 /// `None` when the peer is unknown.
 pub fn client_address(peer: Option<std::net::SocketAddr>, headers: &HeaderMap) -> Option<String> {
-    client_address_with(trusted_ranges(), peer, headers)
+    let ranges = trusted_ranges();
+    if let Some(hop) = untrusted_private_hop(ranges, peer, headers) {
+        warn_untrusted_hop(hop);
+    }
+    client_address_with(ranges, peer, headers)
+}
+
+/// A private or loopback address that `X-Forwarded-For` shows forwarding for someone else, but that is
+/// not a trusted proxy: most likely a reverse proxy on another machine of the network that was not
+/// added to `PENFII_TRUSTED_PROXIES`, so every visitor behind it is counted as that one address.
+fn untrusted_private_hop(
+    ranges: &Ranges,
+    peer: Option<std::net::SocketAddr>,
+    headers: &HeaderMap,
+) -> Option<std::net::IpAddr> {
+    if !is_trusted(ranges, peer?.ip()) {
+        return None;
+    }
+    let forwarded = headers.get("x-forwarded-for")?.to_str().ok()?;
+    let mut entries = forwarded.rsplit(',').map(str::trim);
+    let client = entries.find_map(|entry| {
+        entry
+            .parse::<std::net::IpAddr>()
+            .ok()
+            .filter(|ip| !is_trusted(ranges, *ip))
+    })?;
+    // Only when the address is itself forwarding: something stands to the left of it.
+    let forwards_for_someone = entries.any(|entry| !entry.is_empty());
+    (forwards_for_someone && is_private(client)).then_some(client)
+}
+
+fn is_private(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ip) => ip.is_private() || ip.is_loopback() || ip.is_link_local(),
+        std::net::IpAddr::V6(ip) => {
+            ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local()
+        }
+    }
+}
+
+/// Logs the hint once per address for the life of the process (a bounded number of addresses).
+fn warn_untrusted_hop(hop: std::net::IpAddr) {
+    static SEEN: std::sync::Mutex<Vec<std::net::IpAddr>> = std::sync::Mutex::new(Vec::new());
+    let Ok(mut seen) = SEEN.lock() else {
+        return;
+    };
+    if seen.contains(&hop) || seen.len() >= 32 {
+        return;
+    }
+    seen.push(hop);
+    tracing::warn!(
+        address = %hop,
+        "a private address forwards requests for other clients but is not a trusted proxy, so every \
+         client behind it is counted as this one address (shared sign-in throttle, audit address); \
+         if it is your reverse proxy, add it to PENFII_TRUSTED_PROXIES (and PENFII_EDGE_PROXIES)"
+    );
 }
 
 fn client_address_with(
@@ -450,6 +529,32 @@ mod tests {
 
     fn ranges(raw: &str) -> Ranges {
         parse_trusted_proxies(raw).unwrap()
+    }
+
+    #[test]
+    fn an_untrusted_private_proxy_in_forwarded_for_is_noticed() {
+        let proxies = ranges("172.29.250.0/24");
+        let web = Some("172.29.250.3:5000".parse().unwrap());
+        // A proxy on another LAN machine forwards for a visitor: noticed.
+        let behind_lan_proxy = headers(&[("x-forwarded-for", "203.0.113.7, 192.168.1.20")]);
+        assert_eq!(
+            untrusted_private_hop(&proxies, web, &behind_lan_proxy),
+            Some("192.168.1.20".parse().unwrap())
+        );
+        // A LAN visitor opening the web container directly: one entry, nothing to say.
+        let lan_visitor = headers(&[("x-forwarded-for", "192.168.1.50")]);
+        assert_eq!(untrusted_private_hop(&proxies, web, &lan_visitor), None);
+        // A public client address, or the proxy listed as trusted: nothing to say.
+        let public = headers(&[("x-forwarded-for", "192.168.1.50, 203.0.113.7")]);
+        assert_eq!(untrusted_private_hop(&proxies, web, &public), None);
+        let listed = ranges("172.29.250.0/24,192.168.1.20");
+        assert_eq!(untrusted_private_hop(&listed, web, &behind_lan_proxy), None);
+        // A header from an untrusted peer is ignored altogether.
+        let direct = Some("192.168.1.9:5000".parse().unwrap());
+        assert_eq!(
+            untrusted_private_hop(&proxies, direct, &behind_lan_proxy),
+            None
+        );
     }
 
     #[test]

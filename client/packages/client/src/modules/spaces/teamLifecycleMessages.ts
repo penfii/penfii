@@ -88,6 +88,7 @@ export const teamLifecycleKo = {
   'admin.invitations.teamGone': '{name} · 사라짐',
   'admin.invitations.teamGoneNote': '초대에 적힌 팀이 더 이상 없습니다. 지금 가입하면 작업공간에만 들어옵니다.',
   'invite.result.joined': '{team} 팀에 멤버로 들어갔습니다. 팀이 접근 역할을 가진 프로젝트가 홈에 보입니다.',
+  'invite.result.notPlaced': '이 초대로는 {team} 팀에 넣지 않았습니다. 팀이 필요하면 팀 관리자에게 요청하세요.',
   'invite.result.skipped': '초대에 적힌 팀은 보관 상태이거나 더 이상 없어 넣지 못했습니다. 팀이 필요하면 관리자에게 알려 주세요.',
   'invite.joinedWorkspace': '작업공간에 들어왔습니다',
   'shortcuts.title': '단축키 도움말',

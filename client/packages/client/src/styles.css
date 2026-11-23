@@ -645,3 +645,7 @@ button.reply-count { border: 0; background: transparent; padding: 0; font: inher
     margin-inline-end: calc(var(--chat-side) + var(--message-margin) + var(--message-pad));
   }
 }
+
+/* Two-step setup: the QR code is always black on white with its own quiet zone, so a camera reads it in either theme. */
+.mfa-qr { margin: 0 0 var(--space-3, 12px); }
+.mfa-qr svg { display: block; max-width: 100%; height: auto; border-radius: 4px; }

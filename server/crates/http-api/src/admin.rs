@@ -8,7 +8,7 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use penfii_core::{ChangeNotice, admin, conversation, project_access, ticket_lifecycle};
+use penfii_core::{ChangeNotice, admin, conversation, docs, project_access, ticket_lifecycle};
 use serde::Deserialize;
 use serde_json::json;
 use std::time::Duration;
@@ -59,6 +59,11 @@ pub(crate) fn routes() -> Router<AppState> {
             "/v1/projects/{id}/admin-recovery",
             post(recover_project_admin),
         )
+        .route(
+            "/v1/workspaces/{id}/docs-without-manager",
+            get(docs_without_manager),
+        )
+        .route("/v1/docs/{id}/manager-recovery", post(recover_doc_manager))
         .route(
             "/v1/workspaces/{id}/channels-without-manager",
             get(channels_without_manager),
@@ -192,6 +197,25 @@ async fn recover_project_admin(
     Body(body): Body<RecoverAdminBody>,
 ) -> Result<Response, ApiError> {
     let recovery = project_access::recover_admin(&state.pool, user_id, id, body.user_id).await?;
+    Ok(Json(recovery).into_response())
+}
+
+async fn docs_without_manager(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Actor(user_id): Actor,
+) -> Result<Response, ApiError> {
+    let items = docs::recovery::docs_without_manager(&state.pool, user_id, id).await?;
+    Ok(Json(json!({ "items": items })).into_response())
+}
+
+async fn recover_doc_manager(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    RecentActor(user_id): RecentActor,
+    Body(body): Body<RecoverAdminBody>,
+) -> Result<Response, ApiError> {
+    let recovery = docs::recovery::recover_manager(&state.pool, user_id, id, body.user_id).await?;
     Ok(Json(recovery).into_response())
 }
 

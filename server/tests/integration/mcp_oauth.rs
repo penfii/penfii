@@ -3275,3 +3275,430 @@ async fn an_agent_can_finish_ticket_work_with_only_what_the_tools_tell_it(pool: 
     assert!(names.contains(&"project_workflow".to_string()));
     assert!(!names.contains(&"ticket_change_status".to_string()));
 }
+
+// ---- FEA-139: what ends which access --------------------------------------------------------------
+
+/// A second device of the owner: its cookie.
+async fn second_device(env: &Env) -> String {
+    login(&env.app, OWNER_EMAIL, OWNER_PASSWORD).await
+}
+
+async fn web_alive(env: &Env, cookie: &str) -> bool {
+    api(&env.app, "GET", "/v1/me", Some(cookie), None)
+        .await
+        .status
+        == StatusCode::OK
+}
+
+async fn mcp_alive(env: &Env, token: &str) -> bool {
+    modern_list(&env.app, token).await.status == StatusCode::OK
+}
+
+async fn live_grants(env: &Env) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM penfii.oauth_grants WHERE revoked_at IS NULL")
+        .fetch_one(&env.pool)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_changed_profile_password_keeps_this_device_and_the_apps_and_ends_the_other_devices(
+    pool: PgPool,
+) {
+    let env = setup(pool).await;
+    let (token, _) = token_pair(&env, ALL_SCOPE_TEXT, ALL_SCOPES).await;
+    let other = second_device(&env).await;
+    let changed = api(
+        &env.app,
+        "PATCH",
+        "/v1/me",
+        Some(&env.owner_cookie),
+        Some(json!({
+            "displayName": "Owner",
+            "email": OWNER_EMAIL,
+            "newPassword": "a brand new passphrase"
+        })),
+    )
+    .await;
+    assert_eq!(changed.status, StatusCode::OK, "{:?}", changed.body);
+    assert!(
+        web_alive(&env, &env.owner_cookie).await,
+        "this device stays"
+    );
+    assert!(!web_alive(&env, &other).await, "the other device ends");
+    assert!(mcp_alive(&env, &token).await, "connected apps stay");
+    assert_eq!(live_grants(&env).await, 1);
+    // A profile change that does not touch the password ends nothing.
+    let third = login(&env.app, OWNER_EMAIL, "a brand new passphrase").await;
+    let renamed = api(
+        &env.app,
+        "PATCH",
+        "/v1/me",
+        Some(&env.owner_cookie),
+        Some(json!({"displayName": "Owner 2", "email": OWNER_EMAIL})),
+    )
+    .await;
+    assert_eq!(renamed.status, StatusCode::OK);
+    assert!(web_alive(&env, &third).await);
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn signing_out_one_device_or_the_others_leaves_the_apps_and_disconnecting_apps_leaves_the_devices(
+    pool: PgPool,
+) {
+    let env = setup(pool).await;
+    let (token, _) = token_pair(&env, ALL_SCOPE_TEXT, ALL_SCOPES).await;
+    let (b, c) = (second_device(&env).await, second_device(&env).await);
+    // One chosen device.
+    let sessions = api(
+        &env.app,
+        "GET",
+        "/v1/me/sessions",
+        Some(&env.owner_cookie),
+        None,
+    )
+    .await;
+    let b_id = sessions.body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["current"] == false)
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .unwrap();
+    let ended = api(
+        &env.app,
+        "DELETE",
+        &format!("/v1/me/sessions/{b_id}"),
+        Some(&env.owner_cookie),
+        None,
+    )
+    .await;
+    assert_eq!(ended.status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        [web_alive(&env, &b).await, web_alive(&env, &c).await],
+        [true, false],
+        "only the chosen device (the newest other one) ends"
+    );
+    assert!(web_alive(&env, &env.owner_cookie).await);
+    assert!(mcp_alive(&env, &token).await);
+    // The other devices: this one stays.
+    let others = api(
+        &env.app,
+        "DELETE",
+        "/v1/me/sessions",
+        Some(&env.owner_cookie),
+        None,
+    )
+    .await;
+    assert!(others.status.is_success(), "{:?}", others.body);
+    assert!(!web_alive(&env, &b).await);
+    assert!(!web_alive(&env, &c).await);
+    assert!(web_alive(&env, &env.owner_cookie).await);
+    assert!(mcp_alive(&env, &token).await);
+    // Disconnecting every app ends the apps and no device.
+    let all = api(
+        &env.app,
+        "DELETE",
+        "/v1/me/oauth-grants",
+        Some(&env.owner_cookie),
+        None,
+    )
+    .await;
+    assert_eq!(all.status, StatusCode::NO_CONTENT);
+    assert!(!mcp_alive(&env, &token).await);
+    assert!(web_alive(&env, &env.owner_cookie).await);
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_password_reset_and_the_operators_password_end_every_device_and_every_app(pool: PgPool) {
+    use crate::common::smtp::{FakeSmtp, Mode};
+    let env = setup(pool).await;
+    let smtp = FakeSmtp::start(Mode::Accept).await;
+    let mailer = smtp.mailer(std::time::Duration::from_secs(5));
+
+    // By link.
+    let (token, _) = token_pair(&env, ALL_SCOPE_TEXT, ALL_SCOPES).await;
+    let other = second_device(&env).await;
+    identity::process_reset_request(&env.pool, &mailer, "owner@penfii.test").await;
+    let mail = smtp.received().remove(0);
+    let text = mail.text();
+    let link = text
+        .split_whitespace()
+        .find(|w| w.contains("/reset-password"))
+        .unwrap();
+    let reset_token = link.split_once('#').unwrap().1;
+    identity::confirm_password_reset(&env.pool, reset_token, "reset passphrase one two")
+        .await
+        .unwrap();
+    assert!(!web_alive(&env, &env.owner_cookie).await);
+    assert!(!web_alive(&env, &other).await);
+    assert!(!mcp_alive(&env, &token).await);
+    assert_eq!(live_grants(&env).await, 0);
+    let reason: String =
+        sqlx::query_scalar("SELECT revoked_reason FROM penfii.oauth_grants LIMIT 1")
+            .fetch_one(&env.pool)
+            .await
+            .unwrap();
+    assert_eq!(reason, "password_reset");
+
+    // By the operator.
+    let cookie = login(&env.app, OWNER_EMAIL, "reset passphrase one two").await;
+    let (token, _) = {
+        let code = get_code(&env, &cookie, ALL_SCOPE_TEXT, ALL_SCOPES).await;
+        let reply = exchange(&env, &code).await;
+        (reply.body["access_token"].as_str().unwrap().to_string(), ())
+    };
+    assert!(mcp_alive(&env, &token).await);
+    identity::admin_set_password(&env.pool, OWNER_EMAIL, "operator set passphrase")
+        .await
+        .unwrap();
+    assert!(!web_alive(&env, &cookie).await);
+    assert!(!mcp_alive(&env, &token).await);
+    assert_eq!(live_grants(&env).await, 0);
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn enabling_a_disabled_account_brings_back_no_session_token_or_grant(pool: PgPool) {
+    let env = setup(pool).await;
+    let (token, refresh) = token_pair(&env, ALL_SCOPE_TEXT, ALL_SCOPES).await;
+    assert!(web_alive(&env, &env.owner_cookie).await && mcp_alive(&env, &token).await);
+    // The operator's switch (what `admin-cli user-disable` / `user-enable` do).
+    penfii_core::admin::operator_set_account_disabled(&env.pool, OWNER_EMAIL, true)
+        .await
+        .unwrap();
+    assert!(!web_alive(&env, &env.owner_cookie).await);
+    assert!(!mcp_alive(&env, &token).await);
+    penfii_core::admin::operator_set_account_disabled(&env.pool, OWNER_EMAIL, false)
+        .await
+        .unwrap();
+    // Nothing from before comes back.
+    assert!(!web_alive(&env, &env.owner_cookie).await, "the old session");
+    assert!(!mcp_alive(&env, &token).await, "the old access token");
+    let refreshed = form(
+        &env.app,
+        "/oauth/token",
+        &[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", &refresh),
+            ("client_id", CLIENT),
+        ],
+    )
+    .await;
+    assert_ne!(refreshed.status, StatusCode::OK, "the old refresh token");
+    assert_eq!(live_grants(&env).await, 0);
+    // Signing in again works and gives a new session only.
+    let again = login(&env.app, OWNER_EMAIL, OWNER_PASSWORD).await;
+    assert!(web_alive(&env, &again).await);
+    assert!(!mcp_alive(&env, &token).await);
+}
+
+/// FEA-143: a client whose document cannot be fetched now stays known from the stored copy, one address
+/// cannot make the server fetch without bound, and a self-registered app is told apart on the consent page.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn client_lookups_have_a_budget_per_address_and_fall_back_to_the_stored_copy(pool: PgPool) {
+    use penfii_core::oauth::client::{Lookup, resolve};
+    let env = setup(pool).await;
+    let config = OAuthConfig::new(PUBLIC, Arc::new(env.clients.clone())).unwrap();
+    let mut small = penfii_core::ThrottleLimits::default();
+    small.address.max_failures = 3;
+    let from = |address: &'static str| Lookup {
+        address: Some(address),
+        throttle: &small,
+    };
+    let document = |url: &str| json!({"client_id": url, "client_name": "App", "redirect_uris": [CALLBACK], "token_endpoint_auth_method": "none"});
+    let url = |n: u32| format!("https://app{n}.example/oauth/client.json");
+    for n in 0..8 {
+        env.clients
+            .0
+            .lock()
+            .unwrap()
+            .insert(url(n), document(&url(n)));
+    }
+
+    // Three lookups of unknown documents from one address are fetched; the fourth is refused, and the
+    // other address is not affected.
+    for n in 0..3 {
+        resolve(&env.pool, &config, &url(n), from("203.0.113.7"))
+            .await
+            .unwrap();
+    }
+    assert!(matches!(
+        resolve(&env.pool, &config, &url(3), from("203.0.113.7")).await,
+        Err(CoreError::RateLimited { .. })
+    ));
+    resolve(&env.pool, &config, &url(3), from("203.0.113.8"))
+        .await
+        .unwrap();
+    // A client already stored and fresh needs no fetch, so the used budget does not matter.
+    resolve(&env.pool, &config, &url(0), from("203.0.113.7"))
+        .await
+        .unwrap();
+
+    // The stored copy goes stale and the host is down (or the asker's budget is spent): the client is
+    // still known from the stored copy, with its redirect URIs.
+    sqlx::query("UPDATE penfii.oauth_clients SET expires_at = now() - interval '1 hour'")
+        .execute(&env.pool)
+        .await
+        .unwrap();
+    env.clients.0.lock().unwrap().remove(&url(1));
+    let kept = resolve(&env.pool, &config, &url(1), from("203.0.113.9"))
+        .await
+        .unwrap();
+    assert_eq!(kept.redirect_uris, vec![CALLBACK.to_string()]);
+    let kept = resolve(&env.pool, &config, &url(2), from("203.0.113.7"))
+        .await
+        .unwrap();
+    assert_eq!(kept.name, "App");
+    // A client that was never known is not invented, and a disabled one stays refused.
+    assert!(
+        resolve(
+            &env.pool,
+            &config,
+            &url(1).replace("app1", "never"),
+            from("203.0.113.9")
+        )
+        .await
+        .is_err()
+    );
+    sqlx::query("UPDATE penfii.oauth_clients SET disabled_at = now() WHERE client_id = $1")
+        .bind(url(1))
+        .execute(&env.pool)
+        .await
+        .unwrap();
+    assert!(matches!(
+        resolve(&env.pool, &config, &url(1), from("203.0.113.9")).await,
+        Err(CoreError::NotFound)
+    ));
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn the_consent_page_says_where_a_client_comes_from_and_a_never_used_client_row_is_purged(
+    pool: PgPool,
+) {
+    use penfii_core::oauth::retention::{Retention, purge};
+    let env = setup(pool).await;
+    let start = get_plain(
+        &env.app,
+        &authorize_path(
+            CLIENT,
+            CALLBACK,
+            "workspace:read",
+            &challenge_of(VERIFIER),
+            "s",
+        ),
+    )
+    .await;
+    let id = request_id(&start.location.unwrap());
+    let view = api(
+        &env.app,
+        "GET",
+        &format!("/v1/oauth/requests/{id}"),
+        Some(&env.owner_cookie),
+        None,
+    )
+    .await;
+    assert_eq!(view.body["clientKind"], "cimd", "{}", view.body);
+    assert_eq!(view.body["clientHost"], "client.example");
+
+    // A self-registered app is marked as such and has no host that vouches for it.
+    let registered = send(
+        &env.app,
+        Request::builder()
+            .method("POST")
+            .uri("/oauth/register")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"client_name": "Self Made", "redirect_uris": [CALLBACK], "token_endpoint_auth_method": "none"}).to_string(),
+            ))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        registered.status,
+        StatusCode::CREATED,
+        "{}",
+        registered.body
+    );
+    let dcr = registered.body["client_id"].as_str().unwrap().to_string();
+    let start = get_plain(
+        &env.app,
+        &authorize_path(
+            &dcr,
+            CALLBACK,
+            "workspace:read",
+            &challenge_of(VERIFIER),
+            "s",
+        ),
+    )
+    .await;
+    let id = request_id(&start.location.unwrap());
+    let view = api(
+        &env.app,
+        "GET",
+        &format!("/v1/oauth/requests/{id}"),
+        Some(&env.owner_cookie),
+        None,
+    )
+    .await;
+    assert_eq!(view.body["clientKind"], "dcr");
+    assert!(view.body["clientHost"].is_null());
+
+    // Document clients nobody ever connected are cleaned up after a week like unused registrations; one
+    // that has a request, or a grant, stays.
+    sqlx::query("UPDATE penfii.oauth_clients SET fetched_at = now() - interval '8 days'")
+        .execute(&env.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO penfii.oauth_clients (id, client_id, kind, client_name, redirect_uris, fetched_at) VALUES ($1, 'https://idle.example/c.json', 'cimd', 'Idle', '[]', now() - interval '8 days')")
+        .bind(Uuid::new_v4())
+        .execute(&env.pool)
+        .await
+        .unwrap();
+    purge(&env.pool, Retention::from_env().unwrap())
+        .await
+        .unwrap();
+    let left: Vec<String> =
+        sqlx::query_scalar("SELECT client_id FROM penfii.oauth_clients ORDER BY 1")
+            .fetch_all(&env.pool)
+            .await
+            .unwrap();
+    assert!(
+        !left.contains(&"https://idle.example/c.json".to_string()),
+        "{left:?}"
+    );
+    assert!(
+        left.contains(&CLIENT.to_string()),
+        "a client with an open request stays: {left:?}"
+    );
+}
+
+/// Starting authorizations from one address has a limit of its own, larger than the sign-in limit of an
+/// address, so a shared address does not run out of either because of the other.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn authorization_starts_have_their_own_larger_budget_per_address(pool: PgPool) {
+    use penfii_core::oauth::client::Lookup;
+    use penfii_core::oauth::server::{AuthorizeParams, AuthorizeResult, begin_authorization};
+    let env = setup(pool).await;
+    let config = OAuthConfig::new(PUBLIC, Arc::new(env.clients.clone())).unwrap();
+    let mut small = penfii_core::ThrottleLimits::default();
+    small.address.max_failures = 3;
+    let lookup = Lookup {
+        address: Some("203.0.113.70"),
+        throttle: &small,
+    };
+    let start = || begin_authorization(&env.pool, &config, AuthorizeParams::default(), lookup);
+    let refused = |result: &AuthorizeResult| matches!(result, AuthorizeResult::Page(text) if text.starts_with("Too many requests"));
+    // Four times the sign-in limit of the address are answered (here: a page about the missing client).
+    for n in 0..12 {
+        let result = start().await.unwrap();
+        assert!(!refused(&result), "start {n} was refused");
+    }
+    assert!(refused(&start().await.unwrap()));
+    // The sign-in counter of that address was not touched.
+    let login_ip: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM penfii.auth_throttle WHERE scope = 'login_ip'")
+            .fetch_one(&env.pool)
+            .await
+            .unwrap();
+    assert_eq!(login_ip, 0);
+}

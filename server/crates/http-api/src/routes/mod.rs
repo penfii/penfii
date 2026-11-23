@@ -4,7 +4,7 @@
 
 mod conversation;
 mod directory;
-mod files;
+pub(crate) mod files;
 mod inbox;
 mod organization;
 mod personal;

@@ -22,6 +22,13 @@ pub enum CoreError {
     ReauthRequired {
         methods: Vec<String>,
     },
+    /// The password was right and the account has two-step verification on: the sign-in needs a code
+    /// (HTTP 401 `mfa_required`).
+    MfaRequired,
+    /// A signed-in action that asks for a code (turning two-step verification on or off, new recovery
+    /// codes) was given a wrong one (HTTP 401 `mfa_code_invalid`). Unlike `Unauthenticated`, the
+    /// session is still valid. Never used by sign-in, which answers every wrong secret alike.
+    MfaCodeInvalid,
     /// Too many failed attempts (HTTP 429).
     RateLimited {
         retry_after_seconds: i64,

@@ -1167,3 +1167,149 @@ async fn the_gantt_list_has_schedules_with_derived_ends_visible_edges_and_pages(
     .await;
     assert_eq!(only["items"].as_array().unwrap().len(), 1);
 }
+
+/// A trashed Ticket still counts in a Sprint's figures (they are history and do not change), but its key
+/// and title are listed only for a Project admin, as in the trash list (FEA-135): the report's rows and
+/// scope changes and the Sprint's results leave it out for everyone else, and the close preview, which
+/// only an admin can open, lists it by key and title and nothing more (an unfinished one is not offered to
+/// be carried on).
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_trashed_ticket_counts_in_sprint_figures_but_is_listed_only_for_a_project_admin(
+    pool: PgPool,
+) {
+    let world = &World::new(pool).await;
+    let workspace_id = world.workspace_id;
+    let (project_id, workflow) = new_project(world, workspace_id, "Report trash").await;
+    let done = state_id(&workflow, "DONE");
+    let (s, v) = set_unit(world, &project_id, "POINTS").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let keep = estimated_ticket(world, &project_id, "ft-keep", "Kept work", Some("3")).await;
+    let gone = estimated_ticket(world, &project_id, "ft-gone", "Trashed work", Some("8")).await;
+    let finished = estimated_ticket(
+        world,
+        &project_id,
+        "ft-fin",
+        "Finished then trashed",
+        Some("5"),
+    )
+    .await;
+    let (sprint, _) = new_sprint(world, &project_id, "Trash sprint", "ft-sprint").await;
+    for (i, t) in [&keep, &gone, &finished].into_iter().enumerate() {
+        assign_to(world, t, Some(&sprint), &format!("ft-as{i}")).await;
+    }
+    sprint_command_as_owner(world, &project_id, &sprint, "start", "ft-start").await;
+    move_to(world, &finished, &done, 1, "ft-fin-done").await;
+    let viewer = viewer_cookie(world, workspace_id, "ft-viewer@penfii.test").await;
+    grant(
+        world,
+        &project_id,
+        user_id_of(world, "ft-viewer@penfii.test").await,
+        "EDITOR",
+    )
+    .await;
+    let before_viewer = report_of(world, &viewer, &sprint).await;
+    assert_eq!(amount(&before_viewer["startPlan"]), ("16".into(), 3, 0, 0));
+    for (id, key) in [(&gone, "ft-trash1"), (&finished, "ft-trash2")] {
+        let (s, v) = post_as(
+            world,
+            &world.owner_cookie,
+            &format!("/v1/tickets/{id}/commands/trash"),
+            key,
+            json!({}),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NO_CONTENT, "{v}");
+    }
+    let hidden = ["Trashed work", "Finished then trashed"];
+    // Figures are unchanged for both people; the viewer's lists have only the live Ticket.
+    let admin_report = report_of(world, &world.owner_cookie, &sprint).await;
+    let viewer_report = report_of(world, &viewer, &sprint).await;
+    for report in [&admin_report, &viewer_report] {
+        assert_eq!(amount(&report["startPlan"]), ("16".into(), 3, 0, 0));
+        assert_eq!(amount(&report["completed"]).0, "5");
+    }
+    assert_eq!(admin_report["tickets"].as_array().unwrap().len(), 3);
+    assert_eq!(viewer_report["tickets"].as_array().unwrap().len(), 1);
+    for text in hidden
+        .iter()
+        .copied()
+        .chain([gone.as_str(), finished.as_str()])
+    {
+        assert!(
+            !viewer_report.to_string().contains(text),
+            "{text}: {viewer_report}"
+        );
+        assert!(admin_report.to_string().contains(text), "{text}");
+    }
+    // The preview is the admin's; a trashed Ticket is listed by key and title only. An unfinished
+    // trashed one is not offered to be carried on (closing releases it), so only the live one is.
+    let (s, preview) = get_as(
+        world,
+        &world.owner_cookie,
+        &format!("/v1/sprints/{sprint}/close-preview"),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{preview}");
+    assert!(
+        preview["done"]
+            .to_string()
+            .contains("Finished then trashed")
+    );
+    let carried: Vec<&str> = preview["unfinished"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|ticket| ticket["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(carried, ["Kept work"], "{preview}");
+    for ticket in preview["unfinished"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(preview["done"].as_array().unwrap())
+    {
+        let mut fields: Vec<&String> = ticket.as_object().unwrap().keys().collect();
+        fields.sort();
+        assert_eq!(fields, ["hierarchyKind", "id", "key", "title"], "{ticket}");
+    }
+    let (s, _) = get_as(
+        world,
+        &viewer,
+        &format!("/v1/sprints/{sprint}/close-preview"),
+    )
+    .await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    sprint_command_as_owner(world, &project_id, &sprint, "complete", "ft-close").await;
+    // Results after the close.
+    let (s, admin_results) = get_as(
+        world,
+        &world.owner_cookie,
+        &format!("/v1/sprints/{sprint}/results"),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{admin_results}");
+    let (s, viewer_results) =
+        get_as(world, &viewer, &format!("/v1/sprints/{sprint}/results")).await;
+    assert_eq!(s, StatusCode::OK, "{viewer_results}");
+    assert_eq!(admin_results["results"].as_array().unwrap().len(), 3);
+    assert_eq!(viewer_results["results"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        viewer_results["baselineCount"],
+        admin_results["baselineCount"]
+    );
+    for text in hidden
+        .iter()
+        .copied()
+        .chain([gone.as_str(), finished.as_str()])
+    {
+        assert!(
+            !viewer_results.to_string().contains(text),
+            "{text}: {viewer_results}"
+        );
+    }
+    // The closed Sprint's figures are the same as they were, for both.
+    let closed_viewer = report_of(world, &viewer, &sprint).await;
+    assert_eq!(amount(&closed_viewer["startPlan"]), ("16".into(), 3, 0, 0));
+    assert_eq!(amount(&closed_viewer["completed"]).0, "5");
+    assert_eq!(closed_viewer["tickets"].as_array().unwrap().len(), 1);
+}

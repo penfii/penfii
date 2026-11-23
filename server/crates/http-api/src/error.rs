@@ -85,6 +85,16 @@ impl ApiError {
                 "recent authentication is required",
                 json!({"methods": methods}),
             ),
+            CoreError::MfaRequired => Self::coded(
+                StatusCode::UNAUTHORIZED,
+                "mfa_required",
+                "a verification code is required",
+            ),
+            CoreError::MfaCodeInvalid => Self::coded(
+                StatusCode::UNAUTHORIZED,
+                "mfa_code_invalid",
+                "the verification code is not valid",
+            ),
             CoreError::RateLimited {
                 retry_after_seconds,
             } => Self::coded_with(

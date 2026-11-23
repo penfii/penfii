@@ -1417,5 +1417,7 @@ export type FormerManager = Schema<'FormerManager'>
 /** A private channel nobody who can act manages; a Workspace owner or admin may name a manager for it. */
 export type ChannelWithoutManager = Schema<'ChannelWithoutManager'>
 export type ManagerRecovery = Schema<'ManagerRecovery'>
+/** A Doc page nobody manages (title, creator and times only); a Workspace owner or admin may name a manager for it. */
+export type DocWithoutManager = Schema<'DocWithoutManager'>
 /** A private channel of a Project as its admin sees it, readable or not: names and counts, never messages. */
 export type ManagedChannel = Schema<'ManagedChannel'>

@@ -4,7 +4,8 @@
 //! only one that changes them: migrations run with its credential (`PENFII_MIGRATION_DATABASE_URL`,
 //! `admin-cli migrate`). The **runtime** role is what core-api and the other `admin-cli` commands
 //! connect as (`DATABASE_URL`): it can read and write rows and nothing else (no DDL, no
-//! `CREATE ROLE`/`CREATEDB`, not a superuser, not an owner). Role creation and privilege changes need
+//! `CREATE ROLE`/`CREATEDB`, not a superuser, not an owner). It appends to and reads the audit log
+//! (`audit_entries`) but cannot update or delete an entry, and reads the migration history only. Role creation and privilege changes need
 //! a privileged credential (`PENFII_PROVISION_DATABASE_URL`, normally the bootstrap superuser of the
 //! PostgreSQL server); they are not part of the schema migrations and they are not in a `pg_dump` of
 //! the database, so a restored database needs this run again (it is safe to repeat).
@@ -15,7 +16,7 @@
 
 use sqlx::{Connection, PgConnection};
 
-use crate::migrate::SCHEMA;
+use crate::migrate::{PROTECTED_TABLES, SCHEMA};
 
 /// What to provision.
 pub struct Provision {
@@ -190,20 +191,26 @@ async fn apply(conn: &mut PgConnection, plan: &Provision) -> Result<Provisioned,
         &[owner, SCHEMA, runtime],
     )
     .await?;
-    // The migration history is read, never written, by the runtime role. When it exists already (an
-    // installation from before the split) the rights it got above are taken back here; the rest of
-    // the time `admin-cli migrate` does the same after it ran.
-    let history: bool =
-        sqlx::query_scalar("SELECT to_regclass('penfii._sqlx_migrations') IS NOT NULL")
-            .fetch_one(&mut *tx)
-            .await?;
-    if history {
-        run(
-            &mut tx,
-            "SELECT format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON %I._sqlx_migrations FROM %I', $1::text, $2::text)",
-            &[SCHEMA, runtime],
+    // The migration history is read, never written, and the audit log is appended to and read, never
+    // changed, by the runtime role. When those tables exist already (an installation from before the
+    // split, a restored database) the rights they got above are taken back here; the rest of the
+    // time `admin-cli migrate` does the same after it ran.
+    for (table, revoked) in PROTECTED_TABLES {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT to_regclass(format('%I.%I', $1::text, $2::text)) IS NOT NULL",
         )
+        .bind(SCHEMA)
+        .bind(table)
+        .fetch_one(&mut *tx)
         .await?;
+        if exists {
+            run(
+                &mut tx,
+                &format!("SELECT format('REVOKE {revoked} ON %I.%I FROM %I', $1::text, $2::text, $3::text)"),
+                &[SCHEMA, table, runtime],
+            )
+            .await?;
+        }
     }
     tx.commit().await?;
     Ok(done)

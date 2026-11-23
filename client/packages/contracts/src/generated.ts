@@ -75,7 +75,7 @@ export interface paths {
                         "application/json": components["schemas"]["User"];
                     };
                 };
-                /** @description invalid credentials */
+                /** @description invalid credentials (a wrong password or code, and an unknown account, answer alike), or code `mfa_required`: the password was right and the account has two-step verification on, so send the same request again with `code` */
                 401: {
                     headers: {
                         [name: string]: unknown;
@@ -166,8 +166,43 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Set a new password with the token of a reset link. The password follows the usual rule (15 to 128 characters, not a known weak one); a password that breaks it is refused with 400 and the link stays usable. On success every session of the account ends, and the person signs in again; nothing signs them in. A token that is unknown, used, replaced or expired, or whose account is disabled, is refused the same way (409 reset_token_invalid). */
+        /** Set a new password with the token of a reset link. The password follows the usual rule (15 to 128 characters, not a known weak one); a password that breaks it is refused with 400 and the link stays usable. On success every session of the account and every connected app (OAuth/MCP grant) ends, and the person signs in again; nothing signs them in. A token that is unknown, used, replaced or expired, or whose account is disabled, is refused the same way (409 reset_token_invalid). */
         post: operations["confirmPasswordReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/email-change": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The e-mail change of the caller that is waiting for its link to be opened, or null. The account keeps its current address until then. */
+        get: operations["getPendingEmailChange"];
+        put?: never;
+        /** Start changing the caller's e-mail address: a confirmation link is mailed to the new address, and the address changes only when it is opened (POST /v1/auth/email-change/confirm). Until then the account signs in and recovers with its current address. Needs a recent authentication (403 reauth_required) and a server that sends e-mail (409 email_change_unavailable: ask the instance operator, who uses admin-cli user-set-email). 409 account_exists when another account has the address, 429 when asked too often. Asking again replaces the waiting change. */
+        post: operations["requestEmailChange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/auth/email-change/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Use the link mailed to a new address: the address becomes the account's, verified, and the old address is told. The link is the proof, so no session is needed (it is often opened on another device). A token that is unknown, used, replaced or expired, or whose account is disabled, is refused the same way (409 email_change_token_invalid). */
+        post: operations["confirmEmailChange"];
         delete?: never;
         options?: never;
         head?: never;
@@ -235,7 +270,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Change the caller's profile */
+        /** Change the caller's profile: display name and password. The e-mail field must be the account's current address (in any letter case): a different one is refused with 409 email_change_requires_verification, use POST /v1/me/email-change. A changed password keeps this session and ends the account's other web sessions; connected apps (MCP) stay. */
         patch: operations["updateMe"];
         trace?: never;
     };
@@ -4227,7 +4262,7 @@ export interface paths {
         };
         /** The bytes of an uploaded file the caller owns */
         get: operations["downloadFileContent"];
-        /** Send the bytes of an upload */
+        /** Send the bytes of an upload. The file must be a pending upload of the caller with this exact size (otherwise 404 or 409 before the body is read). While many uploads are in flight the call may wait for a share of memory and then answer 503 `upload_busy` (`retryAfterSeconds` in the body); send it again. A body that sends nothing for 30 seconds is refused with 408 `upload_timeout`; send it again. */
         put: operations["uploadFileContent"];
         post?: never;
         delete?: never;
@@ -4748,6 +4783,91 @@ export interface paths {
         get: operations["getDocVersion"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/mfa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Two-step verification of the caller: whether it is on and how many recovery codes are left */
+        get: operations["getMfaStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/mfa/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start setting up an authenticator app: a new secret that protects nothing until enabled. Needs a recent authentication */
+        post: operations["startMfaSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/mfa/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Turn two-step verification on with a current code of the new secret. Ends the caller's other web sessions (this one and connected apps stay) and returns the recovery codes once */
+        post: operations["enableMfa"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/mfa/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Turn two-step verification off. Needs a recent authentication and a current authenticator or recovery code. Ends the caller's other web sessions (this one and connected apps stay) */
+        post: operations["disableMfa"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/mfa/recovery-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Replace all recovery codes by ten new ones. Needs a recent authentication and a current authenticator or recovery code */
+        post: operations["regenerateMfaRecoveryCodes"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5704,6 +5824,13 @@ export interface paths {
                             id?: string;
                             clientName?: string;
                             clientId?: string;
+                            /**
+                             * @description how the app is known: cimd (a metadata document published at clientId), dcr (the app registered itself; nothing verifies the name it gave) or preregistered
+                             * @enum {string}
+                             */
+                            clientKind?: "cimd" | "dcr" | "preregistered";
+                            /** @description for a cimd app, the host that publishes the metadata document the name comes from */
+                            clientHost?: string | null;
                             redirectHost?: string;
                             loopback?: boolean;
                             scopes?: {
@@ -6882,6 +7009,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/workspaces/{id}/docs-without-manager": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Doc pages (not deleted) shared with a Project or with invited people that have no active manager, for example after their last manager was removed from the Workspace. A manager is active when they are an active member of the Workspace with an enabled account. Pages open to the whole Workspace are not listed. Title, creator and times only, never content. Workspace owner or admin only. */
+        get: operations["listDocsWithoutManager"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/docs/{id}/manager-recovery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A Workspace owner or admin names a manager for a Doc page that is shared with a Project or with invited people and has no active manager. Only that: it gives the caller no access to the page, and the named person (who may be the caller) becomes its manager and so can read and edit it (`newAccess` says whether they could not read it before). A page with an active manager is refused (409 `doc_has_manager`), and so is one open to the whole Workspace (409 `doc_not_restricted`). Needs a recent sign-in. Audited as `doc.manager_recovered`. */
+        post: operations["recoverDocManager"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/workspaces/{id}/channels-without-manager": {
         parameters: {
             query?: never;
@@ -7498,13 +7659,13 @@ export interface components {
             /** @description A fixed short phrase saying why a FAILED delivery failed. Present only with FAILED. */
             emailError?: string;
         };
-        /** @description What became of an invitation's Team step. JOINED: the person is in the Team as MEMBER. ARCHIVED or GONE: the person joined the Workspace only. */
+        /** @description What became of an invitation's Team step. JOINED: the person is in the Team as MEMBER. ARCHIVED or GONE: the Team is archived or gone. ALREADY_MEMBER: the person was already an active member of the Workspace, so the Team is left to a Team manager. SELF_PROMOTION: the inviter accepted their own invitation into a Team that would make them an admin of a Project they do not administer. Every status but JOINED means the person joined the Workspace only. */
         InvitationTeamOutcome: {
             /** Format: uuid */
             teamId: string | null;
             teamName: string;
             /** @enum {string} */
-            status: "JOINED" | "ARCHIVED" | "GONE";
+            status: "JOINED" | "ARCHIVED" | "GONE" | "ALREADY_MEMBER" | "SELF_PROMOTION";
         };
         /** @description A Project linked to a Team, as the person asking sees it: the Team's participation role and the person's own access, never another member's. */
         TeamProject: {
@@ -7528,7 +7689,7 @@ export interface components {
             user?: components["schemas"]["User"];
             /** Format: uuid */
             workspaceId?: string;
-            /** @description Present when the invitation named a Team: JOINED, or ARCHIVED / GONE (Workspace only). */
+            /** @description Present when the invitation named a Team: JOINED, or ARCHIVED / GONE / ALREADY_MEMBER / SELF_PROMOTION (Workspace only). */
             team?: components["schemas"]["InvitationTeamOutcome"];
         };
         Team: {
@@ -7730,6 +7891,8 @@ export interface components {
         LoginRequest: {
             email: string;
             password: string;
+            /** @description The authenticator or recovery code, for an account with two-step verification on. */
+            code?: string | null;
         };
         CreateWorkspace: {
             name: string;
@@ -8198,6 +8361,20 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
+        DocWithoutManager: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+            /** @enum {string} */
+            visibility: "PROJECT" | "RESTRICTED";
+            /** Format: uuid */
+            createdBy: string;
+            createdByName: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
         ManagerRecovery: {
             newAccess: boolean;
         };
@@ -8540,6 +8717,153 @@ export interface operations {
                 };
             };
             /** @description reset_token_invalid */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            503: components["responses"]["DbUnavailable"];
+        };
+    };
+    getPendingEmailChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the waiting change, or null */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        email?: string;
+                        /** Format: date-time */
+                        expiresAt?: string;
+                    } | null;
+                };
+            };
+            /** @description unauthenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            503: components["responses"]["DbUnavailable"];
+        };
+    };
+    requestEmailChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    email: string;
+                };
+            };
+        };
+        responses: {
+            /** @description the link was mailed; the change is waiting */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        email?: string;
+                        /** Format: date-time */
+                        expiresAt?: string;
+                    };
+                };
+            };
+            /** @description validation */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description unauthenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description reauth_required or csrf */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description email_change_unavailable, account_exists or email_not_sent */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description rate_limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            503: components["responses"]["DbUnavailable"];
+        };
+    };
+    confirmEmailChange: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required on every mutation. Missing yields 403 csrf. */
+                "X-Penfii-Client": components["parameters"]["Client"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    token: string;
+                };
+            };
+        };
+        responses: {
+            /** @description the address was changed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description email_change_token_invalid, or account_exists when the address was taken meanwhile */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12835,6 +13159,15 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            /** @description upload_timeout: the body stopped arriving */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             503: components["responses"]["DbUnavailable"];
         };
     };
@@ -14371,6 +14704,318 @@ export interface operations {
             503: components["responses"]["DbUnavailable"];
         };
     };
+    getMfaStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        enabled: boolean;
+                        /** Format: date-time */
+                        enabledAt: string | null;
+                        recoveryCodesRemaining: number;
+                        /** @description A setup was started and not confirmed; it protects nothing yet. */
+                        setupPending: boolean;
+                    };
+                };
+            };
+            /** @description unauthenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            503: components["responses"]["DbUnavailable"];
+        };
+    };
+    startMfaSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description secret and provisioning URI */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description The shared secret as grouped Base32 text. */
+                        secret: string;
+                        otpauthUri: string;
+                    };
+                };
+            };
+            /** @description unauthenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description reauth_required or csrf */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description mfa_already_enabled */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            503: components["responses"]["DbUnavailable"];
+        };
+    };
+    enableMfa: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description A current authenticator code (6 digits) or an unused recovery code. */
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description recovery codes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Ten single-use codes, shown only in this answer. */
+                        recoveryCodes: string[];
+                    };
+                };
+            };
+            /** @description validation */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description mfa_code_invalid: the code is wrong (the session is still valid); unauthenticated: the session ended */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description reauth_required or csrf */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description mfa_setup_not_started */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description rate_limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            503: components["responses"]["DbUnavailable"];
+        };
+    };
+    disableMfa: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description A current authenticator code (6 digits) or an unused recovery code. */
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description done */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description validation */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description mfa_code_invalid: the code is wrong (the session is still valid); unauthenticated: the session ended */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description reauth_required or csrf */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description mfa_not_enabled */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description rate_limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            503: components["responses"]["DbUnavailable"];
+        };
+    };
+    regenerateMfaRecoveryCodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description A current authenticator code (6 digits) or an unused recovery code. */
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description recovery codes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Ten single-use codes, shown only in this answer. */
+                        recoveryCodes: string[];
+                    };
+                };
+            };
+            /** @description validation */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description mfa_code_invalid: the code is wrong (the session is still valid); unauthenticated: the session ended */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description reauth_required or csrf */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description mfa_not_enabled */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description rate_limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            503: components["responses"]["DbUnavailable"];
+        };
+    };
     getHealth: {
         parameters: {
             query?: never;
@@ -14920,6 +15565,15 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            /** @description team_self_promotion: adding yourself would make you an admin of a Project you do not administer yet (through the Team's admin role on it); another manager or the Project's admin adds you, or you are named by the Project's own recovery */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             503: components["responses"]["DbUnavailable"];
         };
     };
@@ -15205,6 +15859,133 @@ export interface operations {
             };
             /** @description Not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            503: components["responses"]["DbUnavailable"];
+        };
+    };
+    listDocsWithoutManager: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pages without a manager */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["DocWithoutManager"][];
+                    };
+                };
+            };
+            /** @description unauthenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description not owner or admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description not a member */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            503: components["responses"]["DbUnavailable"];
+        };
+    };
+    recoverDocManager: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    userId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description recovered */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagerRecovery"];
+                };
+            };
+            /** @description the person is not an active member of the Workspace, or their account is disabled */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description unauthenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description not owner or admin, or reauth_required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description no such page or not a member */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description doc_has_manager, or doc_not_restricted */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

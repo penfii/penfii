@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use sqlx::PgPool;
-use sqlx::migrate::Migrator;
+use sqlx::migrate::{Migrate, Migrator};
 use sqlx::postgres::PgPoolOptions;
 
 /// Connections in the pool when `PENFII_DB_MAX_CONNECTIONS` is not set.
@@ -80,6 +80,18 @@ pub async fn require_current_schema(pool: &PgPool) -> Result<(), String> {
             });
         }
     };
+    let split: Vec<(i64, String, bool)> = applied
+        .iter()
+        .map(|(version, checksum, success)| (*version, hex::encode(checksum), *success))
+        .collect();
+    if holds_split_0003(&split) {
+        return Err(
+            "the migration history holds the pre-release split migrations 0003-0007, which this build \
+             has as one 0003. Run `admin-cli migrate` with PENFII_MIGRATION_DATABASE_URL set (it \
+             rewrites that history when it is complete and unchanged), then start again"
+                .to_string(),
+        );
+    }
     for migration in MIGRATOR
         .iter()
         .filter(|m| !m.migration_type.is_down_migration())
@@ -115,31 +127,50 @@ pub async fn require_current_schema(pool: &PgPool) -> Result<(), String> {
     Ok(())
 }
 
-/// After a migration run: the runtime role may read the migration history but never write it, even
-/// though the default privileges of the schema give it the DML rights on every new table (the history
-/// table is made by the first migration run). Takes those rights away from every role but the
-/// owner. Safe to run again.
+/// After a migration run: the runtime role may read the migration history but never write it, and it
+/// may append to and read the audit log but never change or delete an entry, even though the default
+/// privileges of the schema give it the DML rights on every new table (both tables are made by a
+/// migration run). Takes those rights away from every role but the owner. Safe to run again.
 pub async fn protect_history(pool: &PgPool) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "DO $$
-         DECLARE grantee_name text;
-         BEGIN
-             FOR grantee_name IN
-                 SELECT DISTINCT pg_get_userbyid(a.grantee)
-                 FROM pg_class c, LATERAL aclexplode(c.relacl) a
-                 WHERE c.oid = 'penfii._sqlx_migrations'::regclass
-                   AND a.grantee <> 0 AND a.grantee <> c.relowner
-                   AND a.privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')
-             LOOP
-                 EXECUTE format(
-                     'REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON penfii._sqlx_migrations FROM %I',
-                     grantee_name);
-             END LOOP;
-         END $$",
-    )
-    .execute(pool)
-    .await?;
+    for (table, revoked) in PROTECTED_TABLES {
+        sqlx::query(&format!(
+            "DO $$
+             DECLARE grantee_name text;
+             BEGIN
+                 IF to_regclass('penfii.{table}') IS NULL THEN RETURN; END IF;
+                 FOR grantee_name IN
+                     SELECT DISTINCT pg_get_userbyid(a.grantee)
+                     FROM pg_class c, LATERAL aclexplode(c.relacl) a
+                     WHERE c.oid = 'penfii.{table}'::regclass
+                       AND a.grantee <> 0 AND a.grantee <> c.relowner
+                       AND a.privilege_type IN ({privileges})
+                 LOOP
+                     EXECUTE format(
+                         'REVOKE {revoked} ON penfii.{table} FROM %I',
+                         grantee_name);
+                 END LOOP;
+             END $$",
+            privileges = quoted_list(revoked),
+        ))
+        .execute(pool)
+        .await?;
+    }
     Ok(())
+}
+
+/// The tables whose rows the runtime role must not change, with the rights it loses on them.
+/// `_sqlx_migrations` is read only; `audit_entries` is append only (INSERT and SELECT stay).
+pub(crate) const PROTECTED_TABLES: [(&str, &str); 2] = [
+    ("_sqlx_migrations", "INSERT, UPDATE, DELETE, TRUNCATE"),
+    ("audit_entries", "UPDATE, DELETE, TRUNCATE"),
+];
+
+fn quoted_list(privileges: &str) -> String {
+    privileges
+        .split(", ")
+        .map(|name| format!("'{name}'"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The schema every Penfii table lives in. The migration history table lives in it too, so
@@ -157,16 +188,37 @@ static MIGRATOR: Migrator = sqlx::migrate!("../../../database/migrations");
 /// file starts with `-- no-transaction` (needed for `CREATE INDEX CONCURRENTLY`; sqlx sends the
 /// file as one script, so a failed script still rolls back, while a crash after the script and
 /// before its history row does not), and never runs a version twice.
-pub async fn apply_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
-    run_migrator(pool, &MIGRATOR, SCHEMA).await
+///
+/// Before that, a history recorded by a development build with the split 0003-0007 files is turned
+/// into the one `0003` of this build ([`consolidate_split_0003`]); the result says whether it was.
+pub async fn apply_migrations(pool: &PgPool) -> Result<MigrationRun, sqlx::Error> {
+    run(pool, &MIGRATOR, SCHEMA, true).await
 }
 
-/// [`apply_migrations`] for any migrator and schema; the tests use it with their own.
+/// What [`apply_migrations`] did besides applying pending files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MigrationRun {
+    /// The history held the five split files 0003-0007, applied and unchanged, and now holds the
+    /// consolidated `0003` instead (nothing was applied again).
+    pub consolidated_split_0003: bool,
+}
+
+/// [`apply_migrations`] for any migrator and schema; the tests use it with their own. It never
+/// rewrites a history.
 pub async fn run_migrator(
     pool: &PgPool,
     migrator: &Migrator,
     schema: &str,
 ) -> Result<(), sqlx::Error> {
+    run(pool, migrator, schema, false).await.map(|_| ())
+}
+
+async fn run(
+    pool: &PgPool,
+    migrator: &Migrator,
+    schema: &str,
+    consolidate: bool,
+) -> Result<MigrationRun, sqlx::Error> {
     let mut conn = pool.acquire().await?;
     // Two instances may start together; the loser of the race finds the schema already there.
     if let Err(error) = sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
@@ -183,7 +235,7 @@ pub async fn run_migrator(
     sqlx::query(&format!("SET search_path TO {schema}, public"))
         .execute(&mut *conn)
         .await?;
-    let outcome = guarded_run(&mut conn, migrator, schema).await;
+    let outcome = guarded_run(&mut conn, migrator, schema, consolidate).await;
     // sqlx takes a session-level advisory lock and releases it only when the run succeeds; after an
     // error the lock would stay with this pooled connection and block every later run. Closing the
     // connection releases it (and also drops the changed search path).
@@ -202,7 +254,8 @@ async fn guarded_run(
     conn: &mut sqlx::PgConnection,
     migrator: &Migrator,
     schema: &str,
-) -> Result<(), sqlx::Error> {
+    consolidate: bool,
+) -> Result<MigrationRun, sqlx::Error> {
     // A database made before the migration history was reset (the development migrations 0001-0030)
     // has the tables but no history. Running the first file over it would fail halfway on "already
     // exists"; say what to do instead.
@@ -220,12 +273,188 @@ async fn guarded_run(
              (see docs/development.md, \"Resetting a development database\")."
         )));
     }
+    let mut consolidated_split_0003 = false;
+    if consolidate && history {
+        // Under the migrator's own advisory lock (PostgreSQL advisory locks nest within a session, so
+        // `run_direct` below takes it again and releases it once; the second release is ours). A second
+        // instance waits here and then finds the history already consolidated. After an error the
+        // caller closes the connection, which releases both.
+        conn.lock()
+            .await
+            .map_err(|error| sqlx::Error::Migrate(Box::new(error)))?;
+        consolidated_split_0003 = consolidate_split_0003(conn, migrator, schema).await?;
+    }
     // `run_direct` is what `run` calls once it has a connection; `run` itself cannot be spawned onto
     // another task because of how `Acquire` is declared.
     migrator
         .run_direct(&mut *conn)
         .await
-        .map_err(|error| sqlx::Error::Migrate(Box::new(error)))
+        .map_err(|error| sqlx::Error::Migrate(Box::new(error)))?;
+    if consolidate && history {
+        conn.unlock()
+            .await
+            .map_err(|error| sqlx::Error::Migrate(Box::new(error)))?;
+    }
+    Ok(MigrationRun {
+        consolidated_split_0003,
+    })
+}
+
+/// The five files a development build between v0.3.1 and the next release had in place of
+/// `0003_after_v0_3_1.sql` (never released): version, description and the SHA-384 checksum sqlx
+/// recorded for each. Together they made exactly the schema of the consolidated `0003`, and their
+/// data clean-ups (0004, 0007) are the one in it. The entry can go once no such database is left.
+const SPLIT_0003: [(i64, &str, &str); 5] = [
+    (
+        3,
+        "email change",
+        "d1bf16453967b4e72224570456c91f27bd8dfe98de9284131c025631bae0a6b7faed06a48b57ff3a5ea00c40394f8aa0",
+    ),
+    (
+        4,
+        "removed member access",
+        "5d5e9fc0ed4ece384378d3b4a8026216ecaf6a6d53582fcc4618cd9bc976b7c44f0592cba1b6c4e15760540ca6b217c7",
+    ),
+    (
+        5,
+        "auth attempt browser",
+        "80950a04f727d822824cdffd468fd3c607a2cf6ea88000af8f082a16ce89b9e48caa5cdf192aaf475ae1dd29dd56c2fe",
+    ),
+    (
+        6,
+        "mfa totp",
+        "1f2948871460745f4853df52afb23f68610d8a21be58df18dabf70cbe19a18ad64ad745e2b63c5e3727c9bb4a2bf8960",
+    ),
+    (
+        7,
+        "removed member access followup",
+        "84a73e836c0525331351d8b9607a91986f03543c6a6d493c8f36aadb39b228848f153aca829de97310bcd777497489da",
+    ),
+];
+
+/// The objects the split files made, checked before their history is rewritten.
+const SPLIT_0003_OBJECTS: &str = "SELECT to_regclass($1 || '.email_change_requests') IS NOT NULL
+        AND to_regclass($1 || '.mfa_instance_key') IS NOT NULL
+        AND to_regclass($1 || '.mfa_totp') IS NOT NULL
+        AND to_regclass($1 || '.mfa_recovery_codes') IS NOT NULL
+        AND EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = $1 AND table_name = 'auth_attempts' AND column_name = 'browser_hash')";
+
+/// Whether a recorded history is the split one, judged by checksums (never by version numbers alone:
+/// a later release may have its own 0004).
+fn holds_split_0003(rows: &[(i64, String, bool)]) -> bool {
+    rows.iter().any(|(version, checksum, _)| {
+        SPLIT_0003
+            .iter()
+            .any(|(v, _, c)| v == version && c == checksum)
+    })
+}
+
+/// Replaces the history rows of the split files 0003-0007 with the one row of the consolidated
+/// `0003`, when the history is exactly what such a build left: versions 1 to 7, all applied, 1 and 2
+/// with this build's checksums, 3 to 7 with the checksums of the split files, and the tables and the
+/// column they made present. Nothing runs again and no data changes; the rows are rewritten in one
+/// transaction. A history that holds only some of the split files, or anything else alongside them,
+/// is refused with a message and left as it is. Returns whether it rewrote the history.
+async fn consolidate_split_0003(
+    conn: &mut sqlx::PgConnection,
+    migrator: &Migrator,
+    schema: &str,
+) -> Result<bool, sqlx::Error> {
+    let rows: Vec<(i64, String, bool)> = sqlx::query_as(&format!(
+        "SELECT version, encode(checksum, 'hex'), success FROM {schema}._sqlx_migrations ORDER BY version"
+    ))
+    .fetch_all(&mut *conn)
+    .await?;
+    if !holds_split_0003(&rows) {
+        return Ok(false);
+    }
+    let refuse = |why: String| {
+        sqlx::Error::Protocol(format!(
+            "the migration history holds the pre-release split migrations 0003-0007, but {why}. It was \
+             left unchanged. Restore the database from the backup taken before that build, or recreate \
+             it (docs/development.md, \"Resetting a development database\")."
+        ))
+    };
+    let own = |version: i64| {
+        migrator
+            .iter()
+            .find(|m| m.version == version && !m.migration_type.is_down_migration())
+    };
+    let target = own(3).ok_or_else(|| refuse("this build has no migration 0003".into()))?;
+    let target_checksum = hex::encode(&target.checksum);
+    if SPLIT_0003.iter().any(|(_, _, c)| *c == target_checksum) {
+        return Err(refuse("this build still has the split files".into()));
+    }
+    let versions: Vec<i64> = rows.iter().map(|(v, _, _)| *v).collect();
+    if versions != [1, 2, 3, 4, 5, 6, 7] {
+        return Err(refuse(format!(
+            "the recorded versions are {versions:?}, not 1 to 7"
+        )));
+    }
+    for (version, checksum, success) in &rows {
+        if !success {
+            return Err(refuse(format!("migration {version} is recorded as failed")));
+        }
+        let expected = match SPLIT_0003.iter().find(|(v, _, _)| v == version) {
+            Some((_, _, split)) => (*split).to_string(),
+            None => own(*version)
+                .map(|m| hex::encode(&m.checksum))
+                .ok_or_else(|| refuse(format!("this build has no migration {version}")))?,
+        };
+        if *checksum != expected {
+            return Err(refuse(format!(
+                "migration {version} does not have the checksum of that build"
+            )));
+        }
+    }
+    let present: bool = sqlx::query_scalar(SPLIT_0003_OBJECTS)
+        .bind(schema)
+        .fetch_one(&mut *conn)
+        .await?;
+    if !present {
+        return Err(refuse(
+            "the tables or the column those files made are missing".into(),
+        ));
+    }
+
+    let mut tx = sqlx::Connection::begin(&mut *conn).await?;
+    sqlx::query(&format!(
+        "LOCK TABLE {schema}._sqlx_migrations IN ACCESS EXCLUSIVE MODE"
+    ))
+    .execute(&mut *tx)
+    .await?;
+    let mut removed = 0;
+    for (version, _, checksum) in SPLIT_0003.iter().filter(|(v, _, _)| *v != 3) {
+        removed += sqlx::query(&format!(
+            "DELETE FROM {schema}._sqlx_migrations
+             WHERE version = $1 AND checksum = decode($2, 'hex') AND success"
+        ))
+        .bind(version)
+        .bind(checksum)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    }
+    let updated = sqlx::query(&format!(
+        "UPDATE {schema}._sqlx_migrations
+            SET description = $1, checksum = $2
+          WHERE version = 3 AND checksum = decode($3, 'hex') AND success"
+    ))
+    .bind(target.description.as_ref())
+    .bind(target.checksum.as_ref())
+    .bind(SPLIT_0003[0].2)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if removed != 4 || updated != 1 {
+        tx.rollback().await?;
+        return Err(refuse(format!(
+            "the rewrite matched {removed} of 4 rows to remove and {updated} of 1 to replace"
+        )));
+    }
+    tx.commit().await?;
+    Ok(true)
 }
 
 #[cfg(test)]

@@ -251,7 +251,7 @@ pub async fn activity(
 ) -> Result<Vec<TicketActivity>, CoreError> {
     let mut tx = pool.begin().await?;
     let _ = require_project_role(&mut tx, project_id, actor_id, false).await?;
-    let rows=sqlx::query("SELECT a.id,a.ticket_id,a.origin_channel_id,a.ticket_revision_no,a.actor_user_id,u.display_name AS actor_name,a.activity_kind,a.data,a.occurred_at FROM penfii.activity_entries a JOIN penfii.tickets t ON t.id=a.ticket_id LEFT JOIN penfii.users u ON u.id=a.actor_user_id WHERE a.origin_project_id=$1 ORDER BY a.occurred_at DESC,a.id DESC LIMIT 100").bind(project_id).fetch_all(&mut *tx).await?;
+    let rows=sqlx::query("SELECT a.id,a.ticket_id,a.origin_channel_id,a.ticket_revision_no,a.actor_user_id,u.display_name AS actor_name,a.activity_kind,a.data,a.occurred_at FROM penfii.activity_entries a JOIN penfii.tickets t ON t.id=a.ticket_id AND t.trashed_at IS NULL AND t.purged_at IS NULL LEFT JOIN penfii.users u ON u.id=a.actor_user_id WHERE a.origin_project_id=$1 ORDER BY a.occurred_at DESC,a.id DESC LIMIT 100").bind(project_id).fetch_all(&mut *tx).await?;
     let (revision_keys, comment_keys) = activity_keys(&rows)?;
     let clients = mcp_clients(&mut tx, &revision_keys, &comment_keys).await?;
     let mut out = Vec::new();

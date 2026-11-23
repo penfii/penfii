@@ -163,7 +163,9 @@ pub(crate) async fn verify_account_password(
 ) -> Result<(), CoreError> {
     let scope = "reauth";
     let key = user_id.to_string();
-    throttle::check(pool, scope, &key).await?;
+    // Reserve, verify, settle (see `throttle`): the attempt is counted before the hash is checked.
+    let counters = [(scope, key.as_str(), throttle::REAUTH)];
+    throttle::admit_or_limited(pool, &counters).await?;
     let hash: Option<String> = sqlx::query_scalar(
         "SELECT password_hash FROM penfii.password_credentials WHERE user_id = $1",
     )
@@ -177,13 +179,17 @@ pub(crate) async fn verify_account_password(
     match hash {
         Some(_) if valid => throttle::clear(pool, scope, &key).await,
         Some(_) => {
-            throttle::record_failure(pool, scope, &key).await?;
+            super::audit_lock_reached(pool, user_id, "user.reauth_locked", &[(scope, &key)]).await;
             Err(CoreError::Unauthenticated)
         }
-        // No password credential: the caller reports the methods that do work.
-        None => Err(CoreError::ReauthRequired {
-            methods: reauth_methods(pool, user_id).await?,
-        }),
+        // No password credential: nothing was guessed, so the attempt is not held against the account;
+        // the caller reports the methods that do work.
+        None => {
+            throttle::refund(pool, scope, &key, throttle::REAUTH).await?;
+            Err(CoreError::ReauthRequired {
+                methods: reauth_methods(pool, user_id).await?,
+            })
+        }
     }
 }
 
@@ -251,32 +257,79 @@ pub async fn revoke_session(
     user_id: Uuid,
     session_id: Uuid,
 ) -> Result<(), CoreError> {
+    let mut tx = pool.begin().await?;
     let done = sqlx::query(
         "UPDATE penfii.sessions SET revoked_at = now()
          WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL",
     )
     .bind(session_id)
     .bind(user_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     if done.rows_affected() == 0 {
         return Err(CoreError::NotFound);
     }
+    super::audit_user(
+        &mut tx,
+        user_id,
+        Some(user_id),
+        "user.session_revoked",
+        "OK",
+        serde_json::json!({}),
+    )
+    .await?;
+    tx.commit().await?;
     Ok(())
 }
 
-/// Revokes every session of the user except `keep`; returns how many. Needs recent authentication.
-pub async fn revoke_other_sessions(pool: &PgPool, session: &AuthSession) -> Result<u64, CoreError> {
-    require_recent_authentication(pool, session).await?;
+/// Ends the web sessions of the user, except `keep` when it is given, and returns how many. The one place
+/// that says what "end sessions" is, for every action that does it (other devices, a changed password,
+/// MFA turned on or off, a reset, an operator); OAuth/MCP grants are not touched here (see
+/// `admin::end_all_access` for the action that ends those as well).
+pub(crate) async fn end_sessions(
+    conn: &mut sqlx::PgConnection,
+    user_id: Uuid,
+    keep: Option<Uuid>,
+) -> Result<u64, CoreError> {
     let done = sqlx::query(
         "UPDATE penfii.sessions SET revoked_at = now()
-         WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL",
+         WHERE user_id = $1 AND revoked_at IS NULL AND ($2::uuid IS NULL OR id <> $2)",
     )
-    .bind(session.user.id)
-    .bind(session.id)
-    .execute(pool)
+    .bind(user_id)
+    .bind(keep)
+    .execute(conn)
     .await?;
     Ok(done.rows_affected())
+}
+
+/// Every web session of the user except `keep` (this device).
+pub(crate) async fn end_other_sessions(
+    conn: &mut sqlx::PgConnection,
+    user_id: Uuid,
+    keep: Uuid,
+) -> Result<u64, CoreError> {
+    end_sessions(conn, user_id, Some(keep)).await
+}
+
+/// Revokes every session of the user except the current one; returns how many. Needs recent
+/// authentication. Connected apps (MCP) stay.
+pub async fn revoke_other_sessions(pool: &PgPool, session: &AuthSession) -> Result<u64, CoreError> {
+    require_recent_authentication(pool, session).await?;
+    let mut tx = pool.begin().await?;
+    let count = end_other_sessions(&mut tx, session.user.id, session.id).await?;
+    if count > 0 {
+        super::audit_user(
+            &mut tx,
+            session.user.id,
+            Some(session.user.id),
+            "user.sessions_revoked",
+            "OK",
+            serde_json::json!({"count": count}),
+        )
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(count)
 }
 
 /// Per-address throttle: shared addresses are common, so the limit is higher than the

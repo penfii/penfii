@@ -32,6 +32,7 @@ export const queries = {
   people: (workspaceId: string) => queryOptions({ queryKey: queryKeys.people(workspaceId), queryFn: ({ signal }) => withSignal(signal, () => api.listPeople(workspaceId)) }),
   departments: (workspaceId: string) => queryOptions({ queryKey: queryKeys.departments(workspaceId), queryFn: ({ signal }) => withSignal(signal, () => api.listDepartments(workspaceId)) }),
   identities: () => queryOptions({ queryKey: queryKeys.identities, queryFn: ({ signal }) => withSignal(signal, () => api.identities()), retry: false }),
+  mfaStatus: () => queryOptions({ queryKey: queryKeys.mfa, queryFn: ({ signal }) => withSignal(signal, () => api.mfaStatus()), retry: false }),
   sessions: () => queryOptions({ queryKey: queryKeys.sessions, queryFn: ({ signal }) => withSignal(signal, () => api.sessions()), retry: false }),
   oauthGrants: () => queryOptions({ queryKey: queryKeys.oauthGrants, queryFn: ({ signal }) => withSignal(signal, () => api.oauthGrants()), retry: false }),
   oauthRequest: (id: string) => queryOptions({ queryKey: queryKeys.oauthRequest(id), queryFn: ({ signal }) => withSignal(signal, () => api.consentRequest(id)), retry: false }),
@@ -61,6 +62,8 @@ export const queries = {
     queryOptions({ queryKey: queryKeys.adminProjectsWithoutAdmin(workspaceId), queryFn: ({ signal }) => withSignal(signal, () => api.listProjectsWithoutAdmin(workspaceId)) }),
   adminChannelsWithoutManager: (workspaceId: string) =>
     queryOptions({ queryKey: queryKeys.adminChannelsWithoutManager(workspaceId), queryFn: ({ signal }) => withSignal(signal, () => api.listChannelsWithoutManager(workspaceId)) }),
+  adminDocsWithoutManager: (workspaceId: string) =>
+    queryOptions({ queryKey: queryKeys.adminDocsWithoutManager(workspaceId), queryFn: ({ signal }) => withSignal(signal, () => api.listDocsWithoutManager(workspaceId)) }),
   teamProjects: (workspaceId: string, teamId: string) =>
     queryOptions({ queryKey: queryKeys.teamProjects(workspaceId, teamId), queryFn: ({ signal }) => withSignal(signal, () => api.listTeamProjects(workspaceId, teamId)), enabled: teamId.length > 0 }),
   adminTeamMembers: (workspaceId: string, teamId: string) =>

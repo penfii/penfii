@@ -1,6 +1,6 @@
 [package]
 name = "core-api"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2024"
 publish = false
 license = "GPL-3.0-only"
@@ -39,6 +39,7 @@ penfii-contracts = { workspace = true }
 rand = { workspace = true }
 rsa = { workspace = true }
 serde_json = { workspace = true }
+sha1 = { workspace = true }
 sha2 = { workspace = true }
 sqlx = { workspace = true }
 tokio-tungstenite = { workspace = true }

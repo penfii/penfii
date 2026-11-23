@@ -90,8 +90,10 @@ pub struct AcceptInvitationResponse {
     pub team: Option<InvitationTeamOutcome>,
 }
 
-/// The outcome of an invitation's Team step. `status` is `JOINED`, `ARCHIVED` or `GONE`; the last two
-/// mean the person joined the Workspace only.
+/// The outcome of an invitation's Team step. `status` is `JOINED`, `ARCHIVED`, `GONE`, `ALREADY_MEMBER`
+/// (the person was already an active member of the Workspace) or `SELF_PROMOTION` (the inviter accepted
+/// their own invitation into a Team that would make them a Project admin); all but `JOINED` mean the
+/// person joined the Workspace only.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InvitationTeamOutcome {
@@ -716,6 +718,9 @@ pub struct Draft {
 pub struct LoginRequest {
     pub email: String,
     pub password: String,
+    /// The authenticator or recovery code, for an account with two-step verification on.
+    #[serde(default)]
+    pub code: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1096,7 +1101,8 @@ pub struct SprintClosePreview {
     pub sprint_version: i64,
     pub done: Vec<TicketRef>,
     pub canceled: Vec<TicketRef>,
-    /// Unfinished Tasks the viewer can see. Tasks the viewer cannot see are not listed or counted.
+    /// Unfinished Tasks the viewer can see, which closing carries on. Tasks the viewer cannot see, and
+    /// trashed ones (closing releases them), are not listed or counted.
     pub unfinished: Vec<TicketRef>,
     /// PLANNED or ACTIVE Sprints of the Project that can take the unfinished Tasks.
     pub targets: Vec<SprintTarget>,

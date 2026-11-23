@@ -64,3 +64,30 @@ describe('sign-in form', () => {
     expect(await screen.findByText('The request could not be completed')).toBeTruthy()
   })
 })
+
+describe('sign-in with two-step verification', () => {
+  it('asks for the code after the password, sends it with the same password, and can go back', async () => {
+    api.login.mockRejectedValueOnce(new ApiError(401, 'mfa_required', 'a verification code is required'))
+    mount()
+    await submit('right-password')
+    expect(await screen.findByLabelText('Authenticator or recovery code')).toBeTruthy()
+    expect(screen.queryByText(/incorrect/i)).toBeNull()
+
+    api.login.mockRejectedValueOnce(new ApiError(401, 'unauthenticated', 'unauthenticated'))
+    fireEvent.change(screen.getByLabelText('Authenticator or recovery code'), { target: { value: ' 123456 ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+    expect(await screen.findByText('The code is incorrect or was already used')).toBeTruthy()
+    expect(api.login).toHaveBeenLastCalledWith({ email: 'dana@example.com', password: 'right-password', code: '123456' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    expect(screen.queryByLabelText('Authenticator or recovery code')).toBeNull()
+  })
+
+  it('does not ask for a code when the password is wrong', async () => {
+    api.login.mockRejectedValue(new ApiError(401, 'unauthenticated', 'unauthenticated'))
+    mount()
+    await submit('wrong')
+    expect(await screen.findByText(/incorrect/i)).toBeTruthy()
+    expect(screen.queryByLabelText('Authenticator or recovery code')).toBeNull()
+  })
+})

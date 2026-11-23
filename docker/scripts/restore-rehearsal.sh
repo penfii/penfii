@@ -18,21 +18,29 @@
 #                     not exist yet: restore refuses a project that has volumes, down refuses one that this
 #                     script did not create)
 #   REHEARSAL_PORT    host port of the rehearsal web app, on 127.0.0.1 (default 18080)
+#   REHEARSAL_SUBNET  address range of the rehearsal's `frontend` network (default 172.29.250.0/24); it must
+#                     not overlap the source's PENFII_FRONTEND_SUBNET (default 172.29.240.0/24)
 #   SOURCE_ENV        the .env of the source (default ./.env)
+#   ALPINE_IMAGE      helper image for the file store archive (default alpine:3.24.2, a pinned version)
 #
 # The backup directory holds the database, the uploaded files and source.env (the passwords and
-# PENFII_WEBHOOK_KEK the restored data needs) in clear text, with mode 700/600. This script prints no
-# setting values.
+# PENFII_WEBHOOK_KEK, PENFII_MFA_ENCRYPTION_KEY and the object storage keys the restored data needs) in clear
+# text, with mode 700/600. Keep it private; docs/self-hosting.md, "Protecting backups and off-site copies",
+# says how to encrypt it for storage elsewhere. This script prints no setting values.
 set -euo pipefail
 
 SOURCE_PROJECT="${SOURCE_PROJECT:-penfii}"
 REHEARSAL_PROJECT="${REHEARSAL_PROJECT:-penfii-rehearsal}"
 REHEARSAL_PORT="${REHEARSAL_PORT:-18080}"
+REHEARSAL_SUBNET="${REHEARSAL_SUBNET:-172.29.250.0/24}"
 SOURCE_ENV="${SOURCE_ENV:-./.env}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # docker/
 REPO="$(cd "$HERE/.." && pwd)"
 COMPOSE_FILE="$HERE/compose.yaml"
 MARKER_LABEL="org.penfii.restore-rehearsal"
+# The helper image that archives and unpacks the file store volume: a pinned version, so a backup is not
+# made by whatever `alpine:latest` is that day. Change it on purpose (ALPINE_IMAGE) when you update it.
+ALPINE_IMAGE="${ALPINE_IMAGE:-alpine:3.24.2}"
 
 die() { echo "error: $*" >&2; exit 1; }
 # An interrupt goes through `exit`, so the EXIT trap (which starts the source again) always runs.
@@ -46,6 +54,7 @@ valid_project "$SOURCE_PROJECT" || die "SOURCE_PROJECT must be lower-case letter
 valid_project "$REHEARSAL_PROJECT" || die "REHEARSAL_PROJECT must be lower-case letters, digits, '-' or '_'"
 [ "$SOURCE_PROJECT" != "$REHEARSAL_PROJECT" ] || die "SOURCE_PROJECT and REHEARSAL_PROJECT must differ"
 [[ "$REHEARSAL_PORT" =~ ^[0-9]+$ ]] || die "REHEARSAL_PORT must be a number"
+[[ "$REHEARSAL_SUBNET" =~ ^[0-9.]+/[0-9]+$ ]] || die "REHEARSAL_SUBNET must be an IPv4 range such as 172.29.250.0/24"
 
 src() { docker compose -p "$SOURCE_PROJECT" -f "$COMPOSE_FILE" --env-file "$SOURCE_ENV" "$@"; }
 # rh ENVFILE ARGS...: the rehearsal project, with that backup's rehearsal.env.
@@ -60,6 +69,22 @@ outside_repo() { # absolute dir
 }
 
 # --- manifest: what the backup is expected to contain ---------------------------------------------------
+# The state of the object storage account core-api uses (docs/self-hosting.md, "Object storage access key"):
+# `works` (the app account signs in and can list the bucket), `missing`, or `not-configured` (no
+# PENFII_S3_APP_ACCESS_KEY: core-api uses the root key pair). Run in the minio-setup service's environment,
+# so no key is printed. Needs minio running.
+s3_app_probe() { # compose command words...
+  # The app key pair goes to mc in a config file in the container's tmpfs, not on its command line.
+  # shellcheck disable=SC2016 # expanded by the shell in the container, from its environment
+  "$@" run --rm --no-deps -T --entrypoint sh minio-setup -c '
+    if [ -z "$APP_USER" ]; then echo not-configured; exit 0; fi
+    esc() { r=$1 o=; while [ -n "$r" ]; do c=${r%"${r#?}"}; r=${r#?}; case $c in "\"" | \\) o="$o\\$c" ;; *) o="$o$c" ;; esac; done; printf %s "$o"; }
+    umask 077; export MC_CONFIG_DIR=/tmp/mc-probe; mkdir -p "$MC_CONFIG_DIR"
+    printf "{\"version\":\"10\",\"aliases\":{\"probe\":{\"url\":\"http://minio:9000\",\"accessKey\":\"%s\",\"secretKey\":\"%s\",\"api\":\"s3v4\",\"path\":\"auto\"}}}" \
+      "$(esc "$APP_USER")" "$(esc "$APP_PASSWORD")" > "$MC_CONFIG_DIR/config.json"
+    if mc ls "probe/$BUCKET" >/dev/null 2>&1; then echo works; else echo missing; fi' 2>/dev/null | tail -1 | tr -d '\r'
+}
+
 # `sessions` is left out: signing in to the restored copy adds rows to it.
 report() { # compose command words... : prints a text report of the database
   "$@" exec -T postgres psql -U penfii -d penfii -v ON_ERROR_STOP=1 -At -c "
@@ -143,7 +168,7 @@ cmd_backup() {
 
   say "archive the file store volume"
   # Streamed, so the archive is written by this shell (umask 077, owned by the caller), not by the container.
-  docker run --rm -v "$files_volume":/data:ro alpine tar czf - -C /data . > "$dir/penfii-files.tar.gz"
+  docker run --rm -v "$files_volume":/data:ro "$ALPINE_IMAGE" tar czf - -C /data . > "$dir/penfii-files.tar.gz"
 
   say "manifest"
   {
@@ -155,6 +180,8 @@ cmd_backup() {
     echo "image_web $(docker inspect --format '{{.Image}}' "$(src ps -q web)" 2>/dev/null | cut -c1-19)"
     echo "files_archive_bytes $(stat -c %s "$dir/penfii-files.tar.gz")"
     # Objects of the bucket `penfii` (one xl.meta per object); MinIO's own files outside it change while it runs.
+    # Whether the source had a separate object storage account for core-api (no value is recorded).
+    if grep -qE '^[[:space:]]*(export[[:space:]]+)?PENFII_S3_APP_ACCESS_KEY=.+' "$SOURCE_ENV"; then echo "s3_app_account configured"; else echo "s3_app_account root_fallback"; fi
     echo "files_objects $(tar tzf "$dir/penfii-files.tar.gz" | grep -c '^\./penfii/.*xl\.meta$' || true)"
     report src
   } > "$dir/manifest.txt"
@@ -168,7 +195,10 @@ cmd_backup() {
   trap - EXIT
   wait_healthy 120 core-api src || die "source core-api is not healthy again: check 'docker compose -p $SOURCE_PROJECT ps'"
   wait_healthy 60 minio src || die "source minio is not healthy again"
+  chmod -R go-rwx "$dir"
   say "source is writing again. Backup: $dir"
+  echo "   It holds your data and secrets in clear text (mode 700). To keep a copy elsewhere, encrypt it first and keep"
+  echo "   the key apart from it: docs/self-hosting.md, \"Protecting backups and off-site copies\"."
   grep -E '^(created|git_|image_|files_)' "$dir/manifest.txt"
 }
 
@@ -176,12 +206,14 @@ cmd_backup() {
 # webhook key, limits) with everything that talks to the outside switched off and the address changed.
 make_rehearsal_env() { # dir
   local dir="$1" env="$1/rehearsal.env"
-  grep -vE '^[[:space:]]*(export[[:space:]]+)?(PENFII_PUBLIC_URL|PENFII_HTTP_BIND|PENFII_HTTP_PORT|PENFII_SMTP_[A-Z_]+|PENFII_VAPID_[A-Z_]+|PENFII_MCP_[A-Z_]+|PENFII_OPENSEARCH_INDEX_PREFIX)[[:space:]]*=' \
+  grep -vE '^[[:space:]]*(export[[:space:]]+)?(PENFII_PUBLIC_URL|PENFII_HTTP_BIND|PENFII_HTTP_PORT|PENFII_SMTP_[A-Z_]+|PENFII_VAPID_[A-Z_]+|PENFII_MCP_[A-Z_]+|PENFII_OPENSEARCH_INDEX_PREFIX|PENFII_FRONTEND_SUBNET|PENFII_TRUSTED_PROXIES)[[:space:]]*=' \
     "$dir/source.env" > "$env" || true
   {
     echo "PENFII_PUBLIC_URL=http://127.0.0.1:$REHEARSAL_PORT"
     echo "PENFII_HTTP_BIND=127.0.0.1"
     echo "PENFII_HTTP_PORT=$REHEARSAL_PORT"
+    # The source is running, so the rehearsal's network needs its own range (core-api trusts the web container on it).
+    echo "PENFII_FRONTEND_SUBNET=$REHEARSAL_SUBNET"
     echo "PENFII_SMTP_HOST="
     echo "PENFII_VAPID_PRIVATE_KEY="
     echo "PENFII_VAPID_SUBJECT="
@@ -195,6 +227,11 @@ cmd_restore() {
   local dir; dir="$(abs "${1:?usage: restore DIR}")"
   [ -s "$dir/penfii.dump" ] && [ -s "$dir/penfii-files.tar.gz" ] && [ -f "$dir/source.env" ] || die "$dir is not a backup made by this script"
   ( cd "$dir" && sha256sum -c SHA256SUMS >/dev/null ) || die "checksum mismatch: the backup is damaged"
+  # A backup that came back from encrypted storage may have lost its modes: source.env holds every secret.
+  if [ -n "$(find "$dir" -maxdepth 1 \( -name source.env -o -name rehearsal.env -o -name '*.dump' \) -perm /077 2>/dev/null)" ]; then
+    echo "   warning: files in $dir are readable by other users; setting the backup directory to mode 700 and its files to 600"
+    chmod 700 "$dir"; chmod 600 "$dir"/source.env "$dir"/*.dump "$dir"/*.tar.gz 2>/dev/null || true
+  fi
   # The rehearsal must be new: no volume and no container of that project may exist, and the port is free.
   local existing
   existing="$(docker volume ls -q --filter "label=com.docker.compose.project=$REHEARSAL_PROJECT"; docker volume ls -q --filter "name=^${REHEARSAL_PROJECT}_")"
@@ -231,7 +268,19 @@ cmd_restore() {
 
   say "3. file store"
   rh "$env" create --no-build minio >/dev/null 2>&1   # creates the volume without starting the service
-  docker run --rm -i -v "${REHEARSAL_PROJECT}_penfii-files":/data alpine tar xzf - -C /data < "$dir/penfii-files.tar.gz"
+  docker run --rm -i -v "${REHEARSAL_PROJECT}_penfii-files":/data "$ALPINE_IMAGE" tar xzf - -C /data < "$dir/penfii-files.tar.gz"
+
+  # MinIO keeps its accounts in the volume just unpacked, so the app account must already be there, before
+  # minio-setup (which would make it again) has run. A backup without it still restores: minio-setup makes it.
+  rh "$env" up -d --no-build --no-deps minio >/dev/null 2>&1
+  wait_healthy 90 minio rh "$env" || die "rehearsal minio is not healthy"
+  local acct; acct="$(s3_app_probe rh "$env")"
+  echo "$acct" > "$dir/s3-account-restored.txt"
+  case "$acct" in
+    works) echo "   object storage app account came back with the file store volume";;
+    not-configured) echo "   no app account configured (core-api uses the root key pair)";;
+    *) echo "   note: the app account is not in the restored file store; minio-setup makes it in the next step";;
+  esac
 
   say "4. db-setup (grants, timeouts, migration check), then the services"
   rh "$env" up -d --no-build >/dev/null 2>&1
@@ -270,6 +319,15 @@ cmd_verify() {
   say "readyz"
   if curl -fsS "http://127.0.0.1:$REHEARSAL_PORT/readyz" >/dev/null; then echo "   200"; else echo "   FAILED"; fail=1; fi
 
+  say "object storage account"
+  local acct; acct="$(s3_app_probe rh "$env")"
+  echo "s3_app_account_after_setup ${acct:-unknown}" >> "$result"
+  echo "s3_app_account_in_restored_volume $(cat "$dir/s3-account-restored.txt" 2>/dev/null || echo unknown)" >> "$result"
+  case "$acct" in
+    works|not-configured) echo "   $acct";;
+    *) echo "   FAILED: the app account cannot use the bucket (${acct:-no answer})"; fail=1;;
+  esac
+
   say "database against the manifest (migrations with checksums, row counts)"
   report rh "$env" > "$dir/restored-report.txt"
   grep -E '^(migration|rows) ' "$dir/manifest.txt" > "$dir/manifest-db.txt"
@@ -280,7 +338,7 @@ cmd_verify() {
   say "file store: objects of the bucket against the manifest"
   local want got
   want="$(sed -n 's/^files_objects //p' "$dir/manifest.txt")"
-  got="$(docker run --rm -v "${REHEARSAL_PROJECT}_penfii-files":/data:ro alpine sh -c 'find /data/penfii -name xl.meta 2>/dev/null | wc -l' | tr -d ' ')"
+  got="$(docker run --rm -v "${REHEARSAL_PROJECT}_penfii-files":/data:ro "$ALPINE_IMAGE" sh -c 'find /data/penfii -name xl.meta 2>/dev/null | wc -l' | tr -d ' ')"
   echo "   manifest $want, restored volume $got"
   [ "$want" = "$got" ] || { echo "   FAILED"; fail=1; }
 

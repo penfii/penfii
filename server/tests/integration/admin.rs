@@ -353,15 +353,25 @@ async fn removed_member_loses_access_at_once_and_returns_by_invitation(pool: PgP
         1
     );
 
-    // An invitation brings the person back with the invited role and their old history.
+    // An invitation brings the person back with the invited role and their old history. An ADMIN
+    // role asks the person for a recent authentication first.
     let (status, invitation) = env.invite(&env.owner, &member.email, "ADMIN").await;
     assert_eq!(status, StatusCode::CREATED, "{invitation}");
     let (status, body, _) = call(
         &env.app,
         "POST",
+        "/v1/me/reauth/password",
+        Some(&member.cookie),
+        Some(json!({"password": PASSWORD})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let (status, body, _) = call(
+        &env.app,
+        "POST",
         "/v1/invitations/accept",
-        None,
-        Some(json!({"token": invitation["inviteToken"], "displayName": "member", "password": PASSWORD})),
+        Some(&member.cookie),
+        Some(json!({"token": invitation["inviteToken"], "displayName": "member"})),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");

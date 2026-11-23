@@ -59,7 +59,14 @@ pub(crate) async fn doc_collab(
         name: user.display_name.clone(),
     };
     let pool = state.pool.clone();
+    // The room refuses an update over the limit (plus a little for the sync framing) by closing the
+    // socket with "too large"; the transport stops reading a larger message sooner, before it is held whole.
+    let transport_max = usize::try_from(hub.config().collab_max_update_bytes)
+        .unwrap_or(usize::MAX)
+        .saturating_add(4096);
     Ok(upgrade
+        .max_message_size(transport_max)
+        .max_frame_size(transport_max)
         .on_upgrade(move |socket| pump(socket, hub, pool, info, page, token))
         .into_response())
 }

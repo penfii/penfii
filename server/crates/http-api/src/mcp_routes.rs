@@ -161,9 +161,12 @@ pub struct AuthorizeQuery {
 
 async fn authorize(
     State(state): State<AppState>,
+    peer: Option<axum::extract::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
+    headers: axum::http::HeaderMap,
     Mcp(ctx): Mcp,
     Q(query): Q<AuthorizeQuery>,
 ) -> Response {
+    let address = crate::extract::client_address(peer.map(|found| found.0.0), &headers);
     let params = AuthorizeParams {
         response_type: query.response_type,
         client_id: query.client_id,
@@ -174,7 +177,17 @@ async fn authorize(
         scope: query.scope,
         resource: query.resource,
     };
-    match oauth::server::begin_authorization(&state.pool, &ctx.oauth, params).await {
+    match oauth::server::begin_authorization(
+        &state.pool,
+        &ctx.oauth,
+        params,
+        oauth::client::Lookup {
+            address: address.as_deref(),
+            throttle: &state.limits.login_throttle,
+        },
+    )
+    .await
+    {
         Ok(AuthorizeResult::Consent(id)) => redirect(&format!("/consent?request={id}")),
         Ok(AuthorizeResult::Redirect(url)) => redirect(&url),
         Ok(AuthorizeResult::Page(message)) => error_page(&message),

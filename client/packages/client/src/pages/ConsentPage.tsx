@@ -100,6 +100,13 @@ export function ConsentPage() {
     <main className="page">
       <section className="card consent-card">
         <h1>{t('consent.title', { client: data.clientName })}</h1>
+        <p className="field-hint">
+          {data.clientKind === 'cimd' && data.clientHost
+            ? t('consent.source.cimd', { host: data.clientHost })
+            : data.clientKind === 'dcr'
+              ? t('consent.source.dcr')
+              : t('consent.source.other')}
+        </p>
         <p>{t('consent.lead', { host: data.redirectHost })}</p>
         {data.loopback ? <p className="form-error">{t('consent.loopback')}</p> : null}
         {data.replacesExisting ? <p>{t('consent.replaces')}</p> : null}

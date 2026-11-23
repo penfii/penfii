@@ -266,14 +266,16 @@ struct ReadAccess {
     live: bool,
 }
 
-/// Read boundary shared by comments, children, Activity and History.
+/// Read boundary shared by comments, children, Activity and History. A Ticket in the trash (or purged)
+/// is not found by anyone: the Project admin's way to it is the trash list (key, title, who and when),
+/// which opens none of its content.
 async fn read_access(
     conn: &mut PgConnection,
     actor_id: Uuid,
     ticket_id: Uuid,
 ) -> Result<ReadAccess, CoreError> {
     let row = sqlx::query(
-        "SELECT project_id,channel_id,(archived_at IS NULL AND trashed_at IS NULL) AS live FROM penfii.tickets WHERE id=$1 AND purged_at IS NULL",
+        "SELECT project_id,channel_id,(archived_at IS NULL) AS live FROM penfii.tickets WHERE id=$1 AND trashed_at IS NULL AND purged_at IS NULL",
     )
     .bind(ticket_id)
     .fetch_optional(&mut *conn)

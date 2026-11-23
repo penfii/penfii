@@ -15,19 +15,31 @@ use crate::error::CoreError;
 use crate::files::ObjectStore;
 use crate::limits::Limits;
 
+mod email_change;
 mod external;
+mod mfa;
 mod password;
 pub mod provider;
 mod reset;
 mod session;
 mod throttle;
 
+pub use email_change::{
+    PendingEmailChange, confirm as confirm_email_change, operator_set_email,
+    pending as pending_email_change, request as request_email_change,
+};
 pub use external::{
-    AdminIdentities, CallbackInput, CallbackOutcome, IdentityInfo, Intent, ProviderInfo,
-    StartInput, admin_identities, admin_set_password, callback, list_identities, offered,
-    remove_password, safe_return_to, start, sync_providers, unlink_identity,
+    ATTEMPT_COOKIE_SECONDS, AdminIdentities, CallbackInput, CallbackOutcome, IdentityInfo, Intent,
+    ProviderInfo, StartInput, StartedAttempt, admin_identities, admin_set_password, callback,
+    list_identities, offered, remove_password, safe_return_to, start, sync_providers,
+    unlink_identity,
 };
 
+pub use mfa::{
+    MfaSetup, MfaStatus, begin_setup as begin_mfa_setup, confirm_setup as confirm_mfa_setup,
+    disable as disable_mfa, env_key as mfa_env_key, operator_reset as operator_reset_mfa,
+    regenerate_recovery_codes, status as mfa_status,
+};
 pub use password::{
     MAX_CHARS as PASSWORD_MAX_CHARS, MIN_CHARS as PASSWORD_MIN_CHARS, validate_new_password,
 };
@@ -41,7 +53,7 @@ pub use session::{
     reauth_window_seconds, reauth_with_password, record_address_failure,
     require_recent_authentication, revoke_other_sessions, revoke_session,
 };
-pub(crate) use session::{reauth_required, recently_authenticated};
+pub(crate) use session::{end_sessions, reauth_required, recently_authenticated};
 
 #[derive(Debug)]
 pub struct LoginResult {
@@ -110,6 +122,66 @@ pub fn require_password(password: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
+/// One user-level entry (no Workspace) of the audit log for a security event of an account. `data`
+/// carries small facts only (a method, a count): never a password, token, code, address or body.
+pub(crate) async fn audit_user(
+    conn: &mut PgConnection,
+    user_id: Uuid,
+    actor: Option<Uuid>,
+    action: &str,
+    outcome: &str,
+    data: serde_json::Value,
+) -> Result<(), CoreError> {
+    sqlx::query(
+        "INSERT INTO penfii.audit_entries
+            (id, actor_user_id, action_code, outcome_code, target_kind, target_id, data)
+         VALUES ($1, $2, $3, $4, 'user', $5, $6)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(actor)
+    .bind(action)
+    .bind(outcome)
+    .bind(user_id)
+    .bind(data)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// Best effort entry for a lock that this attempt found on an existing account (usually the one it has just
+/// set). The counters refuse later attempts on a locked key before this runs, so there is about one entry
+/// per counter that locks in a lock window: one for the account's counter, and one for each address whose
+/// e-mail+address counter locks (another address can still reach this point while only those are locked).
+/// Failures of unknown e-mails, and the per-address counter alone, never reach the audit log.
+async fn audit_lock_reached(pool: &PgPool, user_id: Uuid, action: &str, keys: &[(&str, &str)]) {
+    let mut locked = false;
+    for (scope, key) in keys {
+        locked |= matches!(
+            throttle::check(pool, scope, key).await,
+            Err(CoreError::RateLimited { .. })
+        );
+    }
+    if !locked {
+        return;
+    }
+    let result = async {
+        let mut conn = pool.acquire().await?;
+        audit_user(
+            &mut conn,
+            user_id,
+            None,
+            action,
+            "DENIED",
+            serde_json::json!({}),
+        )
+        .await
+    }
+    .await;
+    if let Err(error) = result {
+        tracing::warn!(?error, "audit entry for a reached lock was not written");
+    }
+}
+
 pub async fn login(
     pool: &PgPool,
     limits: &Limits,
@@ -120,6 +192,8 @@ pub async fn login(
 }
 
 /// `address` feeds the per-address throttle; `device` is a coarse label for the session list.
+/// An account with two-step verification on is refused with `MfaRequired` here: use
+/// [`login_with_code`], which is the one place that lets such a password sign-in through.
 pub async fn login_from(
     pool: &PgPool,
     limits: &Limits,
@@ -128,17 +202,43 @@ pub async fn login_from(
     address: Option<&str>,
     device: Option<&str>,
 ) -> Result<LoginResult, CoreError> {
+    login_with_code(pool, limits, email, password, None, address, device).await
+}
+
+/// Sign-in with the account's password and, when the account has two-step verification on, an
+/// authenticator or recovery code (`code`). The password is checked on every request, with or without a
+/// code, so the code step cannot be reached or tried without it, and a wrong password, a wrong code and an
+/// unknown account answer alike (`Unauthenticated`). A right password without the code is `MfaRequired`:
+/// it tells whoever holds the password that a code is needed, which is all that a password that works
+/// tells anyway. That attempt is taken back from the password counters (it was not a wrong password),
+/// but nothing is cleared until the code is right too; code attempts have a counter of their own.
+pub async fn login_with_code(
+    pool: &PgPool,
+    limits: &Limits,
+    email: &str,
+    password: &str,
+    code: Option<&str>,
+    address: Option<&str>,
+    device: Option<&str>,
+) -> Result<LoginResult, CoreError> {
     let ttl = limits.session_ttl_seconds.ok_or_else(|| {
         CoreError::conflict("session_ttl_unconfigured", "session ttl is not configured")
     })?;
     let (_, email_key) = normalize_email(email)?;
     require_password(password)?;
-    // Three counters, see `ThrottleLimits`. Whoever is full refuses the attempt before the password
-    // is looked at, so a locked key answers the same for a right and a wrong password.
+    let code = code.map(str::trim).filter(|code| !code.is_empty());
+    // Three counters, see `ThrottleLimits`. The attempt is counted in all of them *before* the password
+    // is looked at, in one locked transaction (reserve, verify, settle: see `throttle`), so parallel
+    // requests cannot all pass a counter that has room for one more, and a locked key answers the same
+    // for a right and a wrong password. A request that carries a code is also counted against the
+    // account's code counter.
     let pair_key = account_address_key(&email_key, address);
-    check_address(pool, "login", address).await?;
-    throttle::check(pool, "login", &email_key).await?;
-    throttle::check(pool, "login_account_ip", &pair_key).await?;
+    let throttle_limits = &limits.login_throttle;
+    let mut counters = login_counters(&email_key, &pair_key, address, throttle_limits);
+    if code.is_some() {
+        counters.push(("mfa_login", &email_key, throttle::MFA));
+    }
+    throttle::admit_or_limited(pool, &counters).await?;
 
     // The row is read on the pool and no connection is held while the password is hashed: the
     // transaction opens only for the session insert (see the transaction rules in docs/development.md).
@@ -164,30 +264,97 @@ pub async fn login_from(
         }
     };
     if !valid {
-        let throttle_limits = &limits.login_throttle;
-        throttle::record_failure_limit(pool, "login", &email_key, throttle_limits.account).await?;
-        throttle::record_failure_limit(
-            pool,
-            "login_account_ip",
-            &pair_key,
-            throttle_limits.account_address,
-        )
-        .await?;
-        record_address_failure(pool, "login", address, throttle_limits).await?;
+        // Already counted when it was admitted.
+        if let Some(user) = row.as_ref().filter(|user| user.disabled_at.is_none()) {
+            audit_lock_reached(
+                pool,
+                user.id,
+                "user.login_locked",
+                &[("login", &email_key), ("login_account_ip", &pair_key)],
+            )
+            .await;
+        }
         return Err(CoreError::Unauthenticated);
     }
     let user = row.expect("valid login has a user");
+    let mfa_enabled = mfa::is_enabled(pool, user.id).await?;
+    if mfa_enabled {
+        match code {
+            None => {
+                // The password was right: neither the address nor the account is charged for this
+                // attempt (otherwise the right password and then the right code could be refused at
+                // the limit), and nothing earlier is cleared until the code is right too.
+                if let Some(address) = address {
+                    throttle::refund(pool, "login_ip", address, throttle_limits.address).await?;
+                }
+                throttle::refund(pool, "login", &email_key, throttle_limits.account).await?;
+                throttle::refund(
+                    pool,
+                    "login_account_ip",
+                    &pair_key,
+                    throttle_limits.account_address,
+                )
+                .await?;
+                return Err(CoreError::MfaRequired);
+            }
+            Some(code) => {
+                if !mfa::verify_and_spend(pool, user.id, code).await? {
+                    audit_lock_reached(
+                        pool,
+                        user.id,
+                        "user.mfa_login_locked",
+                        &[("mfa_login", &email_key)],
+                    )
+                    .await;
+                    return Err(CoreError::Unauthenticated);
+                }
+            }
+        }
+    }
     let mut tx = pool.begin().await?;
     let token = insert_session(&mut tx, user.id, ttl, "password", device).await?;
     let summary = user_from_login(&user);
+    audit_user(
+        &mut tx,
+        user.id,
+        Some(user.id),
+        "user.login",
+        "OK",
+        // Whether a second factor was verified for this sign-in, not whether one was sent.
+        serde_json::json!({"mfa": mfa_enabled}),
+    )
+    .await?;
     tx.commit().await?;
+    // Settled: a right password (and code) wipes the account's counters; the address is not charged for it.
     throttle::clear(pool, "login", &email_key).await?;
     throttle::clear(pool, "login_account_ip", &pair_key).await?;
+    throttle::clear(pool, "mfa_login", &email_key).await?;
+    if let Some(address) = address {
+        throttle::refund(pool, "login_ip", address, throttle_limits.address).await?;
+    }
     Ok(LoginResult {
         user: summary,
         token,
         ttl_seconds: ttl,
     })
+}
+
+/// The counters of one sign-in attempt, always in this order (see `throttle::reserve`): the address
+/// (when it is known), the e-mail, and the pair. A later step that checks a second factor for the same
+/// sign-in uses the same list.
+pub(crate) fn login_counters<'a>(
+    email_key: &'a str,
+    pair_key: &'a str,
+    address: Option<&'a str>,
+    limits: &crate::limits::ThrottleLimits,
+) -> Vec<(&'a str, &'a str, crate::limits::Bucket)> {
+    let mut counters = Vec::with_capacity(3);
+    if let Some(address) = address {
+        counters.push(("login_ip", address, limits.address));
+    }
+    counters.push(("login", email_key, limits.account));
+    counters.push(("login_account_ip", pair_key, limits.account_address));
+    counters
 }
 
 /// The key of "this e-mail from this address". An unknown address (tests, direct calls) is one
@@ -306,6 +473,14 @@ pub struct ProfileUpdate {
     pub new_password: Option<String>,
 }
 
+async fn session_email_key(pool: &PgPool, user_id: Uuid) -> Result<String, CoreError> {
+    sqlx::query_scalar("SELECT email_key FROM penfii.users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(CoreError::NotFound)
+}
+
 pub async fn update_profile(
     pool: &PgPool,
     session: &AuthSession,
@@ -321,6 +496,14 @@ pub async fn update_profile(
         }
         _ => None,
     };
+    // The address is not changed here: a new one is confirmed from the new address first (see
+    // `email_change`). The same address, in another letter case, only changes how it is written.
+    if email_key != session_email_key(pool, user_id).await? {
+        return Err(CoreError::conflict(
+            "email_change_requires_verification",
+            "a new e-mail address is confirmed from that address first; use the e-mail change request",
+        ));
+    }
     match update.current_password.as_deref() {
         Some(password) if !password.is_empty() => {
             reauth_with_password(pool, session, password).await?;
@@ -361,6 +544,18 @@ pub async fn update_profile(
         .bind(user_id)
         .bind(password_hash)
         .execute(&mut *tx)
+        .await?;
+        // A password changed from the profile: this device stays signed in, the other web sessions
+        // end (whoever held the old password loses them), and connected apps (MCP) are kept.
+        session::end_other_sessions(&mut tx, user_id, session.id).await?;
+        audit_user(
+            &mut tx,
+            user_id,
+            Some(user_id),
+            "user.password_changed",
+            "OK",
+            serde_json::json!({"via": "profile"}),
+        )
         .await?;
     }
     let row = sqlx::query_as::<_, UserRow>(&format!(

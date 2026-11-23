@@ -184,6 +184,7 @@ pub fn startup_checks(lookup: Lookup<'_>) -> Result<(), String> {
         "PENFII_COOKIE_SECURE",
         "PENFII_WORKER",
         "PENFII_DEV_SEED",
+        "PENFII_S3_ENSURE_BUCKET",
     ] {
         boolean(lookup, name)?;
     }
@@ -196,6 +197,7 @@ pub fn startup_checks(lookup: Lookup<'_>) -> Result<(), String> {
     origins(lookup, "PENFII_MCP_ALLOWED_ORIGINS")?;
     hosts(lookup, "PENFII_MCP_CIMD_PRIVATE_HOSTS")?;
     webhook_kek(lookup)?;
+    crate::identity::mfa_env_key(lookup)?;
     Ok(())
 }
 
@@ -349,6 +351,7 @@ mod tests {
             ("PENFII_COOKIE_SECURE", "sometimes"),
             ("PENFII_WORKER", "2"),
             ("PENFII_DEV_SEED", "maybe"),
+            ("PENFII_S3_ENSURE_BUCKET", "later"),
             ("PENFII_MCP_DEFAULT_POLICY", "readonly"),
             ("PENFII_ALLOWED_ORIGINS", "penfii.example.com"),
             ("PENFII_WEBHOOK_KEK", "not hex"),

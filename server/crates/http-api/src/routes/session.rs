@@ -30,6 +30,11 @@ pub(super) fn routes() -> Router<AppState> {
             post(password_reset_confirm),
         )
         .route("/v1/me", get(me).patch(update_me))
+        .route(
+            "/v1/me/email-change",
+            get(email_change_pending).post(email_change_request),
+        )
+        .route("/v1/auth/email-change/confirm", post(email_change_confirm))
         .route("/v1/me/profile", patch(update_public_profile))
         .route("/v1/me/avatar", put(put_avatar).delete(delete_avatar))
         .route("/v1/users/{id}/avatar", get(get_avatar))
@@ -38,6 +43,11 @@ pub(super) fn routes() -> Router<AppState> {
             "/v1/me/reauth/{provider}/start",
             post(reauth_provider_start),
         )
+        .route("/v1/me/mfa", get(mfa_status))
+        .route("/v1/me/mfa/setup", post(mfa_setup))
+        .route("/v1/me/mfa/enable", post(mfa_enable))
+        .route("/v1/me/mfa/disable", post(mfa_disable))
+        .route("/v1/me/mfa/recovery-codes", post(mfa_recovery_codes))
         .route("/v1/me/identities", get(list_identities))
         .route("/v1/me/identities/{provider}", delete(unlink_identity))
         .route("/v1/me/password", delete(remove_password))
@@ -59,11 +69,12 @@ async fn login(
 ) -> Result<Response, ApiError> {
     let address = extract::client_address(peer.map(|found| found.0.0), &headers);
     let device = extract::device_label(&headers);
-    let result = identity::login_from(
+    let result = identity::login_with_code(
         &state.pool,
         &state.limits,
         &body.email,
         &body.password,
+        body.code.as_deref(),
         address.as_deref(),
         device.as_deref(),
     )
@@ -268,6 +279,48 @@ async fn update_me(
 }
 
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EmailChangeRequest {
+    email: String,
+}
+
+/// Mails a confirmation link to a new address. The account keeps its address until the link is used.
+/// Needs a recent authentication and a server that sends e-mail (`409 email_change_unavailable`).
+async fn email_change_request(
+    State(state): State<AppState>,
+    Session(session): Session,
+    Body(body): Body<EmailChangeRequest>,
+) -> Result<Response, ApiError> {
+    let pending =
+        identity::request_email_change(&state.pool, state.mailer.as_deref(), &session, &body.email)
+            .await?;
+    Ok((StatusCode::ACCEPTED, Json(pending)).into_response())
+}
+
+/// The change that is waiting for its link: `null` when there is none.
+async fn email_change_pending(
+    State(state): State<AppState>,
+    Actor(user_id): Actor,
+) -> Result<Response, ApiError> {
+    Ok(Json(identity::pending_email_change(&state.pool, user_id).await?).into_response())
+}
+
+#[derive(serde::Deserialize)]
+struct EmailChangeConfirm {
+    token: String,
+}
+
+/// Uses the link mailed to the new address. The link is the proof; no session is needed (it is often
+/// opened on another device).
+async fn email_change_confirm(
+    State(state): State<AppState>,
+    Body(body): Body<EmailChangeConfirm>,
+) -> Result<Response, ApiError> {
+    identity::confirm_email_change(&state.pool, state.mailer.clone(), &body.token).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+#[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ReauthPasswordRequest {
     password: String,
@@ -280,6 +333,72 @@ async fn reauth_password(
 ) -> Result<Response, ApiError> {
     identity::reauth_with_password(&state.pool, &session, &body.password).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// Two-step verification of the signed-in person: whether it is on, and how many recovery codes are left.
+async fn mfa_status(
+    State(state): State<AppState>,
+    Actor(user_id): Actor,
+) -> Result<Response, ApiError> {
+    Ok(Json(identity::mfa_status(&state.pool, user_id).await?).into_response())
+}
+
+/// Starts the setup (needs a recent authentication): a new secret that protects nothing until `enable`.
+async fn mfa_setup(
+    State(state): State<AppState>,
+    Session(session): Session,
+) -> Result<Response, ApiError> {
+    Ok(secret_answer(Json(
+        identity::begin_mfa_setup(&state.pool, &session).await?,
+    )))
+}
+
+/// An answer that carries a secret (an authenticator secret, recovery codes): no cache keeps it.
+fn secret_answer(json: impl IntoResponse) -> Response {
+    ([(header::CACHE_CONTROL, "no-store")], json).into_response()
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MfaCodeRequest {
+    code: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoveryCodes {
+    recovery_codes: Vec<String>,
+}
+
+/// Turns it on with a current code of the new secret; answers with the recovery codes, once.
+async fn mfa_enable(
+    State(state): State<AppState>,
+    Session(session): Session,
+    Body(body): Body<MfaCodeRequest>,
+) -> Result<Response, ApiError> {
+    let recovery_codes = identity::confirm_mfa_setup(&state.pool, &session, &body.code).await?;
+    Ok(secret_answer(Json(RecoveryCodes { recovery_codes })))
+}
+
+/// Turns it off: a recent authentication and a current authenticator or recovery code.
+async fn mfa_disable(
+    State(state): State<AppState>,
+    Session(session): Session,
+    Body(body): Body<MfaCodeRequest>,
+) -> Result<Response, ApiError> {
+    identity::disable_mfa(&state.pool, &session, &body.code).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// New recovery codes in place of the old ones: same requirements as turning it off.
+async fn mfa_recovery_codes(
+    State(state): State<AppState>,
+    Session(session): Session,
+    Body(body): Body<MfaCodeRequest>,
+) -> Result<Response, ApiError> {
+    let recovery_codes =
+        identity::regenerate_recovery_codes(&state.pool, &session, &body.code).await?;
+    Ok(secret_answer(Json(RecoveryCodes { recovery_codes })))
 }
 
 #[derive(serde::Deserialize)]
@@ -313,7 +432,7 @@ async fn auth_start(
         _ => return Err(ApiError::validation("intent is invalid")),
     };
     let address = extract::client_address(peer.map(|found| found.0.0), &headers);
-    let url = identity::start(
+    let started = identity::start(
         &state.pool,
         &state.providers,
         identity::StartInput {
@@ -327,7 +446,29 @@ async fn auth_start(
         },
     )
     .await?;
-    Ok(Json(serde_json::json!({"url": url})).into_response())
+    started_response(&state, started)
+}
+
+/// The provider URL, and the cookie that ties the attempt to this browser.
+fn started_response(
+    state: &AppState,
+    started: identity::StartedAttempt,
+) -> Result<Response, ApiError> {
+    let mut response = Json(serde_json::json!({"url": started.url})).into_response();
+    let cookie = extract::auth_binding_cookie(
+        &started.browser_binding,
+        identity::ATTEMPT_COOKIE_SECONDS,
+        state.cookie_secure,
+    );
+    append_cookie(&mut response, &cookie)?;
+    Ok(response)
+}
+
+fn append_cookie(response: &mut Response, cookie: &str) -> Result<(), ApiError> {
+    let value =
+        HeaderValue::from_str(cookie).map_err(|_| CoreError::Internal("cookie header".into()))?;
+    response.headers_mut().append(header::SET_COOKIE, value);
+    Ok(())
 }
 
 async fn reauth_provider_start(
@@ -336,7 +477,7 @@ async fn reauth_provider_start(
     Session(session): Session,
     Body(body): Body<AuthStartRequest>,
 ) -> Result<Response, ApiError> {
-    let url = identity::start(
+    let started = identity::start(
         &state.pool,
         &state.providers,
         identity::StartInput {
@@ -350,7 +491,7 @@ async fn reauth_provider_start(
         },
     )
     .await?;
-    Ok(Json(serde_json::json!({"url": url})).into_response())
+    started_response(&state, started)
 }
 
 #[derive(serde::Deserialize)]
@@ -380,6 +521,7 @@ async fn auth_callback(
             error: query.error.as_deref(),
             session_token: session_token.as_deref(),
             device: extract::device_label(&headers).as_deref(),
+            browser_binding: extract::auth_binding(&headers).as_deref(),
         },
     )
     .await;
@@ -398,6 +540,9 @@ async fn auth_callback(
     if let Some(cookie) = cookie {
         set_cookie(&mut response, &cookie)?;
     }
+    // The attempt is over, whatever came of it: the binding goes with it.
+    let done = extract::auth_binding_cookie("", 0, state.cookie_secure);
+    append_cookie(&mut response, &done)?;
     Ok(response)
 }
 

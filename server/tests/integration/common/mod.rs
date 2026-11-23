@@ -197,7 +197,13 @@ pub async fn send(app: &axum::Router, request: Request<Body>) -> Reply {
     Reply {
         status,
         body,
-        cookie: header("set-cookie").map(|value| value.split(';').next().unwrap().to_string()),
+        // The session cookie (the sign-in attempt's own binding cookie is another one).
+        cookie: headers
+            .get_all("set-cookie")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find(|value| value.starts_with("penfii_session="))
+            .map(|value| value.split(';').next().unwrap().to_string()),
         location: header("location"),
         bytes,
         headers,
@@ -465,4 +471,39 @@ pub fn webhook_kek() -> [u8; 32] {
     })
     .unwrap()
     .unwrap()
+}
+
+/// The six-digit code an authenticator app shows for `secret` (the Base32 text the setup answers with,
+/// spaces allowed) in the 30-second step `offset` steps from now. RFC 6238 with SHA-1, written out here
+/// so the tests do not lean on the server's own implementation.
+pub fn totp_code(secret: &str, offset: i64) -> String {
+    use hmac::{Hmac, Mac};
+    let mut bits = 0u32;
+    let mut buffer = 0u32;
+    let mut key = Vec::new();
+    for ch in secret.chars().filter(|ch| !ch.is_whitespace()) {
+        let value = match ch {
+            'A'..='Z' => ch as u32 - 'A' as u32,
+            '2'..='7' => ch as u32 - '2' as u32 + 26,
+            other => panic!("not Base32: {other}"),
+        };
+        buffer = (buffer << 5) | value;
+        bits += 5;
+        if bits >= 8 {
+            bits -= 8;
+            key.push(((buffer >> bits) & 0xff) as u8);
+        }
+    }
+    let step = chrono::Utc::now().timestamp() / 30 + offset;
+    let mut mac = <Hmac<sha1::Sha1> as Mac>::new_from_slice(&key).unwrap();
+    mac.update(&(step as u64).to_be_bytes());
+    let digest = mac.finalize().into_bytes();
+    let at = (digest[19] & 0x0f) as usize;
+    let number = u32::from_be_bytes([
+        digest[at] & 0x7f,
+        digest[at + 1],
+        digest[at + 2],
+        digest[at + 3],
+    ]);
+    format!("{:06}", number % 1_000_000)
 }

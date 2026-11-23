@@ -44,6 +44,22 @@ async fn create_file(
     Ok((StatusCode::CREATED, Json(file_object(file))).into_response())
 }
 
+/// File bodies are held in memory until they are stored, so the bytes of the uploads in flight are
+/// budgeted: the larger of 256 MiB and twice the file size limit (so one file of any allowed size always
+/// fits). The unit is a KiB. It needs no setting; an upload that finds the budget used waits for it for a
+/// while, and then answers 503 `upload_busy` (`retryAfterSeconds` in the body).
+const UPLOAD_BUDGET_FLOOR: u64 = 256 * 1024 * 1024;
+
+pub(crate) fn upload_budget(
+    limits: &penfii_core::Limits,
+    configured: Option<u64>,
+) -> std::sync::Arc<tokio::sync::Semaphore> {
+    let max = u64::try_from(limits.file_max_bytes.unwrap_or(0)).unwrap_or(0);
+    let bytes = configured.unwrap_or_else(|| UPLOAD_BUDGET_FLOOR.max(max.saturating_mul(2)));
+    let kib = usize::try_from(bytes / 1024).unwrap_or(usize::MAX >> 4);
+    std::sync::Arc::new(tokio::sync::Semaphore::new(kib.min(u32::MAX as usize)))
+}
+
 async fn upload_file(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -67,12 +83,51 @@ async fn upload_file(
     if max == 0 || declared == 0 || declared > max {
         return Err(CoreError::validation("file size is outside the configured limit").into());
     }
+    // Refused before any of the body is read when nothing could be done with it: no such pending upload
+    // of this person, or one of another size. (The upload is checked again once the body is in.)
+    files::check_upload_ready(
+        &state.pool,
+        user_id,
+        id,
+        i64::try_from(declared).unwrap_or(i64::MAX),
+    )
+    .await?;
+    // The bytes this upload will hold are reserved first; the permit is kept until the store has them.
+    let wanted = u32::try_from(declared.div_ceil(1024)).unwrap_or(u32::MAX);
+    let _held = match tokio::time::timeout(
+        state.upload_wait,
+        state.upload_budget.clone().acquire_many_owned(wanted),
+    )
+    .await
+    {
+        Ok(Ok(permit)) => permit,
+        _ => {
+            return Err(ApiError::coded_with(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "upload_busy",
+                "too many uploads are in progress; try again in a moment",
+                serde_json::json!({"retryAfterSeconds": 5}),
+            ));
+        }
+    };
     // The body is kept in the chunks it arrives in: joining them into one buffer would copy the whole file, and
     // the store writes the chunks as they are. More than was declared is refused as soon as it shows.
     let mut chunks = Vec::new();
     let mut received = 0usize;
     let mut stream = request.into_body().into_data_stream();
-    while let Some(chunk) = stream.next().await {
+    // A body that stalls is not allowed to keep its share of the budget: each chunk has to arrive within
+    // `upload_idle` of the one before.
+    loop {
+        let Ok(next) = tokio::time::timeout(state.upload_idle, stream.next()).await else {
+            return Err(ApiError::coded(
+                StatusCode::REQUEST_TIMEOUT,
+                "upload_timeout",
+                "the file body stopped arriving; start the upload again",
+            ));
+        };
+        let Some(chunk) = next else {
+            break;
+        };
         let chunk = chunk.map_err(|_| CoreError::validation("file body could not be read"))?;
         received += chunk.len();
         if received > declared {

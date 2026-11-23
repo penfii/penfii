@@ -172,6 +172,7 @@ export function TeamMembersPanel({
           </tbody>
         </table></div>
       ) : null}
+      {editable ? <AddImpact workspaceId={workspaceId} teamId={teamId} /> : null}
       {editable ? (
         <PersonPicker
           workspaceId={workspaceId}
@@ -184,5 +185,21 @@ export function TeamMembersPanel({
       {dialog}
       {confirmDialog}
     </section>
+  )
+}
+
+/** What adding someone gives them: the roles this Team has in its linked Projects, so a person is not added blind. */
+function AddImpact({ workspaceId, teamId }: { workspaceId: string; teamId: string }) {
+  const { t } = useI18n()
+  const projects = useQuery(queries.teamProjects(workspaceId, teamId))
+  const given = (projects.data ?? []).filter((project) => project.teamRole !== null)
+  if (given.length === 0) return null
+  const list = given.map((project) => `${project.name} (${t(`permissions.role.${project.teamRole as 'ADMIN' | 'EDITOR' | 'VIEWER'}`)})`).join(', ')
+  const admin = given.some((project) => project.teamRole === 'ADMIN')
+  return (
+    <p className="hint team-add-impact" role="note">
+      {t('teams.addImpact', { projects: list })}
+      {admin ? ` ${t('teams.addImpact.admin')}` : ''}
+    </p>
   )
 }

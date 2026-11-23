@@ -2,12 +2,14 @@
 
 use std::time::Duration;
 
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use futures_util::{SinkExt, StreamExt};
+use penfii_core::docs::collab::close;
 use penfii_core::platform::ChangeNotice;
-use penfii_core::{conversation, work};
+use penfii_core::{CoreError, conversation, identity, work};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
@@ -15,11 +17,65 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
-use crate::extract::Actor;
+use crate::extract::{self, Actor};
 use crate::origin::AllowedOrigin;
 
 use axum::Router;
 use axum::routing::get;
+
+// How often an open socket asks again whether the session it was opened with is still alive
+// (`AppState::ws_session_recheck`, 15 seconds). A web session that was revoked (a device signed out, a
+// password changed or reset, the account disabled) or has expired ends its sockets within this time;
+// before this check a socket stayed open for as long as it was connected.
+
+/// The session a socket was opened with, asked about again on a timer. Only a session that is
+/// really over ends the socket; a database that does not answer for a moment does not (the next
+/// check asks again).
+struct SessionWatch {
+    pool: sqlx::PgPool,
+    token: String,
+    every: tokio::time::Interval,
+}
+
+impl SessionWatch {
+    async fn new(state: &AppState, headers: &HeaderMap) -> Self {
+        let mut every =
+            tokio::time::interval(state.ws_session_recheck.max(Duration::from_millis(10)));
+        every.tick().await;
+        Self {
+            pool: state.pool.clone(),
+            token: extract::session_token(headers).unwrap_or_default(),
+            every,
+        }
+    }
+
+    /// Resolves when a check is due. Cancelling it loses nothing, so it can be a `select!` arm; the check
+    /// itself is [`Self::ended`], run in the arm's body so a busy socket cannot keep cancelling it.
+    async fn due(&mut self) {
+        self.every.tick().await;
+    }
+
+    /// Whether the session is over.
+    async fn ended(&self) -> bool {
+        matches!(
+            identity::authenticate(&self.pool, &self.token).await,
+            Err(CoreError::Unauthenticated)
+        )
+    }
+}
+
+/// Tells the browser why the socket ends: the session is over (the same code as the co-editing socket).
+async fn close_session<S>(sink: &mut S)
+where
+    S: SinkExt<Message> + Unpin,
+{
+    let _ = sink
+        .send(Message::Close(Some(CloseFrame {
+            code: close::SESSION,
+            reason: "session ended".into(),
+        })))
+        .await;
+}
 
 /// The most changes a reconnecting Project socket is caught up with; further behind than this it reads the Project again.
 const PROJECT_REPLAY_LIMIT: i64 = 500;
@@ -46,33 +102,51 @@ struct Hello {
     after_change_seq: i64,
 }
 
+/// What a client may send on an event socket: a hello naming what it wants (a conversation id, a change
+/// number) and pings. A few hundred bytes; the library default is 64 MiB per message.
+const EVENT_SOCKET_MAX_MESSAGE: usize = 8 * 1024;
+
 pub(crate) async fn ws(
     State(state): State<AppState>,
     Query(query): Query<WsQuery>,
+    headers: HeaderMap,
     upgrade: WebSocketUpgrade,
     _: AllowedOrigin,
     Actor(user_id): Actor,
 ) -> Result<axum::response::Response, ApiError> {
     conversation::readable_head(&state.pool, user_id, query.conversation_id).await?;
+    let watch = SessionWatch::new(&state, &headers).await;
     Ok(upgrade
-        .on_upgrade(move |socket| handle(socket, state, user_id, query.conversation_id))
+        .max_message_size(EVENT_SOCKET_MAX_MESSAGE)
+        .max_frame_size(EVENT_SOCKET_MAX_MESSAGE)
+        .on_upgrade(move |socket| handle(socket, state, watch, user_id, query.conversation_id))
         .into_response())
 }
 
 pub(crate) async fn project_ws(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
+    headers: HeaderMap,
     upgrade: WebSocketUpgrade,
     _: AllowedOrigin,
     Actor(user_id): Actor,
 ) -> Result<axum::response::Response, ApiError> {
     work::board(&state.pool, project_id, user_id).await?;
+    let watch = SessionWatch::new(&state, &headers).await;
     Ok(upgrade
-        .on_upgrade(move |socket| handle_project(socket, state, user_id, project_id))
+        .max_message_size(EVENT_SOCKET_MAX_MESSAGE)
+        .max_frame_size(EVENT_SOCKET_MAX_MESSAGE)
+        .on_upgrade(move |socket| handle_project(socket, state, watch, user_id, project_id))
         .into_response())
 }
 
-async fn handle_project(socket: WebSocket, state: AppState, user_id: Uuid, project_id: Uuid) {
+async fn handle_project(
+    socket: WebSocket,
+    state: AppState,
+    mut watch: SessionWatch,
+    user_id: Uuid,
+    project_id: Uuid,
+) {
     let (mut sink, mut stream) = socket.split();
     let mut rx = state.changes.subscribe();
     let hello = match tokio::time::timeout(Duration::from_secs(30), next_text(&mut stream)).await {
@@ -157,6 +231,7 @@ async fn handle_project(socket: WebSocket, state: AppState, user_id: Uuid, proje
     loop {
         tokio::select! {
             incoming=stream.next()=>match incoming {Some(Ok(Message::Ping(payload)))=>{if sink.send(Message::Pong(payload)).await.is_err(){return;}},Some(Ok(Message::Close(_)))|None=>return,Some(Err(_))=>return,_=>{}},
+            _=watch.due()=>{ if watch.ended().await { close_session(&mut sink).await; return; } },
             event=rx.recv()=>{
                 let event = match event {
                     Ok(event) => event,
@@ -197,7 +272,13 @@ async fn handle_project(socket: WebSocket, state: AppState, user_id: Uuid, proje
     }
 }
 
-async fn handle(socket: WebSocket, state: AppState, user_id: Uuid, conversation_id: Uuid) {
+async fn handle(
+    socket: WebSocket,
+    state: AppState,
+    mut watch: SessionWatch,
+    user_id: Uuid,
+    conversation_id: Uuid,
+) {
     let (mut sink, mut stream) = socket.split();
     let mut rx = state.changes.subscribe();
     let hello = match tokio::time::timeout(Duration::from_secs(30), next_text(&mut stream)).await {
@@ -240,6 +321,12 @@ async fn handle(socket: WebSocket, state: AppState, user_id: Uuid, conversation_
                     Some(Ok(Message::Close(_))) | None => return,
                     Some(Err(_)) => return,
                     _ => {}
+                }
+            }
+            _ = watch.due() => {
+                if watch.ended().await {
+                    close_session(&mut sink).await;
+                    return;
                 }
             }
             event = rx.recv() => {
@@ -370,16 +457,20 @@ where
 /// then asks the API what changed, so nothing private travels on the socket.
 pub(crate) async fn user_ws(
     State(state): State<AppState>,
+    headers: HeaderMap,
     upgrade: WebSocketUpgrade,
     _: AllowedOrigin,
     Actor(user_id): Actor,
 ) -> Result<axum::response::Response, ApiError> {
+    let watch = SessionWatch::new(&state, &headers).await;
     Ok(upgrade
-        .on_upgrade(move |socket| handle_user(socket, state, user_id))
+        .max_message_size(EVENT_SOCKET_MAX_MESSAGE)
+        .max_frame_size(EVENT_SOCKET_MAX_MESSAGE)
+        .on_upgrade(move |socket| handle_user(socket, state, watch, user_id))
         .into_response())
 }
 
-async fn handle_user(socket: WebSocket, state: AppState, user_id: Uuid) {
+async fn handle_user(socket: WebSocket, state: AppState, mut watch: SessionWatch, user_id: Uuid) {
     let (mut sink, mut stream) = socket.split();
     let mut rx = state.changes.subscribe();
     let _ = send_json(&mut sink, &json!({"v":1,"type":"user.ready"})).await;
@@ -389,6 +480,12 @@ async fn handle_user(socket: WebSocket, state: AppState, user_id: Uuid) {
                 Some(Ok(Message::Ping(payload))) => { if sink.send(Message::Pong(payload)).await.is_err() { return; } },
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
                 _ => {}
+            },
+            _ = watch.due() => {
+                if watch.ended().await {
+                    close_session(&mut sink).await;
+                    return;
+                }
             },
             event = rx.recv() => match event {
                 Ok(ChangeNotice::Inbox { user_id: target }) if target == user_id => {

@@ -497,3 +497,161 @@ async fn concurrent_sign_ins_do_not_starve_a_small_pool(pool: PgPool) {
         }
     }
 }
+
+/// FEA-140: the counters hold under parallel requests. All attempts are made at once, none is
+/// answered before the counters are full, and only `max_failures` get as far as the password.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn parallel_wrong_passwords_cannot_get_past_the_account_counter(pool: PgPool) {
+    common::setup(&pool).await;
+    let limits = limits(ThrottleLimits {
+        account: Bucket {
+            max_failures: 4,
+            window_seconds: 600,
+        },
+        account_address: Bucket {
+            max_failures: 100,
+            window_seconds: 600,
+        },
+        address: Bucket {
+            max_failures: 100,
+            window_seconds: 600,
+        },
+    });
+    let mut attempts = Vec::new();
+    for n in 0..24 {
+        let (pool, limits) = (pool.clone(), limits.clone());
+        attempts.push(tokio::spawn(async move {
+            let address = format!("203.0.113.{n}");
+            attempt(&pool, &limits, OWNER, "wrong password", &address).await
+        }));
+    }
+    let (mut checked, mut refused) = (0, 0);
+    for attempt in attempts {
+        match attempt.await.unwrap() {
+            Err(CoreError::Unauthenticated) => checked += 1,
+            Err(CoreError::RateLimited {
+                retry_after_seconds,
+            }) => {
+                assert!((1..=600).contains(&retry_after_seconds));
+                refused += 1;
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    assert_eq!((checked, refused), (4, 20));
+    // Locked for the right password too.
+    assert!(locked(
+        attempt(&pool, &limits, OWNER, OWNER_PASSWORD, "198.51.100.1").await
+    ));
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn parallel_sign_ins_from_one_address_share_one_address_counter(pool: PgPool) {
+    common::setup(&pool).await;
+    let limits = limits(ThrottleLimits {
+        account: Bucket {
+            max_failures: 100,
+            window_seconds: 600,
+        },
+        account_address: Bucket {
+            max_failures: 100,
+            window_seconds: 600,
+        },
+        address: Bucket {
+            max_failures: 5,
+            window_seconds: 600,
+        },
+    });
+    let mut attempts = Vec::new();
+    for n in 0..20 {
+        let (pool, limits) = (pool.clone(), limits.clone());
+        attempts.push(tokio::spawn(async move {
+            attempt(
+                &pool,
+                &limits,
+                &format!("nobody{n}@penfii.test"),
+                "wrong password",
+                "203.0.113.9",
+            )
+            .await
+        }));
+    }
+    let mut checked = 0;
+    for attempt in attempts {
+        match attempt.await.unwrap() {
+            Err(CoreError::Unauthenticated) => checked += 1,
+            Err(CoreError::RateLimited { .. }) => {}
+            other => panic!("{other:?}"),
+        }
+    }
+    assert_eq!(checked, 5);
+}
+
+/// A right password is not charged to the address, and wipes the account's counters.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn right_passwords_do_not_use_up_the_address_counter(pool: PgPool) {
+    common::setup(&pool).await;
+    let limits = limits(ThrottleLimits {
+        account: Bucket {
+            max_failures: 3,
+            window_seconds: 600,
+        },
+        account_address: Bucket {
+            max_failures: 3,
+            window_seconds: 600,
+        },
+        address: Bucket {
+            max_failures: 3,
+            window_seconds: 600,
+        },
+    });
+    for _ in 0..10 {
+        attempt(&pool, &limits, OWNER, OWNER_PASSWORD, "203.0.113.77")
+            .await
+            .unwrap();
+    }
+    // Two wrong ones are still within the counters afterwards.
+    assert!(wrong(
+        attempt(&pool, &limits, OWNER, "wrong password", "203.0.113.77").await
+    ));
+    assert!(wrong(
+        attempt(&pool, &limits, OWNER, "wrong password", "203.0.113.77").await
+    ));
+    attempt(&pool, &limits, OWNER, OWNER_PASSWORD, "203.0.113.77")
+        .await
+        .unwrap();
+}
+
+/// Re-authentication has the same property: five parallel wrong passwords are five, not twenty.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn parallel_reauthentications_cannot_get_past_the_counter(pool: PgPool) {
+    let env = common::Env::new(pool.clone()).await;
+    let mut attempts = Vec::new();
+    for _ in 0..20 {
+        let (app, cookie) = (env.app.clone(), env.owner.cookie.clone());
+        attempts.push(tokio::spawn(async move {
+            common::call(
+                &app,
+                "POST",
+                "/v1/me/reauth/password",
+                Some(&cookie),
+                Some(json!({"password": "wrong password"})),
+            )
+            .await
+            .status
+        }));
+    }
+    let mut statuses = Vec::new();
+    for attempt in attempts {
+        statuses.push(attempt.await.unwrap());
+    }
+    let checked = statuses
+        .iter()
+        .filter(|status| **status == StatusCode::UNAUTHORIZED)
+        .count();
+    let refused = statuses
+        .iter()
+        .filter(|status| **status == StatusCode::TOO_MANY_REQUESTS)
+        .count();
+    assert_eq!((checked, refused), (5, 15), "{statuses:?}");
+}

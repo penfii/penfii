@@ -2041,3 +2041,252 @@ async fn a_ticket_reopened_while_the_schedule_runs_is_not_archived(pool: PgPool)
         .unwrap();
     assert_eq!((archived, skipped), (Some(0), Some(1)));
 }
+
+fn comment_body(text: &str) -> Value {
+    json!({"body":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":text}]}]}})
+}
+
+/// Every read of a trashed Ticket's content, for one signed-in person: the answers in the order of the paths.
+async fn trashed_reads(world: &World, cookie: &str, id: &str) -> Vec<(String, StatusCode)> {
+    let mut out = Vec::new();
+    for path in [
+        format!("/v1/tickets/{id}"),
+        format!("/v1/tickets/{id}/comments"),
+        format!("/v1/tickets/{id}/children"),
+        format!("/v1/tickets/{id}/activity"),
+        format!("/v1/tickets/{id}/revisions"),
+        format!("/v1/tickets/{id}/revisions/1"),
+    ] {
+        let (status, _) = get_as(world, cookie, &path).await;
+        out.push((path, status));
+    }
+    out
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_trashed_ticket_and_what_hangs_on_it_is_closed_to_everyone_but_the_admins_trash_list_shows_only_its_key_and_title(
+    pool: PgPool,
+) {
+    let world = &World::new(pool).await;
+    let workspace_id = world.workspace_id;
+    let (project_id, _) = new_project(world, workspace_id, "Trash access").await;
+    let viewer = viewer_cookie(world, workspace_id, "trash-viewer@penfii.test").await;
+    grant(
+        world,
+        &project_id,
+        user_id_of(world, "trash-viewer@penfii.test").await,
+        "EDITOR",
+    )
+    .await;
+    let owner = world.owner_cookie.clone();
+    let parent = ticket(
+        world,
+        &project_id,
+        "ta-p",
+        json!({"title":"Secret parent","hierarchyKind":"TASK"}),
+    )
+    .await;
+    ticket(
+        world,
+        &project_id,
+        "ta-c",
+        json!({"title":"Secret child","hierarchyKind":"SUBTASK","parentId":parent}),
+    )
+    .await;
+    let (status, body, _) = call(
+        &world.app,
+        "POST",
+        &format!("/v1/tickets/{parent}/comments"),
+        Some(&owner),
+        None,
+        Some(comment_body("secret comment text")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // Live: both read all of it.
+    for cookie in [&owner, &viewer] {
+        for (path, status) in trashed_reads(world, cookie, &parent).await {
+            assert_eq!(status, StatusCode::OK, "{path}");
+        }
+    }
+    let (_, feed) = get_as(
+        world,
+        &viewer,
+        &format!("/v1/projects/{project_id}/activity"),
+    )
+    .await;
+    assert!(feed.to_string().contains(&parent), "{feed}");
+
+    // Trashed: the viewer (an editor) and the admin who trashed it both get "not found" for the
+    // ticket, its comments, children, activity and history, and the project's activity feed drops it.
+    assert_eq!(
+        command(world, &owner, &parent, "trash", "ta-trash").await.0,
+        StatusCode::NO_CONTENT
+    );
+    for cookie in [&owner, &viewer] {
+        for (path, status) in trashed_reads(world, cookie, &parent).await {
+            assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+        }
+        let (status, feed) = get_as(
+            world,
+            cookie,
+            &format!("/v1/projects/{project_id}/activity"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{feed}");
+        assert!(!feed.to_string().contains(&parent), "{feed}");
+    }
+
+    // The admin's recovery list has the key, title, time and who, and nothing of the content; an
+    // editor does not get the list at all.
+    let (status, list) = get_as(world, &owner, &format!("/v1/projects/{project_id}/trash")).await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let row = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == parent.as_str())
+        .unwrap_or_else(|| panic!("{list}"));
+    assert_eq!(row["title"], "Secret parent");
+    assert!(
+        row["key"].is_string() && row["trashedAt"].is_string() && row["trashedByName"].is_string()
+    );
+    for hidden in ["secret comment text", "description", "comments"] {
+        assert!(!row.to_string().contains(hidden), "{row}");
+    }
+    assert_eq!(
+        get_as(world, &viewer, &format!("/v1/projects/{project_id}/trash"))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+
+    // Restoring brings everything back to those who could read it.
+    assert_eq!(
+        command(world, &owner, &parent, "restore-from-trash", "ta-restore")
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    for cookie in [&owner, &viewer] {
+        for (path, status) in trashed_reads(world, cookie, &parent).await {
+            assert_eq!(status, StatusCode::OK, "{path}");
+        }
+    }
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn the_trash_list_of_a_private_channel_ticket_opens_no_content_to_an_admin_outside_the_channel(
+    pool: PgPool,
+) {
+    let world = &World::new(pool).await;
+    let workspace_id = world.workspace_id;
+    let (project_id, _) = new_project(world, workspace_id, "Trash private").await;
+    let owner = world.owner_cookie.clone();
+    let outside_admin = viewer_cookie(world, workspace_id, "trash-admin@penfii.test").await;
+    grant(
+        world,
+        &project_id,
+        user_id_of(world, "trash-admin@penfii.test").await,
+        "ADMIN",
+    )
+    .await;
+    let (_, space) = get_as(
+        world,
+        &owner,
+        &format!("/v1/workspaces/{workspace_id}/space"),
+    )
+    .await;
+    let channel = space["channels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|channel| channel["projectId"] == project_id.as_str())
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, body, _) = call(
+        &world.app,
+        "PATCH",
+        &format!("/v1/channels/{channel}"),
+        Some(&owner),
+        None,
+        Some(json!({"visibility":"PRIVATE"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let private = ticket(
+        world,
+        &project_id,
+        "tp-1",
+        json!({"title":"Private secret","hierarchyKind":"TASK","channelId":channel}),
+    )
+    .await;
+    let (status, body, _) = call(
+        &world.app,
+        "POST",
+        &format!("/v1/tickets/{private}/comments"),
+        Some(&owner),
+        None,
+        Some(comment_body("private channel comment")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // The admin outside the channel reads none of it, before the trash and after.
+    for (path, status) in trashed_reads(world, &outside_admin, &private).await {
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+    }
+    assert_eq!(
+        command(world, &outside_admin, &private, "trash", "tp-trash")
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    for (path, status) in trashed_reads(world, &outside_admin, &private).await {
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+    }
+    // The recovery list is the admin's: key, title, time, who. No content comes with it.
+    let (status, list) = get_as(
+        world,
+        &outside_admin,
+        &format!("/v1/projects/{project_id}/trash"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let rows = list["items"].as_array().unwrap();
+    let row = rows
+        .iter()
+        .find(|item| item["id"] == private.as_str())
+        .unwrap();
+    assert_eq!(row["title"], "Private secret");
+    assert!(
+        !row.to_string().contains("private channel comment"),
+        "{row}"
+    );
+    // The channel's reader (the owner) is refused too, until restore.
+    for (path, status) in trashed_reads(world, &owner, &private).await {
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+    }
+    // Restoring changes nobody's access to the channel.
+    assert_eq!(
+        command(
+            world,
+            &outside_admin,
+            &private,
+            "restore-from-trash",
+            "tp-restore"
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    for (path, status) in trashed_reads(world, &outside_admin, &private).await {
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+    }
+    for (path, status) in trashed_reads(world, &owner, &private).await {
+        assert_eq!(status, StatusCode::OK, "{path}");
+    }
+}

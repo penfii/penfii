@@ -198,6 +198,9 @@ impl HttpTransport {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .redirect(reqwest::redirect::Policy::none())
+            // Never through a proxy from the environment: the guard below judges the address the
+            // request goes to, and a proxy would make that the proxy's.
+            .no_proxy()
             .dns_resolver(Arc::new(PublicOnlyResolver))
             .build()
             .map_err(|e| format!("push client: {e}"))?;
@@ -216,6 +219,10 @@ impl HttpTransport {
         let (Some(scheme), Some(authority)) = (endpoint.scheme_str(), endpoint.authority()) else {
             return Err(Outcome::Failed("endpoint is not absolute".into()));
         };
+        // A subscription stored before the port rule (see `validate`) is not sent to either.
+        if endpoint.port_u16().is_some_and(|port| port != 443) {
+            return Err(Outcome::Failed("endpoint must use port 443".into()));
+        }
         let audience = format!("{scheme}://{authority}");
         let public = URL_SAFE_NO_PAD
             .decode(&subscription.p256dh)
@@ -567,6 +574,10 @@ fn validate(new: &NewSubscription<'_>) -> Result<(), CoreError> {
     if uri.scheme_str() != Some("https") || uri.host().is_none() {
         return Err(CoreError::validation("endpoint must be an https URL"));
     }
+    // Push services answer on 443; another port is a way to knock on a service of the same host.
+    if uri.port_u16().is_some_and(|port| port != 443) {
+        return Err(CoreError::validation("endpoint must use port 443"));
+    }
     // The server will POST to this address, so it must be a public name: no IP literal, no
     // single-label or local host. (The address a name resolves to is checked again when sending.)
     if !is_public_host(uri.host().unwrap_or_default()) {
@@ -620,38 +631,6 @@ fn is_public_host(host: &str) -> bool {
     .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
 }
 
-/// Whether a resolved address is one a push service can have (not loopback, private, link-local, ...).
-fn is_public_ip(ip: std::net::IpAddr) -> bool {
-    use std::net::IpAddr;
-    match ip {
-        IpAddr::V4(v4) => {
-            let o = v4.octets();
-            !(v4.is_private()
-                || v4.is_loopback()
-                || v4.is_link_local()
-                || v4.is_broadcast()
-                || v4.is_documentation()
-                || v4.is_unspecified()
-                || v4.is_multicast()
-                || o[0] == 0
-                || (o[0] == 100 && (64..=127).contains(&o[1]))
-                || (o[0] == 198 && (18..=19).contains(&o[1]))
-                || o[0] >= 240)
-        }
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return is_public_ip(IpAddr::V4(v4));
-            }
-            let seg = v6.segments();
-            !(v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-                || (seg[0] & 0xfe00) == 0xfc00
-                || (seg[0] & 0xffc0) == 0xfe80)
-        }
-    }
-}
-
 /// Resolves names for the push client and refuses any answer that is not a public address, so a
 /// subscription cannot make the server call something inside its own network.
 struct PublicOnlyResolver;
@@ -660,8 +639,9 @@ impl reqwest::dns::Resolve for PublicOnlyResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         Box::pin(async move {
             let found = tokio::net::lookup_host((name.as_str(), 443)).await?;
-            let public: Vec<std::net::SocketAddr> =
-                found.filter(|a| is_public_ip(a.ip())).collect();
+            let public: Vec<std::net::SocketAddr> = found
+                .filter(|a| crate::net::is_public_address(a.ip()))
+                .collect();
             if public.is_empty() {
                 return Err("the host does not resolve to a public address".into());
             }
@@ -947,25 +927,38 @@ mod tests {
         ] {
             assert!(!is_public_host(host), "{host}");
         }
-        for ip in ["8.8.8.8", "142.250.1.1", "2607:f8b0:4004::1"] {
-            assert!(is_public_ip(ip.parse().unwrap()), "{ip}");
-        }
-        for ip in [
-            "127.0.0.1",
-            "10.1.2.3",
-            "172.16.0.1",
-            "192.168.1.1",
-            "169.254.169.254",
-            "100.64.0.1",
-            "0.0.0.0",
-            "::1",
-            "fe80::1",
-            "fd00::1",
-            "::ffff:10.0.0.1",
-            "224.0.0.1",
-        ] {
-            assert!(!is_public_ip(ip.parse().unwrap()), "{ip}");
-        }
+    }
+
+    #[test]
+    fn a_push_endpoint_uses_port_443() {
+        let new = |endpoint: &'static str| NewSubscription {
+            endpoint,
+            p256dh: "",
+            auth: "",
+            user_agent: None,
+            label: None,
+        };
+        let message = |endpoint| match validate(&new(endpoint)) {
+            Err(CoreError::Validation(message)) => message,
+            other => format!("{other:?}"),
+        };
+        assert_eq!(
+            message("https://fcm.googleapis.com:8443/send/x"),
+            "endpoint must use port 443"
+        );
+        assert_eq!(
+            message("https://fcm.googleapis.com:6379/send/x"),
+            "endpoint must use port 443"
+        );
+        // The default port, or 443 written out, goes on to the checks of the keys.
+        assert_eq!(
+            message("https://fcm.googleapis.com/send/x"),
+            "p256dh is not a P-256 public key"
+        );
+        assert_eq!(
+            message("https://fcm.googleapis.com:443/send/x"),
+            "p256dh is not a P-256 public key"
+        );
     }
 
     /// Reaches the real FCM endpoint with a made-up subscription: `cargo test -p penfii-core --lib -- --ignored push_egress`.

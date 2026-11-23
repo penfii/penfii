@@ -1250,3 +1250,90 @@ async fn wiki_a_version_keeps_the_files_it_names_so_a_restore_can_bring_them_bac
         "the file node survived the Restore"
     );
 }
+
+/// A File on a Doc comment is as visible as the live comment on a page the person can read: the
+/// other readers of an open page see it, a person who may not read a restricted page does not, and a
+/// deleted comment's file is nobody's (not even the uploader's, as if it were a loose upload).
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_file_on_a_doc_comment_is_visible_to_the_readers_of_the_page_only(pool: PgPool) {
+    let world = &World::new(pool).await;
+    let ws = world.workspace_id;
+    let (reader_id, _) = member(world, ws, "dcf-reader").await;
+    let owner = world.owner_cookie.clone();
+    let open_page = make_doc(world, &owner, ws, "dcf open", json!({})).await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let restricted_page = make_doc_with(
+        world,
+        &owner,
+        ws,
+        "dcf restricted",
+        json!([para("x")]),
+        json!({"visibility":"RESTRICTED","participants":[]}),
+    )
+    .await;
+    let mut ids = Vec::new();
+    for (page, name) in [
+        (&open_page, "open.txt"),
+        (&restricted_page, "restricted.txt"),
+    ] {
+        let comment = Uuid::new_v4();
+        let file = Uuid::new_v4();
+        sqlx::query("INSERT INTO penfii.doc_comments(id,page_id,author_id,body) VALUES($1,$2,$3,'{}'::jsonb)")
+            .bind(comment)
+            .bind(Uuid::parse_str(page).unwrap())
+            .bind(world.owner_id)
+            .execute(&world.pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO penfii.files(id,workspace_id,storage_key,filename,byte_size,detected_mime,state,created_by) VALUES($1,$2,$3,$4,9,'text/plain','AVAILABLE',$5)")
+            .bind(file)
+            .bind(ws)
+            .bind(format!("dcf/{file}"))
+            .bind(name)
+            .bind(world.owner_id)
+            .execute(&world.pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO penfii.doc_comment_files(id,comment_id,file_id) VALUES($1,$2,$3)")
+            .bind(Uuid::new_v4())
+            .bind(comment)
+            .bind(file)
+            .execute(&world.pool)
+            .await
+            .unwrap();
+        ids.push((comment, file));
+    }
+    let (open_comment, open_file) = ids[0];
+    let (_, restricted_file) = ids[1];
+    let visible = |who: Uuid| {
+        let pool = world.pool.clone();
+        async move {
+            let mut conn = pool.acquire().await.unwrap();
+            penfii_core::visibility::files(&mut conn, who, &[open_file, restricted_file])
+                .await
+                .unwrap()
+        }
+    };
+    // The reader sees the open page's file and not the restricted page's; the owner sees both.
+    let seen = visible(reader_id).await;
+    assert!(
+        seen.contains(&open_file) && !seen.contains(&restricted_file),
+        "{seen:?}"
+    );
+    let seen = visible(world.owner_id).await;
+    assert!(
+        seen.contains(&open_file) && seen.contains(&restricted_file),
+        "{seen:?}"
+    );
+    // A deleted comment's file is closed to everyone, the uploader included.
+    sqlx::query("UPDATE penfii.doc_comments SET deleted_at=now() WHERE id=$1")
+        .bind(open_comment)
+        .execute(&world.pool)
+        .await
+        .unwrap();
+    for who in [reader_id, world.owner_id] {
+        assert!(!visible(who).await.contains(&open_file));
+    }
+}

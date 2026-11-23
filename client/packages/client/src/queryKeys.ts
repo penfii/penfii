@@ -30,6 +30,7 @@ export const queryKeys = {
   adminInvitations: (workspaceId: string) => ['admin-invitations', workspaceId] as const,
   adminProjectsWithoutAdmin: (workspaceId: string) => ['admin-projects-without-admin', workspaceId] as const,
   adminChannelsWithoutManager: (workspaceId: string) => ['admin-channels-without-manager', workspaceId] as const,
+  adminDocsWithoutManager: (workspaceId: string) => ['admin-docs-without-manager', workspaceId] as const,
   adminTeamMembers: (workspaceId: string, teamId: string) => ['admin-team-members', workspaceId, teamId] as const,
   teamProjects: (workspaceId: string, teamId: string) => ['team-projects', workspaceId, teamId] as const,
   adminAudit: (workspaceId: string, action: string) => [...all.adminAudit(workspaceId), action] as const,
@@ -41,7 +42,9 @@ export const queryKeys = {
   departments: (workspaceId: string) => ['departments', workspaceId] as const,
   // Under `me`, so signing in or out refreshes them too.
   identities: ['me', 'identities'] as const,
+  emailChange: ['me', 'email-change'] as const,
   sessions: ['me', 'sessions'] as const,
+  mfa: ['me', 'mfa'] as const,
   oauthGrants: ['me', 'oauth-grants'] as const,
   serverInfo: ['server-info'] as const,
   authProviders: ['auth-providers'] as const,

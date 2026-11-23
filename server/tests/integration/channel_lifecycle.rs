@@ -190,9 +190,9 @@ async fn a_person_in_all_four_channels_and_the_control_channel(pool: PgPool) {
 }
 
 /// Removal from the Workspace takes every channel membership, private and public (FEA-052). What is
-/// kept per person (read position, mute, favorite) and the Team and Project roles stay. A rejoin
-/// brings back the Project role and so what the Project gives (its public channel), but no private
-/// channel; the Workspace-wide public channel is readable and needs a join before posting.
+/// kept per person (read position, mute, favorite) stays; the direct Project grant is revoked with
+/// the membership (FEA-149). A rejoin brings back no Project role and no private channel; the
+/// Workspace-wide public channel is readable and needs a join before posting.
 #[sqlx::test(migrator = "crate::common::GUARD")]
 async fn removal_from_the_workspace_takes_every_channel_membership_and_a_rejoin_restores_none(
     pool: PgPool,
@@ -242,6 +242,7 @@ async fn removal_from_the_workspace_takes_every_channel_membership_and_a_rejoin_
     env.all(&pat).await;
     let before = kept(pool.clone(), pat.id).await;
     assert_eq!((before.0, before.1, before.2, before.3), (1, 1, 1, 1));
+    // (the fourth count is the direct Project grant, revoked on removal)
     assert!(before.4 >= 2, "pat posted in the channels they joined");
 
     penfii_core::admin::remove_member(&pool, env.owner.id, env.ws, pat.id)
@@ -259,8 +260,8 @@ async fn removal_from_the_workspace_takes_every_channel_membership_and_a_rejoin_
     }
     assert_eq!(
         kept(pool.clone(), pat.id).await,
-        before,
-        "nothing else is touched"
+        (before.0, before.1, before.2, 0, before.4),
+        "only the explicit Project grant goes; the rest is kept"
     );
     // The audit entry says what was taken and nothing was left without a manager (the owner manages).
     let audit: serde_json::Value = sqlx::query_scalar(
@@ -276,19 +277,26 @@ async fn removal_from_the_workspace_takes_every_channel_membership_and_a_rejoin_
     penfii_core::membership::join_workspace_as_operator(&pool, env.ws, pat.id, "MEMBER")
         .await
         .unwrap();
-    // Back: the Project role is theirs again, so the Project's public channel is open to read and
-    // write. The Workspace-wide public channel can be read, posting needs a join. No private channel.
+    // Back as a new member: no Project role, so the Project's channels stay shut. The Workspace-wide
+    // public channel can be read, posting needs a join. No private channel.
     assert_eq!(
         env.all(&pat).await,
-        [SHUT, OPEN_WITHOUT_ROW, SHUT, standing(false, true, false)]
+        [SHUT, SHUT, SHUT, standing(false, true, false)]
     );
     let after = kept(pool.clone(), pat.id).await;
     assert_eq!(
         (after.0, after.1, after.2, after.3),
-        (before.0, before.1, before.2, before.3)
+        (before.0, before.1, before.2, 0)
     );
     assert!(after.4 >= before.4, "no message is lost");
-    // A private channel has to be given again; then it works.
+    // The Project role is given again explicitly, and then the private channel; then it works.
+    env.ok(
+        &env.owner,
+        "PUT",
+        &format!("/v1/projects/{}/grants/{}", env.project, pat.id),
+        Some(json!({"role": "EDITOR"})),
+    )
+    .await;
     env.ok(
         &env.owner,
         "PUT",
@@ -455,7 +463,7 @@ async fn a_rejoin_without_the_project_role_brings_back_no_project_channel(pool: 
 /// The invitation path of a rejoin (`join_workspace`'s Rejoined branch is shared with the operator
 /// path above): a removed person who is invited and accepts again comes back to no channel, a
 /// private one needs a new invitation to it, and only what is open by the Project or the Workspace
-/// is readable. Their Project role is back.
+/// is readable. Their Project role is not back.
 #[sqlx::test(migrator = "crate::common::GUARD")]
 async fn an_invitation_rejoin_brings_back_no_channel(pool: PgPool) {
     let (env, pat) = setup(pool.clone()).await;
@@ -473,7 +481,7 @@ async fn an_invitation_rejoin_brings_back_no_channel(pool: PgPool) {
         &env.app,
         "POST",
         "/v1/invitations/accept",
-        None,
+        Some(&pat.cookie),
         Some(json!({
             "token": invitation.body["inviteToken"],
             "displayName": "pat",
@@ -485,8 +493,8 @@ async fn an_invitation_rejoin_brings_back_no_channel(pool: PgPool) {
     let pat = env.sign_in_again(&pat).await;
     assert_eq!(
         env.all(&pat).await,
-        [SHUT, OPEN_WITHOUT_ROW, SHUT, standing(false, true, false)],
-        "no channel comes back with the person; the Project's public one opens by the Project role"
+        [SHUT, SHUT, SHUT, standing(false, true, false)],
+        "no channel and no Project role come back with the person"
     );
 }
 

@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   listAudit: vi.fn(), serverInfo: vi.fn(), mcpPolicy: vi.fn(),
   getOffboardingImpact: vi.fn(), listProjectsWithoutAdmin: vi.fn(), recoverProjectAdmin: vi.fn(),
   listChannelsWithoutManager: vi.fn(), recoverChannelManager: vi.fn(),
+  listDocsWithoutManager: vi.fn(), recoverDocManager: vi.fn(),
   listProjectTrash: vi.fn(), restoreTicketFromTrash: vi.fn(), purgeTicket: vi.fn(), trashTicket: vi.fn(),
   reauthPassword: vi.fn(), reauthProviderStart: vi.fn(),
 }))
@@ -59,6 +60,7 @@ beforeEach(() => {
   api.getOffboardingImpact.mockResolvedValue({ projects: [], channels: [] })
   api.listProjectsWithoutAdmin.mockResolvedValue([])
   api.listChannelsWithoutManager.mockResolvedValue([])
+  api.listDocsWithoutManager.mockResolvedValue([])
   api.recoverProjectAdmin.mockResolvedValue({ newAccess: true })
   api.removeMember.mockResolvedValue(undefined)
   api.changeMemberRole.mockResolvedValue(undefined)
@@ -268,6 +270,34 @@ describe('workspace administration', () => {
     await waitFor(() => expect(api.listChannelsWithoutManager).toHaveBeenCalled())
     await screen.findByText(/appear here/)
     expect(screen.queryByText('Private channels without a manager')).toBeNull()
+  })
+
+  it('names a manager for a Doc without one, listing only title, creator and date', async () => {
+    const doc = { id: 'd1', title: 'Plan', visibility: 'RESTRICTED', createdBy: 'u9', createdByName: 'Lena', createdAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-02T00:00:00Z' }
+    api.listDocsWithoutManager.mockResolvedValueOnce([doc]).mockResolvedValue([])
+    api.recoverDocManager.mockResolvedValue({ newAccess: true })
+    mount('OWNER', 'u1', undefined, 'recovery')
+    expect(await screen.findByText('Docs without a manager')).toBeTruthy()
+    expect(screen.getByText('Created by Lena \u00b7 2026-11-01')).toBeTruthy()
+    const pick = screen.getByLabelText('Person to name manager: Plan') as HTMLSelectElement
+    fireEvent.change(pick, { target: { value: 'u2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Name manager: Plan' }))
+    expect(within(await screen.findByRole('dialog')).getByText(/Name Mina manager of the Doc "Plan"\? They will be able to read and edit it/)).toBeTruthy()
+    await answer('Name manager')
+    await waitFor(() => expect(api.recoverDocManager).toHaveBeenCalledWith('d1', 'u2'))
+    expect(await screen.findByText('The manager was named. This person could not read the Doc before.')).toBeTruthy()
+  })
+
+  it('says so when somebody named a Doc manager first', async () => {
+    const doc = { id: 'd1', title: 'Plan', visibility: 'PROJECT', createdBy: 'u9', createdByName: 'Lena', createdAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-02T00:00:00Z' }
+    api.listDocsWithoutManager.mockResolvedValueOnce([doc]).mockResolvedValue([])
+    api.recoverDocManager.mockRejectedValueOnce(new ApiError(409, 'doc_has_manager', 'x'))
+    mount('OWNER', 'u1', undefined, 'recovery')
+    fireEvent.change(await screen.findByLabelText('Person to name manager: Plan'), { target: { value: 'u1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Name manager: Plan' }))
+    expect(within(await screen.findByRole('dialog')).getByText(/Name yourself manager of the Doc "Plan"\?/)).toBeTruthy()
+    await answer('Name manager')
+    expect(await screen.findByText(/already has an active manager or is open to the whole Workspace/)).toBeTruthy()
   })
 
   it('names a manager for a private channel without one, after saying that the person can read it', async () => {

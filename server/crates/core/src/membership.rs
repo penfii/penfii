@@ -15,8 +15,11 @@
 //! what a duplicate means to the caller: an invitation that finds the person already in is still
 //! accepted, the operator is told.
 //!
-//! A rejoin brings back the Workspace role and what hangs on it (Teams, Project roles) but no channel
-//! membership: the person is in no channel, and a private one has to be given to them again.
+//! A rejoin brings back the Workspace role and nothing that was explicitly given before: removal
+//! revokes the person's Team and Group memberships, direct Project grants and invited Doc participant
+//! rows in that Workspace ([`revoke_explicit_access`]), as it clears channel memberships, so the person
+//! comes back as a new member and is given access again. What they wrote, their direct messages and
+//! the audit trail stay, as does access that comes from having written a Doc.
 //!
 //! A join is audited as `member.joined` in the caller's transaction. [`JoinPath`] says how the person
 //! came in: through an invitation the person is their own actor, through the operator there is no
@@ -64,6 +67,141 @@ pub fn validate_role(role: &str) -> Result<&str, CoreError> {
             "role must be OWNER, ADMIN, or MEMBER",
         ))
     }
+}
+
+/// What [`revoke_explicit_access`] took away.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct RevokedAccess {
+    pub teams: i64,
+    pub projects: i64,
+    pub groups: i64,
+    pub doc_shares: i64,
+    /// Rows of `workspace_security_auditors` (read access to the audit log) for this Workspace.
+    pub security_auditor: i64,
+    /// Rows of `channel_content_auditors` (read access to private channel content) in this Workspace.
+    pub channel_auditors: i64,
+    /// The Projects where the person was a direct admin; the audit entry keeps them, so that the list of
+    /// Projects without an admin can still name who held the role.
+    pub direct_admin_of: Vec<Uuid>,
+}
+
+impl RevokedAccess {
+    fn to_json(&self) -> serde_json::Value {
+        json!({
+            "teams": self.teams,
+            "projects": self.projects,
+            "groups": self.groups,
+            "docShares": self.doc_shares,
+            "securityAuditor": self.security_auditor,
+            "channelAuditors": self.channel_auditors,
+        })
+    }
+
+    /// Whether anything was taken away.
+    fn any(&self) -> bool {
+        self.teams > 0
+            || self.projects > 0
+            || self.groups > 0
+            || self.doc_shares > 0
+            || self.security_auditor > 0
+            || self.channel_auditors > 0
+    }
+
+    pub(crate) fn audit_with(&self, mut data: serde_json::Value) -> serde_json::Value {
+        data["revoked"] = self.to_json();
+        data["directAdminOf"] = json!(self.direct_admin_of);
+        data
+    }
+}
+
+/// Takes away what was explicitly given to the person in this Workspace: Team and Group memberships,
+/// direct Project grants and invited Doc participant rows (FEA-149). Nothing the person made or
+/// belongs to by what they did is touched: not their messages, Docs, Tickets or audit entries, not the
+/// participant row on a Doc they created, not their direct messages, and nothing in another Workspace.
+/// Channel memberships are cleared by `conversation::recovery::clear_memberships`. The person's rows
+/// as a Workspace security auditor and as a private channel's content auditor go too. A Doc page left
+/// without a manager keeps its content; a Workspace owner or admin names a manager for it
+/// ([`crate::docs::recovery`]). The same rules, for every removed person at once, are in migration
+/// 0003.
+/// Runs in the caller's transaction, after the membership has been made `INACTIVE`.
+pub(crate) async fn revoke_explicit_access(
+    conn: &mut PgConnection,
+    workspace_id: Uuid,
+    user_id: Uuid,
+) -> Result<RevokedAccess, CoreError> {
+    let teams = sqlx::query(
+        "DELETE FROM penfii.team_members tm USING penfii.teams t
+         WHERE tm.team_id = t.id AND t.workspace_id = $1 AND tm.user_id = $2",
+    )
+    .bind(workspace_id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    let revoked_grants: Vec<(Uuid, String)> = sqlx::query_as(
+        "DELETE FROM penfii.project_user_grants g USING penfii.projects p
+         WHERE g.project_id = p.id AND p.workspace_id = $1 AND g.user_id = $2
+         RETURNING g.project_id, g.role",
+    )
+    .bind(workspace_id)
+    .bind(user_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    let projects = revoked_grants.len() as u64;
+    let direct_admin_of = revoked_grants
+        .into_iter()
+        .filter(|(_, role)| role == "ADMIN" || role == "OWNER")
+        .map(|(project, _)| project)
+        .collect();
+    let groups = sqlx::query(
+        "DELETE FROM penfii.group_members gm USING penfii.groups gr
+         WHERE gm.group_id = gr.id AND gr.workspace_id = $1 AND gm.user_id = $2",
+    )
+    .bind(workspace_id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    // Every participant row the person was given goes, a MANAGER row too, even when no other manager
+    // would remain: the page stays and a Workspace owner or admin names a manager for it
+    // (`docs::recovery`). Only the row on a page the person created stays (author-based access).
+    let doc_shares = sqlx::query(
+        "DELETE FROM penfii.doc_page_participants pp USING penfii.doc_pages p
+         WHERE pp.page_id = p.id AND p.workspace_id = $1 AND pp.user_id = $2
+           AND p.created_by <> pp.user_id",
+    )
+    .bind(workspace_id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    let security_auditor = sqlx::query(
+        "DELETE FROM penfii.workspace_security_auditors WHERE workspace_id = $1 AND user_id = $2",
+    )
+    .bind(workspace_id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    let channel_auditors = sqlx::query(
+        "DELETE FROM penfii.channel_content_auditors a USING penfii.conversations c
+         WHERE a.channel_id = c.id AND c.workspace_id = $1 AND a.user_id = $2",
+    )
+    .bind(workspace_id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    let count = |n: u64| i64::try_from(n).unwrap_or(i64::MAX);
+    Ok(RevokedAccess {
+        teams: count(teams),
+        projects: count(projects),
+        groups: count(groups),
+        doc_shares: count(doc_shares),
+        security_auditor: count(security_auditor),
+        channel_auditors: count(channel_auditors),
+        direct_admin_of,
+    })
 }
 
 /// Makes the account a member of the Workspace under the rule above, inside the caller's
@@ -126,12 +264,15 @@ pub async fn join_workspace(
         .await?;
         return Ok(JoinOutcome::AlreadyMember { role: current });
     };
+    let mut revoked = None;
     if !inserted {
         // A person who was removed before channel memberships were cleared on removal can still
         // have them; they are not brought back with the rest of the membership.
         crate::conversation::recovery::clear_memberships(&mut *conn, workspace_id, user_id).await?;
+        // Likewise for explicit access that removal in an earlier release left behind.
+        revoked = Some(revoke_explicit_access(&mut *conn, workspace_id, user_id).await?);
     }
-    let (actor, data) = match path {
+    let (actor, mut data) = match path {
         JoinPath::Invitation(invitation_id) => (
             Some(user_id),
             json!({"userId": user_id, "role": role, "invitationId": invitation_id, "rejoined": !inserted}),
@@ -141,6 +282,10 @@ pub async fn join_workspace(
             json!({"userId": user_id, "role": role, "via": "admin-cli", "rejoined": !inserted}),
         ),
     };
+    // Access left over from an earlier release and taken away now is recorded with the join.
+    if let Some(revoked) = revoked.filter(RevokedAccess::any) {
+        data["revoked"] = revoked.to_json();
+    }
     admin::audit(
         &mut *conn,
         workspace_id,

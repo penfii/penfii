@@ -238,6 +238,18 @@ async fn new_user(env: &Env, email: &str) -> String {
     password_login(env, email, "user-test-passphrase").await
 }
 
+/// The browser binding cookie each started attempt set, by its state (states are random, so tests do not clash).
+static BINDINGS: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+fn binding_of(state: &str) -> Option<String> {
+    BINDINGS
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(known, _)| known == state)
+        .map(|(_, cookie)| cookie.clone())
+}
+
 /// Starts an attempt and returns (state, nonce) from the provider URL.
 async fn begin(
     env: &Env,
@@ -266,6 +278,19 @@ async fn begin(
         Some("S256")
     );
     assert!(q.contains_key("code_challenge"));
+    let set = r
+        .header("set-cookie")
+        .expect("the start sets the browser binding")
+        .to_string();
+    assert!(
+        set.starts_with("penfii_auth_bind=")
+            && set.contains("HttpOnly")
+            && set.contains("SameSite=Lax")
+            && set.contains("Path=/v1/auth"),
+        "{set}"
+    );
+    let pair = set.split(';').next().unwrap().to_string();
+    BINDINGS.lock().unwrap().push((q["state"].clone(), pair));
     (
         q["state"].clone(),
         q.get("nonce").cloned().unwrap_or_default(),
@@ -273,12 +298,31 @@ async fn begin(
     )
 }
 
+/// The provider's redirect back, in the browser that started the attempt (it carries the binding cookie).
 async fn finish(env: &Env, provider: &str, code: &str, state: &str, cookie: Option<&str>) -> Reply {
+    let binding = binding_of(state);
+    finish_with(env, provider, code, state, cookie, binding.as_deref()).await
+}
+
+/// The same, with the binding cookie the test chooses (another browser has none, or another one's).
+async fn finish_with(
+    env: &Env,
+    provider: &str,
+    code: &str,
+    state: &str,
+    cookie: Option<&str>,
+    binding: Option<&str>,
+) -> Reply {
+    let header = match (cookie, binding) {
+        (Some(session), Some(binding)) => Some(format!("{session}; {binding}")),
+        (Some(only), None) | (None, Some(only)) => Some(only.to_string()),
+        (None, None) => None,
+    };
     call(
         &env.app,
         "GET",
         &format!("/v1/auth/{provider}/callback?code={code}&state={state}"),
-        cookie,
+        header.as_deref(),
         None,
     )
     .await
@@ -374,6 +418,15 @@ async fn google_first_sign_in_creates_the_account_when_sign_up_is_on(pool: PgPoo
     let me = call(&env.app, "GET", "/v1/me", Some(&cookie), None).await;
     assert_eq!(me.status, StatusCode::OK, "{}", me.body);
     assert_eq!(me.body["email"], "new.person@penfii.test");
+    // The provider sign-in is audited like a password one, naming the provider and nothing else.
+    let login: Value = sqlx::query_scalar(
+        "SELECT a.data FROM penfii.audit_entries a JOIN penfii.users u ON u.id = a.target_id
+          WHERE a.action_code = 'user.login' AND u.email_key = 'new.person@penfii.test'",
+    )
+    .fetch_one(&env.pool)
+    .await
+    .unwrap();
+    assert_eq!(login, json!({"method": "google"}));
     // Authentication is not membership: the instance already has a Workspace, so this person has none and
     // cannot create one; creation is closed for everyone, and no Workspace data is reachable.
     let creation = call(
@@ -645,6 +698,16 @@ async fn external_sign_in_flows(pool: PgPool) {
     google_token(&env, "c2", &nonce, "g-alice", "alice@penfii.test", true);
     let r = finish(&env, "google", "c2", &state, Some(&alice)).await;
     assert_eq!(r.location.as_deref(), Some("/account?auth=linked"));
+    assert_eq!(
+        count(
+            &env,
+            "SELECT count(*) FROM penfii.audit_entries a JOIN penfii.users u ON u.id = a.target_id
+              WHERE a.action_code = 'user.sign_in_method_added' AND u.email_key = 'alice@penfii.test'
+                AND a.data = '{\"method\": \"google\"}'::jsonb"
+        )
+        .await,
+        1
+    );
 
     // Another user cannot take that identity.
     let bob = new_user(&env, "bob@penfii.test").await;
@@ -770,11 +833,12 @@ async fn external_sign_in_flows(pool: PgPool) {
     );
     // The provider said no.
     let (state, _, _) = begin(&env, "google", "login", None, json!({})).await;
+    let binding = binding_of(&state);
     let r = call(
         &env.app,
         "GET",
         &format!("/v1/auth/google/callback?error=access_denied&state={state}"),
-        None,
+        binding.as_deref(),
         None,
     )
     .await;
@@ -1083,11 +1147,117 @@ async fn begin_reauth(env: &Env, provider: &str, cookie: &str) -> (String, Strin
     assert_eq!(r.status, StatusCode::OK, "{}", r.body);
     let url = url::Url::parse(r.body["url"].as_str().unwrap()).unwrap();
     let q: HashMap<_, _> = url.query_pairs().into_owned().collect();
+    let set = r.header("set-cookie").expect("binding cookie").to_string();
+    let pair = set.split(';').next().unwrap().to_string();
+    BINDINGS.lock().unwrap().push((q["state"].clone(), pair));
     (
         q["state"].clone(),
         q.get("nonce").cloned().unwrap_or_default(),
         url.to_string(),
     )
+}
+
+/// Login CSRF (FEA-143): the callback of an attempt does nothing in another browser.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_callback_opened_in_another_browser_is_refused_and_does_not_burn_the_attempt(
+    pool: PgPool,
+) {
+    let env = setup(pool).await;
+    let alice = new_user(&env, "alice@penfii.test").await;
+    // The attacker starts an attempt in their browser and signs in at the provider; the callback
+    // link (code and state) is what the victim is made to open.
+    let (state, nonce, _) = begin(&env, "google", "login", None, json!({})).await;
+    google_token(
+        &env,
+        "csrf1",
+        &nonce,
+        "g-attacker",
+        "attacker@penfii.test",
+        true,
+    );
+    let attacker_binding = binding_of(&state).unwrap();
+    // The victim's browser has no binding for it, a session of their own, or a binding of another attempt.
+    let victim = finish_with(&env, "google", "csrf1", &state, Some(&alice), None).await;
+    assert_eq!(error_of(&victim), "invalid_attempt");
+    assert!(victim.cookie.is_none(), "no session is made for the victim");
+    let (other_state, _, _) = begin(&env, "google", "login", None, json!({})).await;
+    let wrong = binding_of(&other_state).unwrap();
+    let victim = finish_with(&env, "google", "csrf1", &state, Some(&alice), Some(&wrong)).await;
+    assert_eq!(error_of(&victim), "invalid_attempt");
+    assert!(victim.cookie.is_none());
+    let forged = finish_with(
+        &env,
+        "google",
+        "csrf1",
+        &state,
+        None,
+        Some("penfii_auth_bind=guess"),
+    )
+    .await;
+    assert_eq!(error_of(&forged), "invalid_attempt");
+    let attempts: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM penfii.auth_attempts WHERE consumed_at IS NOT NULL",
+    )
+    .fetch_one(&env.pool)
+    .await
+    .unwrap();
+    assert_eq!(attempts, 0, "a refused callback consumes nothing");
+    // The attacker's own browser still completes it; the binding is cleared in the answer, and a replay fails.
+    let own = finish_with(
+        &env,
+        "google",
+        "csrf1",
+        &state,
+        None,
+        Some(&attacker_binding),
+    )
+    .await;
+    assert_ne!(
+        error_of(&own),
+        "invalid_attempt",
+        "the starting browser is let through to the sign-in"
+    );
+    let cleared = own
+        .headers
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .any(|value| value.starts_with("penfii_auth_bind=;") && value.contains("Max-Age=0"));
+    assert!(
+        cleared,
+        "the binding cookie is cleared when the attempt ends"
+    );
+    let replay = finish_with(
+        &env,
+        "google",
+        "csrf1",
+        &state,
+        None,
+        Some(&attacker_binding),
+    )
+    .await;
+    assert_eq!(error_of(&replay), "invalid_attempt");
+}
+
+/// An attempt a previous release started (no binding recorded) cannot be finished, however it is presented.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn an_attempt_without_a_recorded_binding_is_never_consumed(pool: PgPool) {
+    let env = setup(pool).await;
+    let (state, nonce, _) = begin(&env, "google", "login", None, json!({})).await;
+    google_token(
+        &env,
+        "legacy1",
+        &nonce,
+        "g-legacy",
+        "legacy@penfii.test",
+        true,
+    );
+    sqlx::query("UPDATE penfii.auth_attempts SET browser_hash = NULL")
+        .execute(&env.pool)
+        .await
+        .unwrap();
+    let r = finish(&env, "google", "legacy1", &state, None).await;
+    assert_eq!(error_of(&r), "invalid_attempt");
 }
 
 #[sqlx::test(migrator = "crate::common::GUARD")]
@@ -1686,4 +1856,138 @@ async fn invite_gone(env: &Env, owner: &str, ws: Uuid) -> String {
         .await
         .unwrap();
     r.body["inviteToken"].as_str().unwrap().to_string()
+}
+
+/// FEA-150: the provider's own authentication decides a provider sign-in; the account's authenticator
+/// code belongs to the password sign-in. Neither path leaks into the other.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_provider_sign_in_is_not_asked_for_the_password_code_and_cannot_turn_it_off_without_one(
+    pool: PgPool,
+) {
+    let env = setup(pool).await;
+    let alice = new_user(&env, "alice@penfii.test").await;
+    let (state, nonce, _) = begin(&env, "google", "link", Some(&alice), json!({})).await;
+    google_token(&env, "mfa1", &nonce, "g-alice", "alice@penfii.test", true);
+    let r = finish(&env, "google", "mfa1", &state, Some(&alice)).await;
+    assert_eq!(
+        r.location.as_deref(),
+        Some("/?auth=linked"),
+        "{:?}",
+        r.location
+    );
+
+    // MFA on, through the API.
+    let started = call(&env.app, "POST", "/v1/me/mfa/setup", Some(&alice), None).await;
+    assert_eq!(started.status, StatusCode::OK, "{}", started.body);
+    let secret = started.body["secret"].as_str().unwrap().to_string();
+    let enabled = call(
+        &env.app,
+        "POST",
+        "/v1/me/mfa/enable",
+        Some(&alice),
+        Some(json!({"code": common::totp_code(&secret, 0)})),
+    )
+    .await;
+    assert_eq!(enabled.status, StatusCode::OK, "{}", enabled.body);
+
+    // The password alone no longer signs in.
+    let r = call(
+        &env.app,
+        "POST",
+        "/v1/session/login",
+        None,
+        Some(json!({"email": "alice@penfii.test", "password": "user-test-passphrase"})),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(r.body["code"], "mfa_required");
+
+    // The provider sign-in goes through on the provider's authentication, and is recorded as such.
+    let (state, nonce, _) = begin(&env, "google", "login", None, json!({})).await;
+    google_token(&env, "mfa2", &nonce, "g-alice", "alice@penfii.test", true);
+    let r = finish(&env, "google", "mfa2", &state, None).await;
+    assert_eq!(r.location.as_deref(), Some("/"), "{:?}", r.location);
+    let by_google = r.cookie.unwrap();
+    let me = call(&env.app, "GET", "/v1/me", Some(&by_google), None).await;
+    assert_eq!(me.body["email"], "alice@penfii.test");
+    let method: String = sqlx::query_scalar("SELECT auth_method FROM penfii.sessions WHERE id = (SELECT id FROM penfii.sessions ORDER BY created_at DESC LIMIT 1)")
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(method, "google");
+
+    // Ordinary sensitive actions keep their proof: the provider again, or the password, no code.
+    sqlx::query("UPDATE penfii.sessions SET last_reauth_at = now() - interval '1 hour'")
+        .execute(&env.pool)
+        .await
+        .unwrap();
+    let r = call(
+        &env.app,
+        "DELETE",
+        "/v1/me/sessions",
+        Some(&by_google),
+        None,
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    assert_eq!(r.body["methods"], json!(["password", "provider:google"]));
+    let (state, nonce, _) = begin_reauth(&env, "google", &by_google).await;
+    google_token(&env, "mfa3", &nonce, "g-alice", "alice@penfii.test", true);
+    let r = finish(&env, "google", "mfa3", &state, Some(&by_google)).await;
+    assert!(
+        !r.location
+            .clone()
+            .unwrap_or_default()
+            .contains("auth_error"),
+        "{:?}",
+        r.location
+    );
+    let r = call(
+        &env.app,
+        "DELETE",
+        "/v1/me/sessions",
+        Some(&by_google),
+        None,
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+
+    // What lowers the protection still needs a code of the account, whichever way this session came in.
+    let r = call(
+        &env.app,
+        "POST",
+        "/v1/me/mfa/disable",
+        Some(&by_google),
+        Some(json!({"code": ""})),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    let r = call(
+        &env.app,
+        "POST",
+        "/v1/me/mfa/recovery-codes",
+        Some(&by_google),
+        Some(json!({"code": "000000"})),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        call(&env.app, "GET", "/v1/me/mfa", Some(&by_google), None)
+            .await
+            .body["enabled"],
+        true
+    );
+    sqlx::query("UPDATE penfii.mfa_totp SET last_step = 0")
+        .execute(&env.pool)
+        .await
+        .unwrap();
+    let r = call(
+        &env.app,
+        "POST",
+        "/v1/me/mfa/disable",
+        Some(&by_google),
+        Some(json!({"code": common::totp_code(&secret, 0)})),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT, "{}", r.body);
 }

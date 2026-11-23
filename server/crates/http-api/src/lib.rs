@@ -59,6 +59,14 @@ pub struct AppState {
     /// `PENFII_WEBHOOK_KEK`, read once when the process started: encrypts Signature-webhook secrets. `None`:
     /// Signature webhooks cannot be made or verified.
     pub webhook_kek: Option<[u8; 32]>,
+    /// How often an open socket asks again whether its web session is still alive.
+    pub ws_session_recheck: std::time::Duration,
+    /// Bytes of file upload bodies that may be held in memory at once (see `routes::files`).
+    pub upload_budget: std::sync::Arc<tokio::sync::Semaphore>,
+    /// How long an upload waits for that budget before answering 503 `upload_busy`.
+    pub upload_wait: std::time::Duration,
+    /// How long an upload body may send nothing while it holds part of that budget.
+    pub upload_idle: std::time::Duration,
 }
 
 impl AppState {
@@ -105,6 +113,17 @@ pub struct RouterConfig {
     pub health: Option<std::sync::Arc<penfii_core::health::ReceiptHealth>>,
     /// The key that encrypts Signature-webhook secrets (`PENFII_WEBHOOK_KEK`); the process reads it once at start.
     pub webhook_kek: Option<[u8; 32]>,
+    /// How often an open live socket asks again whether its web session is still alive (a revoked or
+    /// expired session ends its sockets within this time). Tests make it short.
+    pub ws_session_recheck: std::time::Duration,
+    /// The bytes of upload bodies held in memory at once; `None`: the larger of 256 MiB and twice the
+    /// file size limit. Tests make it small.
+    pub upload_budget_bytes: Option<u64>,
+    /// How long an upload waits for the budget before it is refused as busy. Tests make it short.
+    pub upload_wait: std::time::Duration,
+    /// How long an upload body may stall (no bytes arrive) before it is refused and its share of the
+    /// budget given back. Tests make it short.
+    pub upload_idle: std::time::Duration,
 }
 
 impl RouterConfig {
@@ -124,6 +143,10 @@ impl RouterConfig {
             mailer: None,
             health: None,
             webhook_kek: None,
+            ws_session_recheck: std::time::Duration::from_secs(15),
+            upload_budget_bytes: None,
+            upload_wait: std::time::Duration::from_secs(30),
+            upload_idle: std::time::Duration::from_secs(30),
         }
     }
 }
@@ -168,6 +191,10 @@ pub fn router_from(config: RouterConfig) -> Router {
         mailer,
         health,
         webhook_kek,
+        ws_session_recheck,
+        upload_budget_bytes,
+        upload_wait,
+        upload_idle,
     } = config;
     let changes = changes.unwrap_or_else(|| broadcast::channel(256).0);
     let allowed_origins = origin::allowed_origins_from_env();
@@ -179,6 +206,7 @@ pub fn router_from(config: RouterConfig) -> Router {
             changes.clone(),
         ))
     });
+    let upload_budget = routes::files::upload_budget(&limits, upload_budget_bytes);
     let state = AppState {
         pool,
         limits,
@@ -195,6 +223,10 @@ pub fn router_from(config: RouterConfig) -> Router {
         mailer,
         health,
         webhook_kek,
+        ws_session_recheck,
+        upload_budget,
+        upload_wait,
+        upload_idle,
     };
     assemble(api_routes(), state, &allowed_origins)
 }
@@ -351,6 +383,10 @@ mod tests {
             mailer: None,
             health: None,
             webhook_kek: None,
+            ws_session_recheck: std::time::Duration::from_secs(15),
+            upload_budget: std::sync::Arc::new(tokio::sync::Semaphore::new(1024)),
+            upload_wait: std::time::Duration::from_secs(30),
+            upload_idle: std::time::Duration::from_secs(30),
         }
     }
 

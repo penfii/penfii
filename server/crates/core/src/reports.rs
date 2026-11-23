@@ -474,7 +474,7 @@ async fn report_of(
     let rows = sqlx::query(
         "SELECT a.ticket_id, a.assigned_at, a.ended_at, a.end_reason, a.outcome, a.ended_status_category,
                 a.ended_estimate_value::text AS ended_value, a.ended_estimate_unit,
-                t.public_key, t.title, t.hierarchy_kind, t.channel_id
+                t.public_key, t.title, t.hierarchy_kind, t.channel_id, (t.trashed_at IS NOT NULL) AS trashed
          FROM penfii.sprint_assignments a JOIN penfii.tickets t ON t.id=a.ticket_id
          WHERE a.sprint_id=$1 AND t.purged_at IS NULL ORDER BY a.assigned_at, a.id",
     )
@@ -484,12 +484,22 @@ async fn report_of(
     let mut access = HashMap::new();
     let mut tickets: HashMap<Uuid, TicketRef> = HashMap::new();
     let mut assigns = Vec::new();
+    // Trashed Tickets (FEA-135) still count in the figures, which are history, but only a Project
+    // admin sees their key and title in the lists, as in the trash list; everyone else's lists omit them.
+    let mut hidden: HashSet<Uuid> = HashSet::new();
+    let admin = crate::project_role::project_role(conn, sprint.project_id, actor_id)
+        .await?
+        .1
+        .is_some_and(|role| crate::project_role::can_manage(&role));
     for row in rows {
         let channel: Option<Uuid> = row.try_get("channel_id")?;
         if !visible(conn, &mut access, channel, actor_id).await? {
             continue;
         }
         let ticket: Uuid = row.try_get("ticket_id")?;
+        if !admin && row.try_get::<bool, _>("trashed")? {
+            hidden.insert(ticket);
+        }
         tickets.entry(ticket).or_insert(TicketRef {
             id: ticket,
             key: row.try_get("public_key")?,
@@ -580,7 +590,7 @@ async fn report_of(
     .collect::<Result<Vec<_>, sqlx::Error>>()?;
 
     let active = sprint.state == "ACTIVE";
-    let figures = compute(&Input {
+    let mut figures = compute(&Input {
         unit: sprint.estimate_unit.clone(),
         started_at,
         ended_at: sprint.ended_at,
@@ -593,6 +603,14 @@ async fn report_of(
         history,
         days,
     });
+    if !hidden.is_empty() {
+        figures
+            .tickets
+            .retain(|row| !hidden.contains(&row.ticket.id));
+        figures
+            .changes
+            .retain(|change| !hidden.contains(&change.ticket.id));
+    }
     Ok(SprintReport {
         sprint,
         availability: ReportAvailability {

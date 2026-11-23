@@ -96,12 +96,33 @@ enum Command {
         #[arg(long)]
         email: String,
     },
-    /// Set or replace an account's password and end all of its sessions. Writes an audit entry.
+    /// Set or replace an account's password and end all of its sessions and connected apps (OAuth/MCP
+    /// grants). Writes an audit entry.
     UserSetPassword {
         #[arg(long)]
         email: String,
         #[command(flatten)]
         password: PasswordArgs,
+    },
+    /// Change the e-mail address of an account when the person cannot do it themselves (the server
+    /// sends no e-mail, so the self-service change is off). This is not a proof that the new address
+    /// belongs to the person: the account signs in with it, but it counts as unverified (no password
+    /// reset is mailed to it) until it is confirmed from the account's page on a server that sends
+    /// e-mail. Pending e-mail changes and reset links are closed. Sessions and connected apps stay.
+    /// Writes an audit entry. An account that signs in through an external provider keeps that link.
+    UserSetEmail {
+        #[arg(long)]
+        email: String,
+        #[arg(long)]
+        new_email: String,
+    },
+    /// Recovery for a person locked out of two-step verification (lost authenticator and recovery
+    /// codes): turns it off for the account and ends all its web sessions and connected apps (OAuth/MCP
+    /// grants). The person signs in with the password (or provider) and sets it up again. Needs no
+    /// secret of the account; writes an audit entry. Prefer asking the person for a recovery code first.
+    UserMfaReset {
+        #[arg(long)]
+        email: String,
     },
     /// Disable an account: ends all its sessions and OAuth grants and blocks sign-in. For when no
     /// workspace owner can do it. Logged in the audit log of each of its workspaces. Prints the
@@ -175,9 +196,15 @@ async fn run_migrate() {
     let pool = connect(&url)
         .await
         .unwrap_or_else(|error| fail(format!("database: {error}")));
-    apply_migrations(&pool)
+    let run = apply_migrations(&pool)
         .await
         .unwrap_or_else(|error| fail(format!("migrate: {error}")));
+    if run.consolidated_split_0003 {
+        println!(
+            "migration history: the pre-release split migrations 0003-0007 are now recorded as the \
+             consolidated 0003 (nothing was applied again)"
+        );
+    }
     penfii_core::protect_history(&pool)
         .await
         .unwrap_or_else(|error| fail(format!("migrate: {error}")));
@@ -396,8 +423,8 @@ async fn main() {
                 .await
                 .unwrap_or_else(|error| fail(format!("identities: {error:?}")));
             println!(
-                "user {} password={} disabled={}",
-                found.user_id, found.has_password, found.disabled
+                "user {} password={} mfa={} disabled={}",
+                found.user_id, found.has_password, found.mfa_enabled, found.disabled
             );
             for item in found.identities {
                 println!(
@@ -416,13 +443,32 @@ async fn main() {
             let user_id = identity::admin_set_password(&pool, &email, &password)
                 .await
                 .unwrap_or_else(|error| fail(format!("set-password: {error:?}")));
-            println!("password set for {user_id}; all sessions ended");
+            println!("password set for {user_id}; all sessions and connected apps ended");
+        }
+        Command::UserMfaReset { email } => {
+            let user_id = identity::operator_reset_mfa(&pool, &email)
+                .await
+                .unwrap_or_else(|error| fail(format!("user-mfa-reset: {error:?}")));
+            println!(
+                "two-step verification turned off for {user_id}; all sessions and connected apps ended"
+            );
+        }
+        Command::UserSetEmail { email, new_email } => {
+            let user_id = identity::operator_set_email(&pool, &email, &new_email)
+                .await
+                .unwrap_or_else(|error| fail(format!("user-set-email: {error:?}")));
+            println!(
+                "account {user_id} now uses {new_email}; the address is unverified (no password reset is mailed to it until the person confirms it)"
+            );
         }
         Command::UserDisable { email } => {
             let change = penfii_core::admin::operator_set_account_disabled(&pool, &email, true)
                 .await
                 .unwrap_or_else(|error| fail(format!("user-disable: {error:?}")));
-            println!("account {} disabled; all sessions ended", change.user_id);
+            println!(
+                "account {} disabled; all sessions and connected apps ended",
+                change.user_id
+            );
             print_admin_impact(&change.impacts);
         }
         Command::UserEnable { email } => {

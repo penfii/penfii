@@ -24,6 +24,36 @@ fn code(result: Result<impl std::fmt::Debug, sqlx::Error>) -> String {
     }
 }
 
+/// The audit log is append only for the runtime role: it writes and reads entries, and changing or
+/// removing one (UPDATE, DELETE, TRUNCATE) is refused with 42501.
+async fn assert_audit_log_is_append_only(app: &PgPool) {
+    let id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO penfii.audit_entries (id, action_code, outcome_code) VALUES ($1, 'test.append', 'SUCCESS')",
+    )
+    .bind(id)
+    .execute(app)
+    .await
+    .expect("the runtime role appends audit entries");
+    let read: i64 = sqlx::query_scalar("SELECT count(*) FROM penfii.audit_entries WHERE id = $1")
+        .bind(id)
+        .fetch_one(app)
+        .await
+        .expect("the runtime role reads audit entries");
+    assert_eq!(read, 1);
+    for statement in [
+        "UPDATE penfii.audit_entries SET outcome_code = 'FORGED'",
+        "DELETE FROM penfii.audit_entries",
+        "TRUNCATE penfii.audit_entries",
+    ] {
+        assert_eq!(
+            code(sqlx::query(statement).execute(app).await),
+            "42501",
+            "{statement}"
+        );
+    }
+}
+
 #[sqlx::test(migrator = "crate::common::GUARD")]
 async fn a_non_superuser_owner_applies_every_migration_and_the_runtime_role_cannot_change_the_schema(
     pool: PgPool,
@@ -45,7 +75,7 @@ async fn a_non_superuser_owner_applies_every_migration_and_the_runtime_role_cann
         assert!(!superuser && !createdb && !createrole, "{role}");
     }
 
-    // Migrations 0001 and 0002, applied by the owner and nobody else. Nothing needs a superuser.
+    // Every migration, applied by the owner and nobody else. Nothing needs a superuser.
     let owner_pool = pool_as(&pool, &owner, "owner-pass").await;
     apply_migrations(&owner_pool)
         .await
@@ -56,7 +86,7 @@ async fn a_non_superuser_owner_applies_every_migration_and_the_runtime_role_cann
             .fetch_one(&owner_pool)
             .await
             .unwrap();
-    assert_eq!(applied, 2);
+    assert_eq!(applied, 3);
     // Again: nothing to do.
     apply_migrations(&owner_pool).await.unwrap();
 
@@ -128,6 +158,8 @@ async fn a_non_superuser_owner_applies_every_migration_and_the_runtime_role_cann
         ),
         "42501"
     );
+    // The audit log can be appended to and read, not rewritten.
+    assert_audit_log_is_append_only(&app).await;
     // It owns nothing in the schema.
     let owned_by_runtime: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -179,6 +211,8 @@ async fn a_non_superuser_owner_applies_every_migration_and_the_runtime_role_cann
         ),
         "42501"
     );
+    // Running the protection again changes nothing for the audit log.
+    assert_audit_log_is_append_only(&app).await;
 }
 
 #[sqlx::test(migrator = "crate::common::GUARD")]
@@ -248,6 +282,7 @@ async fn an_installation_that_exists_keeps_its_owner_and_gets_a_runtime_role(poo
         ),
         "42501"
     );
+    assert_audit_log_is_append_only(&app).await;
     sqlx::query("CREATE TABLE penfii.made_later (id int PRIMARY KEY)")
         .execute(&pool)
         .await
@@ -275,6 +310,7 @@ async fn an_installation_that_exists_keeps_its_owner_and_gets_a_runtime_role(poo
         .fetch_all(&app)
         .await
         .unwrap();
+    assert_audit_log_is_append_only(&app).await;
 }
 
 #[sqlx::test(migrator = "crate::common::GUARD")]

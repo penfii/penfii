@@ -197,7 +197,7 @@ test.describe('invitation, password reset and recovery (e-mail)', () => {
 })
 
 test.describe('a Ticket kept, binned and brought back', () => {
-  test('archive, open the archive, unarchive, move to trash, restore from the trash, then purge', async ({ page, request, allowProblem }) => {
+  test('archive, open the archive, unarchive, move to trash, restore from the trash, then purge', async ({ page, request }) => {
     const api: Api = await apiAs(request, accountA.email)
     const workspaceId = await api.workspaceId()
     const project = await api.createProject(workspaceId, `Lifecycle ${stamp()}`)
@@ -226,10 +226,8 @@ test.describe('a Ticket kept, binned and brought back', () => {
     await expect(page.getByRole('textbox', { name: 'Title' })).toBeEditable()
     await expect(page.getByRole('button', { name: 'Edit description' })).toBeVisible()
 
-    // The live refresh of the unarchive (read 150 ms after its socket notice) can land after this test, faster than a
-    // person, has already moved the Ticket to the trash: that read of the Ticket is refused while the panel closes.
-    allowProblem(new RegExp(`404 GET .*/v1/tickets/${ticket.id}(/dependencies)?$`))
-    allowProblem(/Failed to load resource: the server responded with a status of 404/)
+    // No 404 is allowed here: the panel closes before the live refresh of the trash can read the Ticket (TrashTicketButton),
+    // and the Ticket is live (or restored) everywhere else in this test, so a refused read of it is a real defect.
     await page.getByRole('button', { name: 'Move to trash' }).click()
     const trashAsk = page.getByRole('alertdialog').or(page.getByRole('dialog').filter({ hasText: 'Move to trash' })).last()
     await expect(trashAsk).toContainText(`Move ${ticket.key} to the trash?`)

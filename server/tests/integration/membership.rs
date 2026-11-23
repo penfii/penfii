@@ -212,11 +212,21 @@ async fn a_disabled_account_does_not_join_until_it_is_enabled(pool: PgPool) {
 }
 
 async fn accept(env: &common::Env, invitation: &Value, name: &str) -> (StatusCode, Value) {
+    accept_with(env, invitation, name, None).await
+}
+
+/// Accepts as a person who is signed in (`cookie`): an existing account accepts only this way.
+async fn accept_with(
+    env: &common::Env,
+    invitation: &Value,
+    name: &str,
+    cookie: Option<&str>,
+) -> (StatusCode, Value) {
     let reply = call(
         &env.app,
         "POST",
         "/v1/invitations/accept",
-        None,
+        cookie,
         Some(
             json!({"token": invitation["inviteToken"], "displayName": name, "password": PASSWORD}),
         ),
@@ -255,7 +265,8 @@ async fn an_invitation_joins_through_the_same_rule_and_audits_the_person_as_acto
         .await
         .unwrap();
     let invitation = env.invite(&env.owner, "new@penfii.test", "MEMBER").await;
-    let (status, body) = accept(&env, &invitation.body, "new").await;
+    let cookie = common::sign_in(&env.app, "new@penfii.test", PASSWORD).await;
+    let (status, body) = accept_with(&env, &invitation.body, "new", Some(&cookie)).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert_eq!(
         membership(&pool, env.ws, user).await,
@@ -282,7 +293,8 @@ async fn an_invitation_to_someone_who_already_joined_is_accepted_and_changes_not
         .await
         .unwrap();
 
-    let (status, body) = accept(&env, &invitation.body, "early").await;
+    let cookie = common::sign_in(&env.app, &email, PASSWORD).await;
+    let (status, body) = accept_with(&env, &invitation.body, "early", Some(&cookie)).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert_eq!(
         membership(&pool, env.ws, user).await,
@@ -323,7 +335,7 @@ async fn a_disabled_account_cannot_accept_an_invitation_either(pool: PgPool) {
         invitation.body
     );
 
-    // The answer is the one for a wrong password: it does not tell the account is disabled.
+    // The answer is the one for a signed-out request: it does not tell the account is disabled.
     let (status, body) = accept(&env, &invitation.body, "off").await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["code"], "account_exists");
@@ -331,6 +343,120 @@ async fn a_disabled_account_cannot_accept_an_invitation_either(pool: PgPool) {
         membership(&pool, env.ws, user).await,
         Some(("MEMBER".into(), "INACTIVE".into(), true))
     );
+}
+
+// FEA-134: an invitation link cannot be used to test the password of the account it names.
+
+async fn throttle_rows(pool: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM penfii.auth_throttle")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn an_invitation_never_checks_the_password_of_an_existing_account(pool: PgPool) {
+    let env = common::Env::new(pool.clone()).await;
+    let (user, email) = account(&pool, "target").await;
+    let invitation = env.invite(&env.owner, &email, "MEMBER").await;
+    assert_eq!(invitation.status, StatusCode::CREATED);
+    // The right password and wrong ones, signed out, over and over: always the same refusal, never
+    // a join, never throttled (nothing is being tested), so no password is confirmed by the answer.
+    let before = throttle_rows(&pool).await;
+    for round in 0..12 {
+        let password = if round == 7 {
+            PASSWORD
+        } else {
+            "a wrong passphrase"
+        };
+        let reply = call(
+            &env.app,
+            "POST",
+            "/v1/invitations/accept",
+            None,
+            Some(json!({"token": invitation.body["inviteToken"], "displayName": "x", "password": password})),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::CONFLICT, "{}", reply.body);
+        assert_eq!(reply.body["code"], "account_exists");
+    }
+    assert_eq!(throttle_rows(&pool).await, before);
+    assert_eq!(membership(&pool, env.ws, user).await, None);
+    // The preview still tells the token holder to sign in.
+    let preview = call(
+        &env.app,
+        "POST",
+        "/v1/invitations/preview",
+        None,
+        Some(json!({"token": invitation.body["inviteToken"]})),
+    )
+    .await;
+    assert_eq!(preview.body["accountExists"], true);
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_signed_in_member_invitation_needs_no_recent_authentication(pool: PgPool) {
+    let env = common::Env::new(pool.clone()).await;
+    let (user, email) = account(&pool, "member").await;
+    let cookie = common::sign_in(&env.app, &email, PASSWORD).await;
+    sqlx::query("UPDATE penfii.sessions SET last_reauth_at = now() - interval '2 hours'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Someone else's session does not count.
+    let other = env.person("bystander", "MEMBER").await;
+    let invitation = env.invite(&env.owner, &email, "MEMBER").await;
+    let (status, body) = accept_with(&env, &invitation.body, "m", Some(&other.cookie)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(membership(&pool, env.ws, user).await, None);
+    // Her own old session does: a MEMBER invitation is accepted by signing in alone.
+    let (status, body) = accept_with(&env, &invitation.body, "m", Some(&cookie)).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(
+        membership(&pool, env.ws, user).await,
+        Some(("MEMBER".into(), "ACTIVE".into(), false))
+    );
+}
+
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn an_admin_invitation_needs_a_recent_authentication(pool: PgPool) {
+    let env = common::Env::new(pool.clone()).await;
+    for role in ["ADMIN", "OWNER"] {
+        let (user, email) = account(&pool, &format!("{}-guest", role.to_lowercase())).await;
+        let cookie = common::sign_in(&env.app, &email, PASSWORD).await;
+        sqlx::query("UPDATE penfii.sessions SET last_reauth_at = now() - interval '2 hours' WHERE user_id = $1")
+            .bind(user)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let invitation = env.invite(&env.owner, &email, role).await;
+        assert_eq!(
+            invitation.status,
+            StatusCode::CREATED,
+            "{}",
+            invitation.body
+        );
+        let (status, body) = accept_with(&env, &invitation.body, "g", Some(&cookie)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["code"], "reauth_required", "{body}");
+        assert_eq!(membership(&pool, env.ws, user).await, None);
+        // After the usual reauthentication the same link works.
+        let reauth = call(
+            &env.app,
+            "POST",
+            "/v1/me/reauth/password",
+            Some(&cookie),
+            Some(json!({"password": PASSWORD})),
+        )
+        .await;
+        assert_eq!(reauth.status, StatusCode::NO_CONTENT, "{}", reauth.body);
+        let (status, body) = accept_with(&env, &invitation.body, "g", Some(&cookie)).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(
+            membership(&pool, env.ws, user).await.map(|row| row.0),
+            Some(role.to_string())
+        );
+    }
 }
 
 // Concurrent joins of the same account: the single INSERT .. ON CONFLICT statement decides, so one
@@ -514,6 +640,7 @@ async fn an_invitation_and_the_operator_joining_at_once_audit_one_join(pool: PgP
             "{}",
             invitation.body
         );
+        let cookie = common::sign_in(&env.app, &email, PASSWORD).await;
         let accepter = {
             let app = env.app.clone();
             let token = invitation.body["inviteToken"].clone();
@@ -522,7 +649,7 @@ async fn an_invitation_and_the_operator_joining_at_once_audit_one_join(pool: PgP
                     &app,
                     "POST",
                     "/v1/invitations/accept",
-                    None,
+                    Some(&cookie),
                     Some(json!({"token": token, "displayName": "both", "password": PASSWORD})),
                 )
                 .await
@@ -979,7 +1106,7 @@ async fn workspace_list_marks_the_disabled_members_and_owners(pool: PgPool) {
 /// see FEA-052: their memberships are to be cleared on removal and are not restored.) While the
 /// membership is removed, none of it gives any access.
 #[sqlx::test(migrator = "crate::common::GUARD")]
-async fn a_rejoin_restores_team_and_project_access_while_a_removal_closes_it(pool: PgPool) {
+async fn a_rejoin_restores_no_team_or_project_access_and_a_removal_revokes_it(pool: PgPool) {
     let env = common::Env::new(pool.clone()).await;
     let by_team = env.person("byteam", "MEMBER").await;
     let direct = env.person("direct", "MEMBER").await;
@@ -1065,11 +1192,11 @@ async fn a_rejoin_restores_team_and_project_access_while_a_removal_closes_it(poo
     for who in [&by_team, &direct] {
         assert_eq!(reaches(who).await, StatusCode::NOT_FOUND, "while removed");
     }
-    // What the removal leaves behind is dormant, not deleted.
-    assert_eq!(rows(pool.clone(), by_team.id).await, (1, 0));
-    assert_eq!(rows(pool.clone(), direct.id).await, (0, 1));
+    // The removal revokes what was explicitly given: the Team membership and the direct grant.
+    assert_eq!(rows(pool.clone(), by_team.id).await, (0, 0));
+    assert_eq!(rows(pool.clone(), direct.id).await, (0, 0));
 
-    // Back, with a Workspace role of the operator's choosing: the organisation they belonged to is theirs again.
+    // Back, with a Workspace role of the operator's choosing: a new member, with none of the old access.
     for who in [&by_team, &direct] {
         assert_eq!(
             join_workspace_as_operator(&pool, env.ws, who.id, "MEMBER")
@@ -1079,24 +1206,59 @@ async fn a_rejoin_restores_team_and_project_access_while_a_removal_closes_it(poo
         );
     }
     for who in [&by_team, &direct] {
-        assert_eq!(reaches(who).await, StatusCode::OK, "after the rejoin");
+        assert_eq!(
+            reaches(who).await,
+            StatusCode::NOT_FOUND,
+            "after the rejoin, until they are given access again"
+        );
     }
-    assert_eq!(rows(pool.clone(), by_team.id).await, (1, 0));
-    assert_eq!(rows(pool.clone(), direct.id).await, (0, 1));
-    let direct_role: String =
-        sqlx::query_scalar("SELECT role FROM penfii.project_user_grants WHERE user_id = $1")
-            .bind(direct.id)
-            .fetch_one(&pool)
+    assert_eq!(rows(pool.clone(), by_team.id).await, (0, 0));
+    assert_eq!(rows(pool.clone(), direct.id).await, (0, 0));
+    // The removal took everything already, so the rejoin's audit entry has nothing to report.
+    let entries = joined_entries(&pool, env.ws, by_team.id).await;
+    assert!(entries.last().unwrap().1.get("revoked").is_none());
+
+    // Someone removed by an earlier release (only the membership flipped, the Team row stayed): the
+    // rejoin takes the leftover away and its audit entry says what it took.
+    let old = env.person("old", "MEMBER").await;
+    ok(env
+        .call(
+            &env.owner,
+            "PUT",
+            &format!("/v1/workspaces/{}/teams/{team}/members/{}", env.ws, old.id),
+            Some(json!({"role": "MEMBER"})),
+        )
+        .await);
+    sqlx::query(
+        "UPDATE penfii.workspace_members SET state = 'INACTIVE', deactivated_at = now()
+         WHERE workspace_id = $1 AND user_id = $2",
+    )
+    .bind(env.ws)
+    .bind(old.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        join_workspace_as_operator(&pool, env.ws, old.id, "MEMBER")
             .await
-            .unwrap();
-    assert_eq!(direct_role, "EDITOR");
-    let team_role: String =
-        sqlx::query_scalar("SELECT role FROM penfii.team_members WHERE user_id = $1")
-            .bind(by_team.id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(team_role, "MEMBER");
+            .unwrap(),
+        JoinOutcome::Rejoined
+    );
+    assert_eq!(rows(pool.clone(), old.id).await, (0, 0));
+    let entries = joined_entries(&pool, env.ws, old.id).await;
+    let revoked = &entries.last().unwrap().1["revoked"];
+    assert_eq!(revoked["teams"], 1, "{revoked}");
+    assert_eq!(revoked["projects"], 0, "{revoked}");
+    // A new, explicit grant works as usual.
+    ok(env
+        .call(
+            &env.owner,
+            "PUT",
+            &format!("/v1/projects/{project}/grants/{}", direct.id),
+            Some(json!({"role": "VIEWER"})),
+        )
+        .await);
+    assert_eq!(reaches(&direct).await, StatusCode::OK);
 }
 
 /// Disabling an account is not leaving the Workspace: the membership, and with it the Team and

@@ -947,3 +947,60 @@ async fn project_channel_is_public_to_members_and_empty_dm_stays_addressable(poo
 }
 
 // Docs
+
+/// A channel content auditor reads a message's history only while they are an active member of the
+/// Workspace with an enabled account; nothing writes `channel_content_auditors` yet, but the path
+/// must not outlive the membership.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_channel_auditor_who_is_inactive_or_disabled_cannot_read_message_history(pool: PgPool) {
+    let world = &World::new(pool).await;
+    let workspace_id = workspace(world, &format!("aud-{}", Uuid::new_v4())).await;
+    let conversation_id = channel(world, workspace_id, "audited", "PRIVATE").await;
+    let (auditor, _) = invite_member(world, workspace_id, "MEMBER").await;
+    let (status, root) = send(
+        world,
+        &world.owner_cookie,
+        conversation_id,
+        "audited-body",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{root}");
+    let message_id: Uuid = root["id"].as_str().unwrap().parse().unwrap();
+    let history = |user: Uuid| {
+        let pool = world.pool.clone();
+        async move { penfii_core::conversation::message_history(&pool, user, message_id).await }
+    };
+    // Not an auditor, not a member of the private channel: nothing.
+    assert!(history(auditor).await.is_err());
+    sqlx::query("INSERT INTO penfii.channel_content_auditors(channel_id,user_id) VALUES($1,$2)")
+        .bind(conversation_id)
+        .bind(auditor)
+        .execute(&world.pool)
+        .await
+        .unwrap();
+    assert!(history(auditor).await.is_ok());
+    // Deactivated in the Workspace: closed again, and open again when they are active.
+    sqlx::query("UPDATE penfii.workspace_members SET state='INACTIVE', deactivated_at=now() WHERE workspace_id=$1 AND user_id=$2")
+        .bind(workspace_id)
+        .bind(auditor)
+        .execute(&world.pool)
+        .await
+        .unwrap();
+    assert!(history(auditor).await.is_err());
+    sqlx::query("UPDATE penfii.workspace_members SET state='ACTIVE', deactivated_at=NULL WHERE workspace_id=$1 AND user_id=$2")
+        .bind(workspace_id)
+        .bind(auditor)
+        .execute(&world.pool)
+        .await
+        .unwrap();
+    assert!(history(auditor).await.is_ok());
+    // A disabled account: closed.
+    sqlx::query("UPDATE penfii.users SET disabled_at=now() WHERE id=$1")
+        .bind(auditor)
+        .execute(&world.pool)
+        .await
+        .unwrap();
+    assert!(history(auditor).await.is_err());
+}

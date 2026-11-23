@@ -123,6 +123,32 @@ pub async fn begin_upload(
     Ok(file)
 }
 
+/// Whether `actor_id` has a pending upload of `byte_size` bytes under this id, asked before the body is
+/// read so that an upload nobody may make (no such file, someone else's, deleted, already finished or of
+/// another size) costs no memory. [`finish_upload`] decides again after the body has arrived, since the
+/// upload can change meanwhile; this is the early refusal, with the same answers.
+pub async fn check_upload_ready(
+    pool: &PgPool,
+    actor_id: Uuid,
+    file_id: Uuid,
+    byte_size: i64,
+) -> Result<(), CoreError> {
+    let mut conn = pool.acquire().await?;
+    let file = load_file(&mut conn, file_id)
+        .await?
+        .ok_or(CoreError::NotFound)?;
+    if file.created_by != actor_id || file.deleted {
+        return Err(CoreError::NotFound);
+    }
+    if file.state != "UPLOADING" || file.byte_size != byte_size {
+        return Err(CoreError::conflict(
+            "stale_upload",
+            "upload is no longer current",
+        ));
+    }
+    Ok(())
+}
+
 pub async fn finish_upload(
     pool: &PgPool,
     store: &ObjectStore,

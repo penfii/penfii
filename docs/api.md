@@ -2,7 +2,7 @@
 
 This page tells an integration developer where the API is described and what a first request needs. It is an entry point, not a reference: the reference is the OpenAPI description, and nothing here repeats it.
 
-Penfii is at v0.3.1, an early release. **The HTTP API can change between 0.x releases** and there is no compatibility guarantee; read the [changelog](../CHANGELOG.md) before you upgrade a client. See [Known limitations](known-limitations.md#stability).
+Penfii is at v0.4.0, an early release. **The HTTP API can change between 0.x releases** and there is no compatibility guarantee; read the [changelog](../CHANGELOG.md) before you upgrade a client. See [Known limitations](known-limitations.md#stability).
 
 ## Where the API is described
 
@@ -10,7 +10,7 @@ Penfii is at v0.3.1, an early release. **The HTTP API can change between 0.x rel
 
 ## Signing in
 
-The API has one authentication scheme: a session cookie, `penfii_session`, that a person's sign-in sets. There is no API key. `POST /v1/session/login` with `{"email": "...", "password": "..."}` answers `200` with the person and sets the cookie; send the cookie back on later requests.
+The API has one authentication scheme: a session cookie, `penfii_session`, that a person's sign-in sets. There is no API key. `POST /v1/session/login` with `{"email": "...", "password": "..."}` answers `200` with the person and sets the cookie; send the cookie back on later requests. For an account with two-step verification on, a right password without a code answers `401` with `"code": "mfa_required"`; send the same request again with `"code": "<authenticator or recovery code>"`.
 
 Set `PENFII_URL` to your Penfii origin first (for example `PENFII_URL=http://localhost:8080`).
 

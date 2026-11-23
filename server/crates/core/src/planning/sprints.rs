@@ -620,7 +620,9 @@ fn ticket_ref(row: &sqlx::postgres::PgRow) -> Result<TicketRef, CoreError> {
 
 /// What closing the Sprint would do, for the admin to look at before confirming. It lists only
 /// Tasks the admin can see; the others are released and flagged for their editors without a trace
-/// here.
+/// here. Only a Project admin asks, so a trashed Task that is done or canceled is listed by key and title
+/// like in the trash list (FEA-135), never with more. An unfinished trashed Task is not offered to be
+/// carried on: closing releases it quietly instead, so it is left out of `unfinished`.
 pub async fn sprint_close_preview(
     pool: &PgPool,
     actor_id: Uuid,
@@ -638,7 +640,8 @@ pub async fn sprint_close_preview(
     let version: i64 = row.try_get("version")?;
     let starts_on: NaiveDate = row.try_get("starts_on")?;
     let rows = sqlx::query(
-        "SELECT t.id AS ticket_id, t.public_key, t.title, t.hierarchy_kind, t.channel_id, s.category
+        "SELECT t.id AS ticket_id, t.public_key, t.title, t.hierarchy_kind, t.channel_id, s.category,
+                (t.trashed_at IS NOT NULL) AS trashed
          FROM penfii.sprint_assignments a
          JOIN penfii.tickets t ON t.id=a.ticket_id
          JOIN penfii.workflow_statuses s ON s.id=t.status_id
@@ -660,6 +663,7 @@ pub async fn sprint_close_preview(
         match outcome_of(&category) {
             "DONE" => done.push(item),
             "CANCELED" => canceled.push(item),
+            _ if entry.try_get::<bool, _>("trashed")? => {}
             _ => unfinished.push(item),
         }
     }
@@ -721,7 +725,7 @@ pub async fn sprint_results(
         "SELECT DISTINCT ON (a.ticket_id)
                 a.ticket_id, a.assigned_at, a.ended_at, a.end_reason, a.outcome,
                 a.needs_next_assignment, t.public_key, t.title, t.hierarchy_kind, t.channel_id,
-                (b.ticket_id IS NOT NULL) AS in_baseline,
+                (t.trashed_at IS NOT NULL) AS trashed, (b.ticket_id IS NOT NULL) AS in_baseline,
                 ct.id AS to_id, ct.name AS to_name, ct.state AS to_state, ct.starts_on AS to_starts_on,
                 cf.id AS from_id, cf.name AS from_name, cf.state AS from_state, cf.starts_on AS from_starts_on
          FROM penfii.sprint_assignments a
@@ -737,9 +741,18 @@ pub async fn sprint_results(
     .await?;
     let mut access = HashMap::new();
     let mut results = Vec::new();
+    // A trashed Task (FEA-135) is still part of the Sprint's history, but only a Project admin sees its
+    // key and title here, as in the trash list; everyone else's list leaves it out.
+    let admin = crate::project_role::project_role(&mut tx, sprint.project_id, actor_id)
+        .await?
+        .1
+        .is_some_and(|role| crate::project_role::can_manage(&role));
     for entry in rows {
         let channel: Option<Uuid> = entry.try_get("channel_id")?;
         if !visible(&mut tx, &mut access, channel, actor_id).await? {
+            continue;
+        }
+        if !admin && entry.try_get::<bool, _>("trashed")? {
             continue;
         }
         let ended_at: Option<chrono::DateTime<chrono::Utc>> = entry.try_get("ended_at")?;

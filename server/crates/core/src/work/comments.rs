@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use super::changes::project_change;
 use super::read_access;
-use super::tickets::document_is_valid;
+use super::tickets::{check_document_bounds, document_is_valid};
 use crate::error::CoreError;
 use crate::platform::ChangeNotice;
 use crate::project_role::{can_manage, channel_allowed, require_project_role};
@@ -77,6 +77,7 @@ pub async fn create_comment(
     if !document_is_valid(&body, false) {
         return Err(CoreError::validation("comment body must be a JSON object"));
     }
+    check_document_bounds(&body, "comment body")?;
     let mut tx = pool.begin().await?;
     let ticket=sqlx::query("SELECT workspace_id,project_id,channel_id FROM penfii.tickets WHERE id=$1 AND archived_at IS NULL AND trashed_at IS NULL AND purged_at IS NULL").bind(ticket_id).fetch_optional(&mut *tx).await?.ok_or(CoreError::NotFound)?;
     let workspace: Uuid = ticket.try_get("workspace_id")?;
@@ -146,6 +147,7 @@ pub async fn edit_comment(
     if !document_is_valid(&body, false) {
         return Err(CoreError::validation("comment body must be a JSON object"));
     }
+    check_document_bounds(&body, "comment body")?;
     let mut tx = pool.begin().await?;
     let (workspace, project, author, channel, _) =
         writable_comment(&mut tx, actor_id, ticket_id, comment_id).await?;

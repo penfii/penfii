@@ -1,4 +1,5 @@
 import { LocaleToggle, useI18n } from '../i18n/I18nProvider'
+import { ConfirmEmailForm } from '../modules/identity/ConfirmEmail'
 import { ForgotPasswordForm, ResetPasswordForm } from '../modules/identity/PasswordReset'
 
 function Frame({ children }: { children: React.ReactNode }) {
@@ -25,4 +26,9 @@ export function ForgotPasswordPage() {
 /** `/reset-password#<token>`: the page the mailed link opens. */
 export function ResetPasswordPage() {
   return <Frame><ResetPasswordForm /></Frame>
+}
+
+/** `/confirm-email#<token>`: the page the link to a new e-mail address opens. */
+export function ConfirmEmailPage() {
+  return <Frame><ConfirmEmailForm /></Frame>
 }

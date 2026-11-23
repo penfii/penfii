@@ -28,6 +28,7 @@ function page<M>(load: () => Promise<M>, name: keyof M) {
 const InvitePage = page(() => import('../pages/InvitePage'), 'InvitePage')
 const ForgotPasswordPage = page(() => import('../pages/PasswordResetPage'), 'ForgotPasswordPage')
 const ResetPasswordPage = page(() => import('../pages/PasswordResetPage'), 'ResetPasswordPage')
+const ConfirmEmailPage = page(() => import('../pages/PasswordResetPage'), 'ConfirmEmailPage')
 const AccountPage = page(() => import('../pages/AccountPage'), 'AccountPage')
 const SettingsPage = page(() => import('../pages/AccountPage'), 'SettingsPage')
 const AdminPage = page(() => import('../pages/AdminPage'), 'AdminPage')
@@ -72,7 +73,7 @@ function AuthBridge() {
   useEffect(() => {
     setUnauthorizedHandler(() => {
       const path = pathRef.current
-      if (path === '/login' || path.startsWith('/invite/') || path === '/forgot-password' || path === '/reset-password') return
+      if (path === '/login' || path.startsWith('/invite/') || path === '/forgot-password' || path === '/reset-password' || path === '/confirm-email') return
       // The session is over: nothing it fetched may reach whoever signs in next. What the person saved stays for their own return.
       rememberReturn(path + searchRef.current)
       endUserSession(queryClient, { forget: false })
@@ -120,6 +121,7 @@ function AppRoutes() {
           <Route path="/invite/:token" element={<InvitePage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/confirm-email" element={<ConfirmEmailPage />} />
           <Route path="/consent" element={<RequireAuth><ConsentPage /></RequireAuth>} />
           <Route path="/" element={<RequireAuth><WorkspacesPage /></RequireAuth>} />
           <Route path="/account" element={<RequireAuth><AccountPage /></RequireAuth>} />

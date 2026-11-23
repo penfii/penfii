@@ -270,6 +270,8 @@ fn code_of(error: &CoreError) -> String {
         CoreError::Forbidden(_) => "forbidden".into(),
         CoreError::Conflict { code, .. } | CoreError::Rule { code, .. } => (*code).into(),
         CoreError::ReauthRequired { .. } => "reauth_required".into(),
+        CoreError::MfaRequired => "mfa_required".into(),
+        CoreError::MfaCodeInvalid => "mfa_code_invalid".into(),
         CoreError::RateLimited { .. } => "rate_limited".into(),
         CoreError::DbUnavailable(_) => "db_unavailable".into(),
         CoreError::Internal(_) => "internal".into(),

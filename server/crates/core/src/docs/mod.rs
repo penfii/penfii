@@ -10,6 +10,7 @@ pub mod collab;
 pub mod content;
 pub mod history;
 pub mod materialize;
+pub mod recovery;
 pub mod yjs;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -99,6 +100,7 @@ async fn lock_readable(
     Ok((workspace, rights))
 }
 
+/// Share-locked, so a removal (which revokes participant rows) is ordered before or after this write.
 async fn active_members(
     conn: &mut PgConnection,
     workspace_id: Uuid,
@@ -108,7 +110,7 @@ async fn active_members(
         return Ok(HashSet::new());
     }
     let rows: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT user_id FROM penfii.workspace_members WHERE workspace_id=$1 AND user_id = ANY($2) AND state='ACTIVE'",
+        "SELECT user_id FROM penfii.workspace_members WHERE workspace_id=$1 AND user_id = ANY($2) AND state='ACTIVE' FOR SHARE",
     )
     .bind(workspace_id)
     .bind(users)

@@ -1,6 +1,20 @@
 //! Failed-attempt throttle for password proofs (sign-in and reauthentication). The key is the
 //! submitted identifier, whether or not an account exists, so a locked response says nothing about
 //! the account.
+//!
+//! A proof that is checked with a slow hash (a password, later a one-time code) uses the
+//! **reserve, verify, settle** pattern, which no number of parallel requests can get around:
+//!
+//! 1. [`admit_or_limited`] counts the attempt in every counter and refuses it (`RateLimited`) when
+//!    any of them is full. Counting and testing are one locked transaction, so requests that arrive
+//!    together are let in one after the other and at most `max_failures` of them pass per window.
+//! 2. The proof is checked (outside any transaction).
+//! 3. On success the caller [`clear`]s the counters of the account and [`refund`]s the shared ones
+//!    (an address is not charged for a right answer). On failure nothing is left to do: the attempt
+//!    is already counted.
+//!
+//! The older [`check`] followed by [`record_failure_limit`] is not atomic and stays only for
+//! callers that have nothing slow in between.
 
 use chrono::Duration;
 use sha2::{Digest, Sha256};
@@ -10,8 +24,16 @@ use crate::error::CoreError;
 use crate::limits::Bucket;
 
 /// Re-authentication of a signed-in person: 5 failures in 15 minutes, per account.
-const REAUTH: Bucket = Bucket {
+pub(crate) const REAUTH: Bucket = Bucket {
     max_failures: 5,
+    window_seconds: 15 * 60,
+};
+
+/// Codes of a second factor: 10 wrong ones in 15 minutes lock the counter, per account. Used for the
+/// code step of a sign-in (keyed by the e-mail, `mfa_login`) and for the actions of the signed-in person
+/// (keyed by the account, `mfa`).
+pub(crate) const MFA: Bucket = Bucket {
+    max_failures: 10,
     window_seconds: 15 * 60,
 };
 
@@ -41,10 +63,6 @@ pub(crate) async fn check(pool: &PgPool, scope: &str, key: &str) -> Result<(), C
         }
     }
     Ok(())
-}
-
-pub(crate) async fn record_failure(pool: &PgPool, scope: &str, key: &str) -> Result<(), CoreError> {
-    record_failure_limit(pool, scope, key, REAUTH).await
 }
 
 /// Counts a failure. The key is locked for one `window_seconds` once the window holds
@@ -96,6 +114,67 @@ pub(crate) async fn admit_all(
     pool: &PgPool,
     counters: &[(&str, &str, Bucket)],
 ) -> Result<bool, CoreError> {
+    Ok(matches!(
+        reserve(pool, counters).await?,
+        Admission::Admitted
+    ))
+}
+
+/// What [`reserve`] decided.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Admission {
+    Admitted,
+    /// A counter is full; the attempt is not counted. The time is the database's, in whole seconds.
+    Locked {
+        retry_after_seconds: i64,
+    },
+}
+
+/// Step 1 of reserve, verify, settle (see the module comment): [`admit_all`] for an attempt that
+/// must be answered with `RateLimited` and its retry time.
+pub(crate) async fn admit_or_limited(
+    pool: &PgPool,
+    counters: &[(&str, &str, Bucket)],
+) -> Result<(), CoreError> {
+    match reserve(pool, counters).await? {
+        Admission::Admitted => Ok(()),
+        Admission::Locked {
+            retry_after_seconds,
+        } => Err(CoreError::RateLimited {
+            retry_after_seconds,
+        }),
+    }
+}
+
+/// Takes one attempt back from a counter after a right answer, and lifts the lock that attempt
+/// itself may have set. Used for counters that are shared by many people (an address): the attempt
+/// was counted before it was known to be wrong.
+pub(crate) async fn refund(
+    pool: &PgPool,
+    scope: &str,
+    key: &str,
+    bucket: Bucket,
+) -> Result<(), CoreError> {
+    let hash = key_hash(key);
+    sqlx::query(
+        "UPDATE penfii.auth_throttle
+         SET failures = GREATEST(failures - 1, 0),
+             locked_until = CASE WHEN failures - 1 < $3 THEN NULL ELSE locked_until END
+         WHERE scope = $1 AND key_hash = $2",
+    )
+    .bind(scope)
+    .bind(&hash)
+    .bind(bucket.max_failures)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// [`admit_all`] with the retry time of a refusal.
+pub(crate) async fn reserve(
+    pool: &PgPool,
+    counters: &[(&str, &str, Bucket)],
+) -> Result<Admission, CoreError> {
     let mut tx = pool.begin().await?;
     // The database's clock, read once: the window and the lock are compared with the stored times.
     let now = sqlx::query_scalar!(r#"SELECT now() as "now!""#)
@@ -125,9 +204,11 @@ pub(crate) async fn admit_all(
         .await?;
         let (window_start, failures, locked_until) =
             (row.window_start, row.failures, row.locked_until);
-        if locked_until.is_some_and(|until| until > now) {
+        if let Some(until) = locked_until.filter(|until| *until > now) {
             // Dropping the transaction undoes the empty rows made above and counts nothing.
-            return Ok(false);
+            return Ok(Admission::Locked {
+                retry_after_seconds: (until - now).num_seconds().max(1),
+            });
         }
         let fresh = window_start < now - Duration::seconds(bucket.window_seconds);
         let counted = if fresh { 1 } else { failures + 1 };
@@ -155,7 +236,7 @@ pub(crate) async fn admit_all(
         .await?;
     }
     tx.commit().await?;
-    Ok(true)
+    Ok(Admission::Admitted)
 }
 
 pub(crate) async fn clear(pool: &PgPool, scope: &str, key: &str) -> Result<(), CoreError> {

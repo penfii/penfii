@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.4.0
+
+Security hardening from the v0.3.1 audit (FEA-133, FEA-147). Back up before you upgrade.
+
+### Upgrading from 0.3.1 (or 0.3.0, 0.2.2, 0.2.1, 0.2.0)
+
+- **Database migration 0003** runs in `db-setup` on the first start, in one transaction. It adds e-mail change, external sign-in binding and two-step verification tables. It also removes the Team, Project, Group, Doc share and auditor rights still held by people already removed from a workspace (written to the audit log as `member.access_cleaned`, one entry per person and workspace).
+- **web listens on 8080 inside its container** and runs as a non-root user. The published port (`PENFII_HTTP_PORT`) is unchanged. A hand-written Compose file or health check that targets the container's port 80 must change.
+- **The Compose networks change:** a private `frontend` network with a fixed range (`PENFII_FRONTEND_SUBNET`) and an internal `data` network. Run `docker compose down` then `up -d` once so Docker creates them again (see [Self-hosting](docs/self-hosting.md#upgrading-to-the-hardened-compose-file)).
+- **core-api now trusts `X-Forwarded-For` only from the web container** (`PENFII_TRUSTED_PROXIES` defaults to `PENFII_FRONTEND_SUBNET`, before: every private range). A reverse proxy on another machine must be added to `PENFII_TRUSTED_PROXIES`, or every visitor counts as the proxy's address and shares one sign-in throttle. core-api logs a warning when it sees such a proxy.
+- **New settings are optional.** `PENFII_S3_APP_ACCESS_KEY` and `PENFII_S3_APP_SECRET_KEY` (MinIO app account) and `PENFII_MFA_ENCRYPTION_KEY` can stay unset; without the app keys the server keeps the root key pair and `minio-setup` warns.
+- **The runtime database role can no longer change or delete audit entries.** This applies after `migrate` or `db-provision`, on installs with separate owner and runtime roles.
+- **Changing an e-mail address in the profile now needs a confirmation** sent to the new address, and is not offered without e-mail. `PATCH /v1/me` with a different address answers `409 email_change_requires_verification`.
+
+### Added
+
+- **Optional two-step verification** with an authenticator app (TOTP, with a QR code) and single-use recovery codes. Password sign-in asks for a code once it is on; sign-in through an external provider follows the provider's policy. Turning it off or making new recovery codes needs a current code. An operator can reset it with `admin-cli user-mfa-reset`, which ends every session and MCP grant.
+- **E-mail change confirmed from the new address.** The old address keeps working until the link is opened. Operators use `admin-cli user-set-email`, which leaves the new address unverified.
+- **Recovery of Docs without a manager:** workspace owners and admins see their title and creator (not their content) and can name a manager, written to the audit log as `doc.manager_recovered`.
+- **A `minio-setup` service** that makes the bucket and an app account limited to it.
+- **CycloneDX SBOMs and a report-only container vulnerability scan** (`docker/scripts/supply-chain.sh`, a `supply-chain` CI job). Findings never fail the build.
+- **Audit entries** for sign-ins, lockouts, session ends, password changes and sign-in method changes. Failed sign-ins for unknown addresses write nothing.
+
+### Changed
+
+- **An existing account accepts an invitation only while signed in to it.** A member invitation needs nothing more; an admin or owner invitation needs a recent sign-in. The invitation page no longer takes a password.
+- **Credential changes end other access.**
+  - A password change in the profile keeps this device, signs out the others and keeps MCP grants.
+  - A reset by e-mail or by `admin-cli user-set-password` ends every session and MCP grant.
+  - Open chat, Project and user sockets close when their session ends.
+- **Removing someone from a workspace takes away their explicit access** there: Teams, direct Project roles, Groups, Doc shares (also as the last manager), security and channel auditor roles and private channels. Their own Docs, DMs, history and other workspaces stay.
+- **Adding yourself to a Team, or accepting your own invitation into it, no longer makes you admin of a Project you did not already administer.** The Team page shows the Project roles a Team gives.
+- **Compose containers drop capabilities, use `no-new-privileges` and, where they can, read-only root file systems.** core-api and web run as uid 10001. Build inputs and tool images are pinned (`cargo build --locked`). The web image uses Caddy 2.11.9, and the core-api image uses Debian trixie with current security updates.
+
+### Fixed
+
+- **Trashed Tickets:** their comments, children, activity and revisions are no longer readable, and Sprint reports no longer list them to people who are not Project admins. Sprint figures are unchanged.
+- **Sign-in throttling** counts attempts before the password is checked, so parallel requests cannot get past it. The invitation page could be used to try passwords without a limit.
+- **Uploads** are refused before their body is read when they cannot be finished, share a memory budget and time out when stalled. Socket messages, comments and descriptions have size bounds; existing documents stay readable.
+- **External sign-in is bound to the browser that started it.** Outgoing requests (push, OAuth client metadata) refuse more internal address forms and proxies.
+- **Search snippets** no longer show deleted comments. Doc comment attachments are visible to readers of the page. A channel auditor counts only while they are an active member.
+- **`restore-check.sh`** refuses a scratch database that could be the source, and only drops one it created itself.
+
 ## 0.3.1
 
 A maintenance release: search recovery and English matching, a restore rehearsal, and user and contributor documentation. Back up before you upgrade.
