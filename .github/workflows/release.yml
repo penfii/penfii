@@ -1,0 +1,257 @@
+# Official release: the images (ghcr.io/penfii/core-api, web, opensearch), the install ZIP, the SBOMs and a DRAFT
+# GitHub Release, for a release tag that already exists. Started by hand (Actions > Release > Run workflow); a pushed
+# tag starts nothing, so mirroring a tag from Forgejo never publishes by itself.
+#
+# Source and tooling are kept apart on purpose. The workflow and docker/release/ come from the branch it is run on
+# (main); everything that goes INTO an image or the ZIP's files comes from the checkout of the tag (`src/`):
+# the images hold exactly the tagged commit, never a later change to main. The tag is checked first: it must be an
+# annotated vX.Y.Z tag on a commit that is in main, whose manifests carry that version, whose changelog has its
+# section and whose CI run on GitHub succeeded.
+#
+# `publish: false` (the default) is a dry run: it verifies the tag, builds the three images locally, builds the ZIP
+# and compares the two Compose files, and publishes nothing. `publish: true` pushes the version tag of each image to
+# GHCR (never `latest`; an existing tag is kept, and the run fails if it was built from another commit), then checks
+# the published images the way a user gets them (anonymous pull, labels), makes the SBOMs and a vulnerability
+# report, installs from the ZIP with those images and runs the smoke test, and finally creates a DRAFT Release with
+# the assets. Making the draft public is a separate, manual step. GHCR makes a new package private: set its
+# visibility to public once (Package settings), and the anonymous-pull check below keeps failing until it is.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (vX.Y.Z), an annotated tag that is already on main
+        required: true
+        type: string
+      publish:
+        description: Push the images to GHCR and create the draft Release (false = dry run)
+        required: true
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_PREFIX: ghcr.io/penfii
+
+jobs:
+  # The tag is what it must be, and the release tooling agrees with it.
+  verify:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - name: Tag name
+        id: tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]] || { echo "::error::the tag must look like v1.2.3"; exit 1; }
+          echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+      - name: Official repository only
+        if: ${{ inputs.publish }}
+        run: |
+          [ "$GITHUB_REPOSITORY" = penfii/penfii ] || { echo "::error::publishing is for penfii/penfii only (this is $GITHUB_REPOSITORY); run a dry run here"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tooling
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          path: src
+          fetch-depth: 0
+          persist-credentials: false
+      - name: The tag is an annotated tag on a commit of main
+        id: sha
+        working-directory: src
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          [ "$(git cat-file -t "refs/tags/$TAG")" = tag ] || { echo "::error::$TAG is not an annotated tag"; exit 1; }
+          sha="$(git rev-parse "refs/tags/$TAG^{commit}")"
+          git fetch --quiet origin main
+          git merge-base --is-ancestor "$sha" origin/main || { echo "::error::$TAG ($sha) is not on main"; exit 1; }
+          [ "$(git rev-parse HEAD)" = "$sha" ] || { echo "::error::checkout is not at the tag"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "$TAG -> $sha"
+          git log -1 --format='%h %s' "$sha"
+      - name: The tag's manifests, changelog and CI
+        working-directory: src
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+          SHA: ${{ steps.sha.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bad=0
+          for f in server/apps/core-api/Cargo.toml server/apps/admin-cli/Cargo.toml server/crates/*/Cargo.toml; do
+            grep -q "^version = \"$VERSION\"$" "$f" || { echo "::error file=$f::version is not $VERSION"; bad=1; }
+          done
+          for f in client/package.json client/apps/web/package.json client/packages/*/package.json; do
+            grep -q "\"version\": \"$VERSION\"" "$f" || { echo "::error file=$f::version is not $VERSION"; bad=1; }
+          done
+          grep -q "^## $VERSION\$" CHANGELOG.md || { echo "::error::CHANGELOG.md has no '## $VERSION' section"; bad=1; }
+          [ "$bad" = 0 ] || exit 1
+          run="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&status=completed" --jq '[.workflow_runs[] | select(.conclusion=="success")] | length')"
+          [ "$run" -ge 1 ] || { echo "::error::no successful CI run for $SHA"; exit 1; }
+          echo "CI succeeded for $SHA"
+      - name: Compose files and install ZIP
+        run: |
+          tooling/docker/release/check-install-compose.py
+          tooling/docker/release/package.sh "${{ steps.tag.outputs.version }}" dry-zip src
+          tooling/docker/release/package.sh "${{ steps.tag.outputs.version }}" dry-zip2 src
+          cmp dry-zip/penfii-${{ inputs.tag }}-docker.zip dry-zip2/penfii-${{ inputs.tag }}-docker.zip
+          cat dry-zip/*.sha256
+
+  images:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [core-api, web, opensearch]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tooling
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          path: src
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Log in to GHCR
+        if: ${{ inputs.publish }}
+        env:
+          TOKEN: ${{ github.token }}
+        run: printf '%s' "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Build (and push only when publish is true)
+        env:
+          PUSH: ${{ inputs.publish && '1' || '0' }}
+          OUT: ${{ github.workspace }}/out
+        run: tooling/docker/release/build-images.sh "${{ needs.verify.outputs.version }}" src "${{ matrix.image }}"
+      - name: Digest
+        run: cat out/digests.txt
+
+  # The images as a user gets them, then the ZIP, SBOMs, scan and the draft Release.
+  assets:
+    if: ${{ inputs.publish }}
+    needs: [verify, images]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tooling
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          path: src
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Anonymous pull and labels
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          SHA: ${{ needs.verify.outputs.sha }}
+        run: |
+          # No credentials: this is what `docker compose pull` does on a user's machine.
+          DOCKER_CONFIG="$(mktemp -d)"; export DOCKER_CONFIG
+          : > digests.txt
+          for n in core-api web opensearch; do
+            ref="$IMAGE_PREFIX/$n:$VERSION"
+            docker pull --platform linux/amd64 "$ref" >/dev/null || { echo "::error::cannot pull $ref anonymously (is the package public?)"; exit 1; }
+            rev="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$ref")"
+            ver="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$ref")"
+            if [ "$rev" != "$SHA" ] || [ "$ver" != "$VERSION" ]; then echo "::error::$ref has revision '$rev' version '$ver', expected $SHA $VERSION"; exit 1; fi
+            echo "$n=$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')" >> digests.txt
+            echo "$ref revision $rev"
+          done
+          cat digests.txt
+      - name: SBOMs and vulnerability report
+        env:
+          REPO: ${{ github.workspace }}/src
+          COMMIT: ${{ needs.verify.outputs.sha }}
+          TAG: ${{ inputs.tag }}
+          IMAGE_CORE_API: ghcr.io/penfii/core-api:${{ needs.verify.outputs.version }}
+          IMAGE_WEB: ghcr.io/penfii/web:${{ needs.verify.outputs.version }}
+          IMAGE_OPENSEARCH: ghcr.io/penfii/opensearch:${{ needs.verify.outputs.version }}
+        run: |
+          tooling/docker/scripts/supply-chain.sh sbom sbom
+          tooling/docker/scripts/supply-chain.sh scan sbom | tee sbom/scan-summary.txt
+      - name: Install ZIP
+        run: |
+          tooling/docker/release/package.sh "${{ needs.verify.outputs.version }}" dist src
+          (cd dist && sha256sum -c ./*.sha256)
+      - name: Install from the ZIP with the published images and run the smoke test
+        run: |
+          mkdir smoke && unzip -q dist/penfii-${{ inputs.tag }}-docker.zip -d smoke && cd smoke/penfii
+          s=../../tooling/docker/release/smoke.sh
+          $s env .; $s up .; $s web .; $s seed .; $s check .; $s restart .; $s check .
+          docker compose -p penfii-smoke --env-file .env logs --no-color core-api | grep -iE "panic|error" | head -5 || true
+          PURGE=1 $s down .
+      - name: Checksums and release notes
+        run: |
+          mkdir release-assets
+          cp dist/penfii-${{ inputs.tag }}-docker.zip release-assets/
+          for f in source core-api web opensearch; do cp "sbom/$f.cdx.json" "release-assets/sbom-$f.cdx.json"; done
+          cp sbom/sbom-manifest.txt release-assets/sbom-manifest.txt
+          for f in core-api web opensearch; do [ ! -f "sbom/$f.grype.json" ] || cp "sbom/$f.grype.json" "release-assets/sbom-$f.grype.json"; done
+          (cd release-assets && sha256sum ./* | sed "s# \./# #" > SHA256SUMS)
+          args=(); while IFS= read -r l; do args+=(--digest "$l"); done < digests.txt
+          tooling/docker/release/release-notes.py "${{ needs.verify.outputs.version }}" --changelog src/CHANGELOG.md \
+            --sha "${{ needs.verify.outputs.sha }}" "${args[@]}" --checksums release-assets/SHA256SUMS \
+            --scan-summary sbom/scan-summary.txt > release-notes.md
+          cat release-assets/SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ inputs.tag }}
+          path: |
+            release-assets/
+            release-notes.md
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 90
+
+  # A DRAFT only: nothing is public until a maintainer publishes it. A draft that exists is updated; a published
+  # Release is never touched.
+  draft-release:
+    if: ${{ inputs.publish }}
+    needs: [verify, assets]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ inputs.tag }}
+      - name: Create or update the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft >/tmp/draft 2>/dev/null; then
+            [ "$(cat /tmp/draft)" = true ] || { echo "::error::Release $TAG is already published; not touching it"; exit 1; }
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md --title "Penfii ${TAG#v}"
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber release-assets/*
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Penfii ${TAG#v}" \
+              --notes-file release-notes.md release-assets/*
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,tagName,assets --jq '{isDraft,tagName,assets:[.assets[].name]}'

@@ -27,9 +27,13 @@ CDX_IMAGE="cyclonedx/cyclonedx-cli:0.33.1"
 PYTHON_IMAGE="python:3.13.18-slim"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REPO="$(cd "$HERE/.." && pwd)"
+# REPO: the source tree to describe (default: this checkout). The release workflow points it at the release tag's
+# checkout while the script itself comes from the tooling checkout.
+REPO="${REPO:-$(cd "$HERE/.." && pwd)}"
 IMAGE_CORE_API="${IMAGE_CORE_API:-penfii-core-api:local}"
 IMAGE_WEB="${IMAGE_WEB:-penfii-web:local}"
+# Optional third image (the release workflow sets it); without it only core-api and web are covered.
+IMAGE_OPENSEARCH="${IMAGE_OPENSEARCH:-}"
 COMMIT="${COMMIT:-$(git -C "$REPO" rev-parse HEAD)}"
 TAG="${TAG:-$(git -C "$REPO" describe --tags --exact-match HEAD 2>/dev/null || true)}"
 
@@ -85,6 +89,7 @@ cmd_sbom() {
   sbom_one source.cdx.json penfii "dir:/src"
   sbom_one core-api.cdx.json penfii-core-api "docker:$IMAGE_CORE_API" "$IMAGE_CORE_API"
   sbom_one web.cdx.json penfii-web "docker:$IMAGE_WEB" "$IMAGE_WEB"
+  [ -z "$IMAGE_OPENSEARCH" ] || sbom_one opensearch.cdx.json penfii-opensearch "docker:$IMAGE_OPENSEARCH" "$IMAGE_OPENSEARCH"
   {
     echo "commit $COMMIT"
     echo "tag ${TAG:-none}"
@@ -93,6 +98,7 @@ cmd_sbom() {
     echo "cyclonedx-cli $CDX_IMAGE"
     echo "image_core_api $IMAGE_CORE_API $(docker image inspect --format '{{.Id}}' "$IMAGE_CORE_API")"
     echo "image_web $IMAGE_WEB $(docker image inspect --format '{{.Id}}' "$IMAGE_WEB")"
+    [ -z "$IMAGE_OPENSEARCH" ] || echo "image_opensearch $IMAGE_OPENSEARCH $(docker image inspect --format '{{.Id}}' "$IMAGE_OPENSEARCH")"
   } > "$OUT/sbom-manifest.txt"
   echo "== OK: $OUT"
 }
@@ -116,7 +122,9 @@ print("   " + (", ".join("%s %d (%d with a fix)" % (s, *sev[s]) for s in order i
 cmd_scan() {
   echo "== vulnerability report (report only; commit $COMMIT${TAG:+, tag $TAG})"
   local name image
-  for pair in "core-api|$IMAGE_CORE_API" "web|$IMAGE_WEB"; do
+  local pairs=("core-api|$IMAGE_CORE_API" "web|$IMAGE_WEB")
+  [ -z "$IMAGE_OPENSEARCH" ] || pairs+=("opensearch|$IMAGE_OPENSEARCH")
+  for pair in "${pairs[@]}"; do
     name="${pair%%|*}"; image="${pair#*|}"
     echo "-- $name ($image)"
     if ! docker image inspect "$image" >/dev/null 2>&1; then echo "   UNAVAILABLE: image not built"; continue; fi
