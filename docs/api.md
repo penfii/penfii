@@ -2,7 +2,7 @@
 
 This page tells an integration developer where the API is described and what a first request needs. It is an entry point, not a reference: the reference is the OpenAPI description, and nothing here repeats it.
 
-Penfii is at v0.4.0, an early release. **The HTTP API can change between 0.x releases** and there is no compatibility guarantee; read the [changelog](../CHANGELOG.md) before you upgrade a client. See [Known limitations](known-limitations.md#stability).
+Penfii is at v0.4.1, an early release. **The HTTP API can change between 0.x releases** and there is no compatibility guarantee; read the [changelog](../CHANGELOG.md) before you upgrade a client. See [Known limitations](known-limitations.md#stability).
 
 ## Where the API is described
 

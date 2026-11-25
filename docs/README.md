@@ -1,6 +1,6 @@
 # Penfii documentation
 
-Penfii is at v0.4.0, an early release. These documents describe the repository as it is today; where something is not decided or not documented yet, the page says so.
+Penfii is at v0.4.1, an early release. These documents describe the repository as it is today; where something is not decided or not documented yet, the page says so.
 
 ## For people who use Penfii
 

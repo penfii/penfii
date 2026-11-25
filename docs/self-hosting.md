@@ -2,7 +2,7 @@
 
 `docker/compose.yaml` is the supported way to run Penfii. It starts PostgreSQL, OpenSearch (with the Korean analyzer), MinIO (S3-compatible file storage), the server (`core-api`) and the web app, and builds the server and web images from this checkout. There are no published images.
 
-Penfii is at v0.4.0, an early release: read [Known limitations](known-limitations.md) first.
+Penfii is at v0.4.1, an early release: read [Known limitations](known-limitations.md) first.
 
 ## What you need
 
@@ -16,7 +16,7 @@ Penfii is at v0.4.0, an early release: read [Known limitations](known-limitation
 ```sh
 git clone https://github.com/penfii/penfii.git
 cd penfii
-git checkout v0.4.0      # a release tag; leave this out to run the latest commit of the default branch
+git checkout v0.4.1      # a release tag; leave this out to run the latest commit of the default branch
 cd docker
 cp .env.example .env
 ```
@@ -210,12 +210,16 @@ Back up first ([Backup](#backup)), then check out the release and rebuild:
 
 ```sh
 git fetch --tags
-git checkout v0.4.0
+git checkout v0.4.1
 cd docker
 docker compose up -d --build
 ```
 
 `docker compose up` runs the one-shot `db-setup` service again before core-api starts (it is started again when its image is unchanged and re-created when the image changed), and `db-setup` applies pending database migrations with the schema owner's credential. core-api itself never migrates: it checks the history and refuses to start when it is behind. There is no upgrade guarantee between 0.x releases: read the [changelog](../CHANGELOG.md) of every release you move across before you start.
+
+### From v0.4.0 to v0.4.1
+
+v0.4.1 widens the MCP gateway (see the [changelog](../CHANGELOG.md#041)). It has no database migration and no new or changed setting: back up ([Backup](#backup)), check out `v0.4.1` and run `docker compose up -d --build` with the same `docker/.env`. An existing MCP connection keeps its scopes; a client that wants the new tools asks for the new scopes and the person approves them again. Coming from v0.3.1 or older, read the next section too.
 
 ### From v0.2.0, v0.2.1, v0.2.2, v0.3.0 or v0.3.1 to v0.4.0
 

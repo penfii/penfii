@@ -2,7 +2,7 @@
   "name": "@penfii/e2e",
   "private": true,
   "license": "GPL-3.0-only",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "scripts": {
     "test": "playwright test",

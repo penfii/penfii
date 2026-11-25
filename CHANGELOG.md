@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased
+## 0.4.1
+
+MCP gateway release, with an updated OpenSearch image. No database migration and no new setting.
+
+### Upgrading from 0.4.0 (or 0.3.1, 0.3.0, 0.2.2, 0.2.1, 0.2.0)
+
+- From 0.4.0 nothing has to be changed: check out `v0.4.1` and run `docker compose up -d --build` with the same `docker/.env`. There is no migration, so `db-setup` finds the schema current. Coming from an older release, follow the 0.4.0 section below as well.
+- MCP clients that already have a connection keep the scopes they had. To use the new tools (Docs, chat, plans, ...) a client asks for the new scopes and the person approves them again in the browser.
+
+### Security
+
+- **The bundled OpenSearch is 2.19.8 (was 2.19.2)**, and the image no longer contains the performance analyzer, ML Commons and skills plugins, which Penfii does not use. A vulnerability scan of the image went from 19 Critical and 308 High findings to none Critical and 5 High; those 5 are libraries inside OpenSearch's security plugin (switched off here) and job scheduler. OpenSearch stays reachable only on the internal `data` network. The data volume is compatible (same 2.19 line): `docker compose up -d --build` builds the new image and keeps your indices. Search is derived data, `admin-cli search-reindex` rebuilds it from PostgreSQL if you ever need to.
 
 ### Added
 

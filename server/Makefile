@@ -11,7 +11,7 @@ SHELL := bash
 .DEFAULT_GOAL := help
 
 PG_IMAGE ?= postgres:17.11-bookworm
-OS_IMAGE ?= penfii-opensearch:2.19.2
+OS_IMAGE ?= penfii-opensearch:2.19.8
 OS_NAME ?= penfii-os
 # The test server is thrown away after the run, so it skips durability: most of a test's time is
 # its database's migration, which otherwise waits on fsync.

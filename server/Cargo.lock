@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "admin-cli"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "chrono",
  "clap",
@@ -442,7 +442,7 @@ checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
 name = "core-api"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -1818,7 +1818,7 @@ dependencies = [
 
 [[package]]
 name = "penfii-contracts"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "chrono",
  "serde",
@@ -1828,7 +1828,7 @@ dependencies = [
 
 [[package]]
 name = "penfii-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -1863,7 +1863,7 @@ dependencies = [
 
 [[package]]
 name = "penfii-http-api"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "axum",
  "chrono",
@@ -1885,7 +1885,7 @@ dependencies = [
 
 [[package]]
 name = "penfii-mcp"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base64 0.22.1",
  "chrono",
