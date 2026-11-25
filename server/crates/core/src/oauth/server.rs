@@ -527,6 +527,7 @@ pub async fn decide(
             outcome_code: "OK",
             target_kind: "oauth_grant",
             target_id: Some(grant_id),
+            command_id: None,
             data: json!({"clientPk": request.client.pk, "clientName": request.client.name, "scopes": granted}),
         },
     )
@@ -1046,6 +1047,7 @@ pub async fn revoke_grant(
             outcome_code: "OK",
             target_kind: "oauth_grant",
             target_id: Some(grant_id),
+            command_id: None,
             data: json!({"reason": reason}),
         },
     )
@@ -1080,6 +1082,7 @@ pub async fn revoke_all_grants(pool: &PgPool, user_id: Uuid) -> Result<u64, Core
             outcome_code: "OK",
             target_kind: "user",
             target_id: Some(user_id),
+            command_id: None,
             data: json!({"count": done.rows_affected()}),
         },
     )

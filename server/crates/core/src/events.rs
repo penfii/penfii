@@ -98,7 +98,7 @@ pub async fn emit_with_kind(
     .bind(event.kind)
     .bind(actor_kind)
     .bind(event.actor_user_id)
-    .bind(event.command_id)
+    .bind(crate::origin::command_id(event.command_id))
     .bind(event.facts)
     .bind(event.security_context)
     .execute(&mut *conn)

@@ -161,6 +161,7 @@ pub async fn scope_dataset(
     // From here on nothing decides who may see what: `projects` holds only Projects the viewer can
     // read and `tickets` only Tickets whose channel they may open. What follows describes them.
     let channel_ids: Vec<Uuid> = access.keys().copied().collect();
+    work::attach_planned_ends(&mut tx, &mut tickets).await?;
     let tickets = describe_tickets(&mut tx, actor_id, &projects, tickets, &channel_ids).await?;
     tx.commit().await?;
     Ok(ScopeDataset {

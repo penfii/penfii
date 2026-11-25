@@ -66,6 +66,10 @@ For input methods the page was checked only with the events a browser reports wh
 - OpenSearch runs with its security plugin disabled and is not published; do not expose it.
 - Live updates are per process: the notices that make open sockets look again (chat, ticket boards, Inbox, Space) travel in the memory of the core-api that handled the change. With more than one core-api instance, a person connected to another instance sees changes only when their client reloads or reconnects. Run one instance; see [Running more than one core-api](operations.md#running-more-than-one-core-api).
 - The `/mcp` rate limit is per process.
+- MCP files: uploads and downloads through a tool call are limited to 256 KiB (base64 inside the call). Larger files and clients that cannot pass file bytes use the web app. Whether ChatGPT, Claude Code and Codex can pass or show file bytes was not verified against the real clients.
+- MCP has no push channel: an AI client polls `conversation_changes_list` for new messages.
+- `tools/list` does not depend on the scopes a connection has: it is about 190 tools (about 180 KB) under the standard Workspace policy and 203 when destructive and administrative tools are allowed. A client with a tool budget cannot shrink it by asking for fewer scopes; a Workspace policy that turns writing off shrinks it.
+- Calling a tool without its scope answers `403 insufficient_scope`. What a client does with it differs. Claude Code 2.1.332 keeps the connection, fails only that call with "needs additional permissions … run /mcp to re-authenticate" (it cuts the scope list it shows, so the missing scope comes first in ours) and asks the person to sign in again. Codex 0.172 fails the call with only "Insufficient scope": it drops the body of a `403`, shows no scope and offers no sign-in, so the person has to run `codex mcp login` again and tick the permission. (Answering `200` with the same `_meta` made Codex show the message naming the scope but still no sign-in, and made Claude Code lose its sign-in prompt, so the contract stays `403`.) Whether ChatGPT asks for the missing scopes was not verified against the real client.
 
 ## Client
 

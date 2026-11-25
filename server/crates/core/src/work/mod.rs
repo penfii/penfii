@@ -208,14 +208,49 @@ pub(crate) async fn attach_derived(
     planning::attach_planning(conn, std::slice::from_mut(ticket), actor_id).await
 }
 
-/// Derives the planned end of a Ticket's schedule from the Project's current calendar. Only the
-/// calls that return one Ticket do this; a list leaves it null.
+/// Derives the planned end of a Ticket's schedule from the Project's current calendar. A list uses
+/// [`attach_planned_ends`], which gives the same answer for each of its Tickets.
 pub(crate) async fn attach_planned_end(
     conn: &mut PgConnection,
     ticket: &mut Ticket,
 ) -> Result<(), CoreError> {
     if let Some(schedule) = ticket.schedule.as_mut() {
         plan_fields::with_planned_end(conn, ticket.project_id, schedule).await?;
+    }
+    Ok(())
+}
+
+/// [`attach_planned_end`] for a list (a board, a scope across Projects, a Ticket's children): each
+/// Project's calendar is expanded once for all its schedules. A schedule without a start, or
+/// without a duration unless it is a schedule milestone, has no end, as for one Ticket.
+pub(crate) async fn attach_planned_ends(
+    conn: &mut PgConnection,
+    tickets: &mut [Ticket],
+) -> Result<(), CoreError> {
+    let mut by_project: HashMap<Uuid, Vec<(usize, DateTime<Utc>, i64)>> = HashMap::new();
+    for (index, ticket) in tickets.iter_mut().enumerate() {
+        let Some(schedule) = ticket.schedule.as_mut() else {
+            continue;
+        };
+        schedule.planned_end_at = None;
+        let minutes = schedule
+            .duration_minutes
+            .or(schedule.is_schedule_milestone.then_some(0));
+        if let (Some(start), Some(minutes)) = (schedule.planned_start_at, minutes) {
+            by_project
+                .entry(ticket.project_id)
+                .or_default()
+                .push((index, start, minutes));
+        }
+    }
+    for (project_id, items) in by_project {
+        let schedules: Vec<(DateTime<Utc>, i64)> = items.iter().map(|(_, s, m)| (*s, *m)).collect();
+        let ends = crate::calendar::planned_ends(conn, project_id, &schedules).await?;
+        for ((index, _, _), end) in items.into_iter().zip(ends) {
+            if let Some(schedule) = tickets[index].schedule.as_mut() {
+                schedule.planned_end_at = end;
+            }
+        }
     }
     Ok(())
 }

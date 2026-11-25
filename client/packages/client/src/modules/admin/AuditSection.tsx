@@ -63,7 +63,10 @@ export function AuditSection({ workspaceId }: { workspaceId: string }) {
               return (
                 <tr key={entry.id}>
                   <td data-label={t('admin.audit.when')}>{formatStamp(entry.occurredAt, locale)}</td>
-                  <td data-label={t('admin.audit.who')}>{entry.actorName ?? t('admin.audit.system')}</td>
+                  <td data-label={t('admin.audit.who')}>
+                    {entry.actorName ?? t('admin.audit.system')}
+                    {entry.via ? <span className="via-chip">{t('admin.audit.via', { client: entry.via })}</span> : null}
+                  </td>
                   <td data-label={t('admin.audit.what')}>{has(key) ? t(key) : <code>{entry.action}</code>}</td>
                   <td data-label={t('admin.audit.target')}>{targetText(entry, t)}</td>
                 </tr>

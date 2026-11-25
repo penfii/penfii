@@ -1,0 +1,42 @@
+GET	/.well-known/oauth-authorization-server	excluded	OAuth/MCP protocol endpoints, not product features; consent is the person's own decision in the web app
+GET	/.well-known/oauth-protected-resource	excluded	OAuth/MCP protocol endpoints, not product features; consent is the person's own decision in the web app
+GET	/.well-known/oauth-protected-resource/mcp	excluded	OAuth/MCP protocol endpoints, not product features; consent is the person's own decision in the web app
+GET	/.well-known/openid-configuration	excluded	OAuth/MCP protocol endpoints, not product features; consent is the person's own decision in the web app
+GET	/healthz	excluded	Operations probe
+DELETE	/mcp	excluded	The MCP endpoint itself
+GET	/mcp	excluded	The MCP endpoint itself
+POST	/mcp	excluded	The MCP endpoint itself
+GET	/oauth/authorize	excluded	OAuth/MCP protocol endpoints, not product features; consent is the person's own decision in the web app
+POST	/oauth/register	excluded	OAuth/MCP protocol endpoints, not product features; consent is the person's own decision in the web app
+POST	/oauth/revoke	excluded	OAuth/MCP protocol endpoints, not product features; consent is the person's own decision in the web app
+POST	/oauth/token	excluded	OAuth/MCP protocol endpoints, not product features; consent is the person's own decision in the web app
+GET	/readyz	excluded	Operations probe
+POST	/v1/auth/email-change/confirm	web	Sign-in, session and password reset are done by the person in the browser; MCP uses OAuth
+POST	/v1/auth/password-reset/confirm	web	Sign-in, session and password reset are done by the person in the browser; MCP uses OAuth
+POST	/v1/auth/password-reset/request	web	Sign-in, session and password reset are done by the person in the browser; MCP uses OAuth
+GET	/v1/auth/providers	web	Sign-in, session and password reset are done by the person in the browser; MCP uses OAuth
+GET	/v1/auth/{provider}/callback	web	Sign-in, session and password reset are done by the person in the browser; MCP uses OAuth
+POST	/v1/auth/{provider}/start	web	Sign-in, session and password reset are done by the person in the browser; MCP uses OAuth
+POST	/v1/channels/{id}/manager-recovery	web	Recovery gives access; needs a recent sign-in (RecentActor)
+GET	/v1/channels/{id}/webhooks	tool	webhook_list
+POST	/v1/channels/{id}/webhooks	web	Creates a secret; needs a recent sign-in (RecentActor)
+POST	/v1/docs/{id}/manager-recovery	web	Recovery gives access; needs a recent sign-in (RecentActor)
+POST	/v1/hooks/{token}	excluded	Incoming webhook endpoint for external systems, authenticated by its own secret
+GET	/v1/oauth/requests/{id}	excluded	OAuth/MCP protocol endpoints, not product features; consent is the person's own decision in the web app
+POST	/v1/oauth/requests/{id}/decision	excluded	OAuth/MCP protocol endpoints, not product features; consent is the person's own decision in the web app
+POST	/v1/projects/{id}/admin-recovery	web	Recovery gives access; needs a recent sign-in (RecentActor)
+GET	/v1/projects/{id}/archive	tool	archive_list
+GET	/v1/projects/{id}/trash	tool	trash_list
+POST	/v1/session/login	web	Sign-in, session and password reset are done by the person in the browser; MCP uses OAuth
+POST	/v1/session/logout	web	Sign-in, session and password reset are done by the person in the browser; MCP uses OAuth
+POST	/v1/tickets/{id}/commands/archive	other	tickets domain (FEA-164)
+POST	/v1/tickets/{id}/commands/purge	web	Permanent delete needs a recent sign-in (RecentActor)
+POST	/v1/tickets/{id}/commands/restore-from-trash	other	tickets domain (FEA-164)
+POST	/v1/tickets/{id}/commands/trash	other	tickets domain (FEA-164)
+POST	/v1/tickets/{id}/commands/unarchive	other	tickets domain (FEA-164)
+POST	/v1/webhooks/{id}/revoke	web	Needs a recent sign-in (RecentActor)
+POST	/v1/webhooks/{id}/rotate	web	Rotates a secret; needs a recent sign-in (RecentActor)
+GET	/v1/workspaces/{id}/audit	tool	audit_list
+GET	/v1/workspaces/{id}/channels-without-manager	tool	recovery_channels_without_manager
+GET	/v1/workspaces/{id}/docs-without-manager	tool	recovery_docs_without_manager
+GET	/v1/workspaces/{id}/projects-without-admin	tool	recovery_projects_without_admin

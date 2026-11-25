@@ -202,6 +202,8 @@ To use a different port, change `PENFII_HTTP_PORT` and the port in `PENFII_PUBLI
 
 The MCP gateway lets AI clients work in Penfii as a signed-in person, after that person approves the client in the browser. It is off by default. To turn it on, set `PENFII_MCP_ENABLED=1` in `.env` and run `docker compose up -d` again. MCP clients then connect to `PENFII_PUBLIC_URL/mcp`. `PENFII_PUBLIC_URL` must be `https://` (or `http://localhost` / `http://127.0.0.1`), otherwise core-api refuses to start. Set `PENFII_MCP_DCR_ENABLED=1` as well for clients that register themselves. The other MCP settings are in [Configuration](configuration.md#mcp-gateway).
 
+What the tools do, the scopes and what stays in the web app are in [MCP tools](mcp-tools.md). A connection that was approved before a new scope existed keeps working with what it had; a client that needs a new scope asks the person again. A Workspace owner or admin decides in the web app which risk classes (write, destructive, administrative) are allowed; the standard policy allows reading and writing only.
+
 ## Updating
 
 Back up first ([Backup](#backup)), then check out the release and rebuild:

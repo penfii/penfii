@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **The MCP gateway covers the work people do in the web app:** Tickets (fields, parents, revisions, trash, archive), Docs (create, save with conflict detection, versions, comments, sharing, templates), Channels, DMs, messages, threads and reactions, search across tickets, docs, messages, files, views and people, Projects, workflow states and labels, boards, views, sprints, milestones, dependencies and reports, Teams, departments, MEMBER invitations, files (up to 256 KiB), Inbox, Later, favorites, drafts, subscriptions and notification settings, audit and trash lists. About 200 tools, listed in [docs/mcp-tools.md](docs/mcp-tools.md). New OAuth scopes (`doc:*`, `conversation:*`, `plan:*`, ...) need a new consent; existing connections keep what they had.
+- `workspace_mcp_policy` and `workspace_web_only` tell an AI client what the Workspace allows and which actions stay in the web app.
+
+### Changed
+
+- **The MCP tool list no longer depends on the connection's scopes** (FEA-174): `tools/list` shows what the Workspace policy allows, each tool with the scopes it needs, so a client can find a tool and ask for its permission. Calls are checked as before. An `insufficient_scope` answer now names every missing scope at once and carries `error_description`, and tool descriptors have `securitySchemes` at the top level as well as in `_meta`. A connection with few scopes now receives the whole list.
+- **Changing a member's role to or from OWNER or ADMIN now needs a recent sign-in** in the web app (`403 reauth_required` otherwise). Other role changes are unchanged.
+- `project_create` is a Write tool (`project:write`), no longer Administrative with `project:manage`: creating a Project is routine management, so the standard Workspace policy allows it.
+- MCP calls refused for scope or policy reasons, and calls on a Ticket, Project, Doc or other indirect resource, now record the Workspace they aimed at in the call log and the audit entry.
+- Deleting a Ticket or Doc comment through MCP is a Destructive tool (it cannot be undone): the standard Workspace policy leaves it off until an administrator allows it.
+- `doc_set_visibility` and `doc_set_participants` report what changed (`change`: added, removed, widened) and MCP results that are lists come back as `{"items": [...]}`.
+- The member actions menu on the Workspace admin Members page is no longer cut off by its table (the Make Admin and Remove items were hidden for the last rows).
+- Every MCP tool reports a version conflict with the facts that come with it (for example the current revision), as the Doc tools already did, so a client can read again and merge.
+- Search through MCP accepts the kinds `message`, `doc`, `file`, `space` and `view` besides `ticket` and `person`.
+- **What an MCP client changes names the client everywhere:** each Ticket of `ticket_bulk_update` shows *via &lt;client&gt;* in History and Activity like a single edit, and audit entries made through MCP (invitations, trash, channel members, ...) carry `via: mcp` with the client and grant, shown next to the person in the web app's audit log (`via` in `GET /v1/workspaces/{id}/audit`). Changes made in the web app name no client.
+- **Channel names are not unique, and a retry is told apart by its key:** `channel_create` takes `idempotencyKey` and `POST /v1/workspaces/{id}/channels` an optional `Idempotency-Key`; the same key with the same request returns the first channel. The web app sends one, so trying again after no answer does not make a second channel.
+- **Boards, My Work and a Ticket's children give each schedule its planned end** (`plannedEndAt`), the same as the Ticket read on its own; it was null in lists.
+- A list's planned ends (boards, My Work, the Gantt page) are worked out with a few queries for the whole list instead of one per scheduled Ticket.
+
 ## 0.4.0
 
 Security hardening from the v0.3.1 audit (FEA-133, FEA-147). Back up before you upgrade.

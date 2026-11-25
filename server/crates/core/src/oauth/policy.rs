@@ -217,6 +217,9 @@ pub async fn set(
 
 /// One attribution row: ids and outcome, never payloads.
 pub struct CallLog<'a> {
+    /// The call's id; the rows its commands wrote carry it as their `command_id`
+    /// ([`crate::origin`]).
+    pub id: Uuid,
     pub user_id: Uuid,
     pub grant_id: Uuid,
     pub client_pk: Uuid,
@@ -239,7 +242,7 @@ pub async fn log_call(pool: &PgPool, entry: CallLog<'_>) {
              resource_type, resource_id, resource_revision, request_id, outcome, duration_ms)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
     )
-    .bind(Uuid::new_v4())
+    .bind(entry.id)
     .bind(entry.user_id)
     .bind(entry.grant_id)
     .bind(entry.client_pk)
@@ -269,14 +272,17 @@ pub struct AuditRow<'a> {
     pub outcome_code: &'a str,
     pub target_kind: &'a str,
     pub target_id: Option<Uuid>,
+    /// The MCP call the entry is about (`mcp_call_log.id`), if any.
+    pub command_id: Option<Uuid>,
     pub data: serde_json::Value,
 }
 
 pub async fn audit(pool: &PgPool, row: AuditRow<'_>) {
     let result = sqlx::query(
         "INSERT INTO penfii.audit_entries
-            (id, workspace_id, actor_user_id, action_code, outcome_code, target_kind, target_id, data)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            (id, workspace_id, actor_user_id, action_code, outcome_code, target_kind, target_id,
+             command_id, data)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(Uuid::new_v4())
     .bind(row.workspace_id)
@@ -285,6 +291,7 @@ pub async fn audit(pool: &PgPool, row: AuditRow<'_>) {
     .bind(row.outcome_code)
     .bind(row.target_kind)
     .bind(row.target_id)
+    .bind(row.command_id)
     .bind(row.data)
     .execute(pool)
     .await;

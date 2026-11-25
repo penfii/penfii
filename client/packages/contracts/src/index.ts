@@ -1366,6 +1366,8 @@ export type AuditRecord = {
   targetLabel: string | null
   subjectLabel: string | null
   data: Record<string, unknown>
+  /** The MCP client the actor used, when the action came through MCP; null for the web app. */
+  via?: string | null
 }
 
 export type AuditPage = { items: AuditRecord[]; nextCursor: string | null }

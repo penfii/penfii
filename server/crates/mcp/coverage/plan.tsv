@@ -1,0 +1,36 @@
+DELETE	/v1/dependencies/{id}	tool	dependency_remove
+POST	/v1/dependencies/{id}/commands/restore	tool	dependency_restore
+POST	/v1/dependencies/{id}/commands/waive	tool	dependency_waive
+PATCH	/v1/milestones/{id}	tool	milestone_update
+GET	/v1/projects/{id}/activity	tool	report_project_activity
+GET	/v1/projects/{id}/board	tool	board_get
+GET	/v1/projects/{id}/calendar	other	project domain (FEA-165)
+PUT	/v1/projects/{id}/calendar	other	project domain (FEA-165)
+POST	/v1/projects/{id}/milestones	tool	milestone_create
+GET	/v1/projects/{id}/planning	tool	plan_get
+GET	/v1/projects/{id}/schedule	tool	plan_schedule
+POST	/v1/projects/{id}/sprints	tool	sprint_create
+GET	/v1/projects/{id}/status-summary	tool	report_status_summary
+GET	/v1/projects/{id}/tickets	other	tickets domain (FEA-164 list)
+GET	/v1/projects/{id}/velocity	tool	report_velocity
+GET	/v1/projects/{id}/views	tool	view_list
+POST	/v1/projects/{id}/views	tool	view_create
+PATCH	/v1/sprints/{id}	tool	sprint_update
+DELETE	/v1/sprints/{id}/archive-schedule	tool	sprint_archive_cancel
+GET	/v1/sprints/{id}/archive-schedule	tool	sprint_archive_schedule
+PUT	/v1/sprints/{id}/archive-schedule	tool	sprint_archive_reschedule
+GET	/v1/sprints/{id}/close-preview	tool	sprint_close_preview
+POST	/v1/sprints/{id}/commands/{command}	tool	sprint_start / sprint_complete / sprint_cancel
+GET	/v1/sprints/{id}/report	tool	sprint_report
+GET	/v1/sprints/{id}/results	tool	sprint_results
+POST	/v1/tickets/{id}/commands/assign-sprint	tool	ticket_assign_sprint
+POST	/v1/tickets/{id}/commands/move	other	tickets domain (FEA-164: board reorder / ticket move)
+POST	/v1/tickets/{id}/commands/set-milestones	tool	ticket_set_milestones
+GET	/v1/tickets/{id}/dependencies	tool	dependency_list
+POST	/v1/tickets/{id}/dependencies	tool	dependency_add
+DELETE	/v1/views/{id}	tool	view_delete
+PATCH	/v1/views/{id}	tool	view_update
+POST	/v1/workspaces/{id}/tickets/bulk	other	tickets domain (FEA-164 bulk change)
+GET	/v1/workspaces/{id}/views	tool	view_list_workspace
+POST	/v1/workspaces/{id}/views	tool	view_create_workspace
+GET	/v1/workspaces/{id}/work	tool	work_list

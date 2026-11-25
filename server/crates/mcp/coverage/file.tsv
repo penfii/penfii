@@ -1,0 +1,10 @@
+# METHOD	path	STATUS(tool|web|excluded|other)	tool or reason
+DELETE	/v1/files/{id}	tool	file_delete
+DELETE	/v1/tickets/{id}/attachments/{attachmentId}	tool	ticket_attachment_remove
+GET	/v1/attachments/{id}/content	tool	attachment_download (<=256 KiB; larger: web)
+GET	/v1/files/{id}/content	tool	file_download (<=256 KiB; larger: web)
+GET	/v1/tickets/{id}/attachments	tool	ticket_attachment_list
+POST	/v1/docs/{id}/files	other	doc domain (doc attach tool)
+POST	/v1/tickets/{id}/attachments	tool	ticket_attachment_add
+POST	/v1/workspaces/{id}/files	tool	file_create_small (small files only; larger: web upload)
+PUT	/v1/files/{id}/content	web	streaming binary upload; JSON tool calls cannot honour the byte budget/idle timeout. file_create_small covers small files

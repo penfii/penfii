@@ -338,8 +338,9 @@ pub async fn planned_end(
 }
 
 /// The planned end of many schedules at once: `(start, minutes)` in, the end or `None` out, in the
-/// same order. Intervals are expanded in windows as the starts move forward, so a list of schedules
-/// costs a few queries and not one per schedule.
+/// same order, each the same as [`planned_end`] gives for it alone. The starts' local dates come from
+/// one query and the intervals are expanded in windows as the starts move forward, so a list of
+/// schedules (a board, My Work) costs a few queries and not one per schedule.
 pub async fn planned_ends(
     conn: &mut PgConnection,
     project_id: Uuid,
@@ -352,17 +353,22 @@ pub async fn planned_ends(
     let Some(calendar) = load(conn, project_id).await? else {
         return Ok(ends);
     };
+    let starts: Vec<DateTime<Utc>> = items.iter().map(|(start, _)| *start).collect();
+    let locals: Vec<NaiveDate> = sqlx::query_scalar(
+        "SELECT (u.s AT TIME ZONE $2)::date FROM unnest($1::timestamptz[]) WITH ORDINALITY AS u(s, n)
+         ORDER BY u.n",
+    )
+    .bind(&starts)
+    .bind(&calendar.time_zone)
+    .fetch_all(&mut *conn)
+    .await?;
     let mut order: Vec<usize> = (0..items.len()).collect();
     order.sort_by_key(|i| items[*i].0);
     let mut intervals: Vec<WorkInterval> = Vec::new();
     let mut covered_to: Option<NaiveDate> = None;
     for index in order {
         let (start, minutes) = items[index];
-        let local: NaiveDate = sqlx::query_scalar("SELECT ($1::timestamptz AT TIME ZONE $2)::date")
-            .bind(start)
-            .bind(&calendar.time_zone)
-            .fetch_one(&mut *conn)
-            .await?;
+        let local = locals[index];
         let Some(horizon) = local.checked_add_months(Months::new(HORIZON_YEARS * 12)) else {
             continue;
         };

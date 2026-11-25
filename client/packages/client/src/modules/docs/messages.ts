@@ -80,6 +80,8 @@ export const docsKo = {
   'docs.comments.error': '댓글을 처리하지 못했습니다',
   'docs.comments.edit': '수정',
   'docs.comments.edited': '수정됨',
+  'docs.comments.deleteTitle': '댓글 삭제',
+  'docs.comments.deleteConfirm': '이 댓글과 첨부 파일을 삭제합니다. 되돌릴 수 없습니다.',
   'docs.comments.save': '저장',
   'docs.comments.mention': '언급할 사람',
   'docs.access.open': '공유 설정',

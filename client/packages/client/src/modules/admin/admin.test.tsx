@@ -432,6 +432,21 @@ describe('workspace administration', () => {
     await waitFor(() => expect(api.removeMember).toHaveBeenCalledTimes(2))
   })
 
+  it('asks for a recent sign-in when a role change to or from OWNER/ADMIN needs one, then repeats it', async () => {
+    api.changeMemberRole
+      .mockRejectedValueOnce(new ApiError(403, 'reauth_required', 'x', { methods: ['password'] }))
+      .mockResolvedValueOnce(undefined)
+    api.reauthPassword.mockResolvedValue(undefined)
+    mount('OWNER')
+    await screen.findByText('Mina')
+    await choose('Mina', 'Make Admin')
+    await answer('Confirm')
+    fireEvent.change(await screen.findByLabelText('Password'), { target: { value: 'secret' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+    await waitFor(() => expect(api.changeMemberRole).toHaveBeenCalledTimes(2))
+    expect(api.changeMemberRole).toHaveBeenLastCalledWith(W, 'u2', 'ADMIN')
+  })
+
   it('lists invitations by status and offers revoke only where it applies', async () => {
     const invite = (over: object) => ({
       id: 'i1', email: 'a@example.com', role: 'MEMBER', status: 'PENDING', expiresAt: '2026-11-01T00:00:00Z',
@@ -511,6 +526,8 @@ describe('workspace administration', () => {
     mount('OWNER', 'u1', undefined, 'audit')
     expect(await screen.findByText('Member removed')).toBeTruthy()
     expect(screen.getByText('Account disabled')).toBeTruthy()
+    // An action made in the web app names no client.
+    expect(screen.queryByText(/^via /)).toBeNull()
     // Who it was about is shown next to the action.
     expect(screen.getAllByText('Mina').length).toBeGreaterThan(0)
     fireEvent.click(screen.getByRole('button', { name: 'Show more' }))
@@ -519,6 +536,20 @@ describe('workspace administration', () => {
     fireEvent.change(screen.getByLabelText('Kind'), { target: { value: 'ticket.' } })
     expect(await screen.findByText('Ticket purged')).toBeTruthy()
     await waitFor(() => expect(api.listAudit).toHaveBeenCalledWith(W, expect.objectContaining({ action: 'ticket.' })))
+  })
+
+  it('names the MCP client next to the person when an action came through MCP', async () => {
+    api.listAudit.mockResolvedValue({
+      items: [{
+        id: 'e1', occurredAt: '2026-11-25T01:00:00Z', actorUserId: 'u1', actorName: 'Olivia', action: 'invitation.created',
+        outcome: 'OK', targetKind: 'INVITATION', targetId: 'i1', targetLabel: 'new@example.com', subjectLabel: null,
+        data: { via: 'mcp' }, via: 'Claude Code',
+      }],
+      nextCursor: null,
+    })
+    mount('OWNER', 'u1', undefined, 'audit')
+    const who = (await screen.findByText('via Claude Code')).closest('td') as HTMLElement
+    expect(who.textContent).toContain('Olivia')
   })
 })
 

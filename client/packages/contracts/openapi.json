@@ -3191,6 +3191,11 @@
             "type": "string",
             "nullable": true,
             "description": "The person the entry is about when the target is a Team or Project"
+          },
+          "via": {
+            "type": "string",
+            "nullable": true,
+            "description": "The MCP client the actor used, when the action came through MCP (data has via=mcp, grantId, clientPk and mcpCallId); null for the web app"
           }
         },
         "required": [
@@ -5103,6 +5108,16 @@
               }
             }
           },
+          "409": {
+            "description": "idempotency_conflict (the Idempotency-Key was used with a different request)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "404": {
             "description": "not_found",
             "content": {
@@ -5125,6 +5140,16 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Channel names are not unique. With a key, a retry of the same request returns the channel the first one created (201) and the same key with a different request is refused (409 idempotency_conflict); without one every request creates a channel.",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
             }
           }
         ],

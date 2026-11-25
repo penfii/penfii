@@ -134,6 +134,16 @@ impl OAuthConfig {
         metadata
     }
 
+    /// The challenge for a call that needs more scopes (RFC 6750 §3.1, MCP step-up): `scope` is
+    /// what to ask for and `description` says, for the person, what is missing (printable ASCII
+    /// without `"` or `\`, as the header grammar requires).
+    pub fn insufficient_scope_challenge(&self, scope: &str, description: &str) -> String {
+        format!(
+            "{}, error_description=\"{description}\"",
+            self.challenge(Some("insufficient_scope"), Some(scope))
+        )
+    }
+
     /// The `WWW-Authenticate` challenge for a missing or bad token.
     pub fn challenge(&self, error: Option<&str>, scope: Option<&str>) -> String {
         let mut value = String::from("Bearer");

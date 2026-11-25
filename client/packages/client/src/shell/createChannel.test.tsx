@@ -115,20 +115,38 @@ describe('Creating a channel: what a failure says', () => {
   it.each([
     ['a network error', new TypeError('Failed to fetch')],
     ['a server error', new ApiError(502, 'error', 'HTTP 502')],
-  ])('after %s does not claim a retry is safe, and refreshes the channel list', async (_label, error) => {
+  ])('after %s says a retry of the same form is safe, and refreshes the channel list', async (_label, error) => {
     const invalidate = vi.spyOn(client, 'invalidateQueries')
     await fail(error)
     const text = await screen.findByText(/could not confirm whether the channel was created/)
-    expect(text.textContent).toContain('try again only if no channel with the same name exists')
+    expect(text.textContent).toContain('Trying again with the same details is safe')
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.space('w') })
     keepsInput()
   })
 
-  it('can be submitted again after a failure', async () => {
-    await fail(new ApiError(0, 'offline', 'You are offline'))
+  it('can be submitted again after a failure, with the same key for the same form', async () => {
+    await fail(new TypeError('Failed to fetch'))
     api.createChannel.mockResolvedValue({ conversationId: 'c1' })
     submit()
     await waitFor(() => expect(api.createChannel).toHaveBeenCalledTimes(2))
+    const [first, second] = api.createChannel.mock.calls
+    expect(typeof first[2]).toBe('string')
+    expect(second[2]).toBe(first[2])
+  })
+
+  it('uses a new key once the form changes, and for the next channel', async () => {
+    const name = await fail(new TypeError('Failed to fetch'))
+    fireEvent.change(name, { target: { value: 'ops-2' } })
+    api.createChannel.mockResolvedValue({ conversationId: 'c1' })
+    submit()
+    await waitFor(() => expect(api.createChannel).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.queryByLabelText('Channel name')).toBeNull())
+    const again = await openDialog()
+    fireEvent.change(again, { target: { value: 'ops-2' } })
+    submit()
+    await waitFor(() => expect(api.createChannel).toHaveBeenCalledTimes(3))
+    const keys = api.createChannel.mock.calls.map((call) => call[2])
+    expect(new Set(keys).size).toBe(3)
   })
 })
 

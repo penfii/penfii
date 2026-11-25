@@ -1691,8 +1691,10 @@ export function createPenfiiClient() {
         teamId?: string | null
         projectId?: string | null
       },
+      /** Names are not unique: the key, not the name, keeps a retry from creating a second channel. */
+      idempotencyKey?: string,
     ): Promise<Channel> {
-      return request(`/v1/workspaces/${workspaceId}/channels`, { method: 'POST', body }).then(normalizeChannel)
+      return request(`/v1/workspaces/${workspaceId}/channels`, { method: 'POST', body, idempotencyKey }).then(normalizeChannel)
     },
     joinChannel(channelId: string): Promise<void> {
       return request(`/v1/channels/${channelId}/join`, { method: 'POST', body: {} }).then(() => undefined)

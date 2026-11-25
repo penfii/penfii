@@ -1,0 +1,33 @@
+GET	/v1/projects/{id}/tickets	tool	ticket_list
+POST	/v1/projects/{id}/tickets	tool	ticket_create
+GET	/v1/tickets/{id}	tool	ticket_get
+PATCH	/v1/tickets/{id}	tool	ticket_update
+GET	/v1/tickets/{id}/activity	tool	ticket_activity_list
+GET	/v1/tickets/{id}/attachments	other	file domain (FEA-166)
+POST	/v1/tickets/{id}/attachments	other	file domain (FEA-166)
+DELETE	/v1/tickets/{id}/attachments/{attachmentId}	other	file domain (FEA-166)
+GET	/v1/tickets/{id}/children	tool	ticket_children_list
+POST	/v1/tickets/{id}/commands/archive	tool	ticket_archive
+POST	/v1/tickets/{id}/commands/assign-sprint	other	plan domain (FEA-167)
+POST	/v1/tickets/{id}/commands/change-status	tool	ticket_change_status
+POST	/v1/tickets/{id}/commands/move	tool	ticket_move
+POST	/v1/tickets/{id}/commands/purge	web	permanent delete needs a recent sign-in (RecentActor); Project > Trash in the web app
+POST	/v1/tickets/{id}/commands/restore	tool	ticket_restore_revision
+POST	/v1/tickets/{id}/commands/restore-from-trash	tool	ticket_restore_from_trash
+POST	/v1/tickets/{id}/commands/set-milestones	other	plan domain (FEA-167)
+POST	/v1/tickets/{id}/commands/trash	tool	ticket_trash
+POST	/v1/tickets/{id}/commands/unarchive	tool	ticket_unarchive
+GET	/v1/tickets/{id}/comments	tool	ticket_comments_list
+POST	/v1/tickets/{id}/comments	tool	ticket_comment
+DELETE	/v1/tickets/{id}/comments/{commentId}	tool	ticket_comment_delete
+PATCH	/v1/tickets/{id}/comments/{commentId}	tool	ticket_comment_edit
+GET	/v1/tickets/{id}/dependencies	other	plan domain (FEA-167)
+POST	/v1/tickets/{id}/dependencies	other	plan domain (FEA-167)
+GET	/v1/tickets/{id}/references	tool	ticket_references_list
+GET	/v1/tickets/{id}/revisions	tool	ticket_revisions_list
+GET	/v1/tickets/{id}/revisions/{revision_no}	tool	ticket_revision_get
+DELETE	/v1/tickets/{id}/subscription	other	personal domain (FEA-170)
+GET	/v1/tickets/{id}/subscription	other	personal domain (FEA-170)
+PUT	/v1/tickets/{id}/subscription	other	personal domain (FEA-170)
+POST	/v1/workspaces/{id}/tickets/bulk	tool	ticket_bulk_update
+GET	/v1/workspaces/{id}/work	other	plan domain (FEA-168, Workspace work list)

@@ -229,9 +229,9 @@ pub struct TicketEstimate {
 }
 
 /// A planned schedule in working minutes. The planned end is never stored: `planned_end_at` is
-/// derived from the Project's current calendar and is set only when one Ticket is read or
-/// changed (it is null in lists, when the Project has no calendar, or when the calendar's
-/// horizon is exceeded).
+/// derived from the Project's current calendar whenever a Ticket is returned, alone or in a list
+/// (a board, My Work, children). It is null without a start, without a duration (unless the
+/// schedule is a milestone), when the Project has no calendar, or beyond the calendar's horizon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TicketSchedule {
@@ -1682,6 +1682,10 @@ pub struct AuditRecord {
     /// The person the entry is about when the target is something else (a Team member, a designation).
     pub subject_label: Option<String>,
     pub data: serde_json::Value,
+    /// The MCP client the actor used, when the action came through MCP (`data` then has
+    /// `via: "mcp"`, `grantId`, `clientPk` and `mcpCallId`); `None` for the web app.
+    #[serde(default)]
+    pub via: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -52,8 +52,8 @@ pub(crate) async fn audit(
     .bind(action)
     .bind(target_kind)
     .bind(target_id)
-    .bind(Uuid::new_v4())
-    .bind(data)
+    .bind(crate::origin::command_id(Uuid::new_v4()))
+    .bind(crate::origin::audit_data(data))
     .execute(&mut *conn)
     .await?;
     Ok(())
@@ -238,16 +238,39 @@ pub async fn list_people(
 /// Owner only. Returns whether the role changed.
 pub async fn change_member_role(
     pool: &PgPool,
-    actor: Uuid,
+    session: &crate::identity::AuthSession,
     workspace_id: Uuid,
     target: Uuid,
     role: &str,
 ) -> Result<bool, CoreError> {
+    let actor = session.user.id;
     let role = crate::membership::validate_role(role)?;
     let mut tx = pool.begin().await?;
     let actor_role = require_manager(&mut tx, workspace_id, actor).await?;
     require_owner(&actor_role)?;
     not_self(actor, target)?;
+    // Handing out or taking away OWNER or ADMIN is a privilege change: it needs a recent sign-in, like
+    // the other destructive administration. Asked only after the owner check above, so someone who may
+    // not change roles at all learns nothing about the target. Changes among the other roles, and the
+    // same role again, need only the session.
+    let current: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM penfii.workspace_members
+         WHERE workspace_id = $1 AND user_id = $2 AND state = 'ACTIVE' FOR UPDATE",
+    )
+    .bind(workspace_id)
+    .bind(target)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let privileged = |role: &str| matches!(role, "OWNER" | "ADMIN");
+    if current
+        .as_deref()
+        .is_some_and(|current| current != role && (privileged(current) || privileged(role)))
+        && !crate::identity::recently_authenticated(session)
+    {
+        // The ways to authenticate again are read on the pool: let go of this connection first.
+        drop(tx);
+        return Err(crate::identity::reauth_required(pool, session).await);
+    }
     let changed = apply_role_change(&mut tx, workspace_id, Some(actor), target, role, None).await?;
     tx.commit().await?;
     Ok(changed.is_some())
@@ -1168,7 +1191,16 @@ pub async fn list_audit(
                 CASE WHEN upper(a.target_kind) <> 'USER'
                           AND a.data->>'userId' ~ '^[0-9a-fA-F-]{36}$'
                      THEN (SELECT x.display_name FROM penfii.users x WHERE x.id = (a.data->>'userId')::uuid)
-                END AS subject_label
+                END AS subject_label,
+                -- An action that came through MCP names its client (the call's own client, else
+                -- the client the entry recorded); 'MCP' when that client is gone.
+                CASE WHEN a.data->>'via' = 'mcp' THEN coalesce(
+                    (SELECT c.client_name FROM penfii.mcp_call_log l
+                     JOIN penfii.oauth_clients c ON c.id = l.client_pk WHERE l.id = a.command_id),
+                    (SELECT c.client_name FROM penfii.oauth_clients c
+                     WHERE c.id::text = a.data->>'clientPk'),
+                    'MCP')
+                END AS via
          FROM penfii.audit_entries a
          LEFT JOIN penfii.users u ON u.id = a.actor_user_id
          WHERE a.workspace_id = $1
@@ -1201,6 +1233,7 @@ pub async fn list_audit(
                 target_label: row.try_get("target_label")?,
                 subject_label: row.try_get("subject_label")?,
                 data: row.try_get("data")?,
+                via: row.try_get("via")?,
             })
         })
         .collect::<Result<Vec<_>, sqlx::Error>>()?;

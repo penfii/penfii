@@ -1,0 +1,35 @@
+POST	/v1/invitations/accept	web	The invited person accepts in the browser (sign-in / password)
+POST	/v1/invitations/preview	web	Takes the secret invitation token; the invited person uses it in the browser
+GET	/v1/server-info	excluded	Instance metadata for the web client; MCP has server/discover
+GET	/v1/workspaces	tool	workspace_list
+POST	/v1/workspaces	tool	workspace_create
+GET	/v1/workspaces/creation	excluded	Only tells the web app whether the instance still allows a first Workspace; workspace_create reports workspace_creation_closed
+PATCH	/v1/workspaces/{id}	tool	workspace_update
+GET	/v1/workspaces/{id}/departments	tool	department_list
+POST	/v1/workspaces/{id}/departments	tool	department_create
+DELETE	/v1/workspaces/{id}/departments/{department_id}	tool	department_delete
+PATCH	/v1/workspaces/{id}/departments/{department_id}	tool	department_update
+GET	/v1/workspaces/{id}/invitations	tool	invitation_list
+POST	/v1/workspaces/{id}/invitations	tool	invitation_create (MEMBER only; OWNER/ADMIN invitations are web-only; no link returned)
+DELETE	/v1/workspaces/{id}/invitations/{invitation_id}	tool	invitation_revoke
+POST	/v1/workspaces/{id}/invitations/{invitation_id}/reissue	tool	invitation_reissue (MEMBER invitations; no link returned)
+GET	/v1/workspaces/{id}/mcp-policy	tool	workspace_mcp_policy
+PUT	/v1/workspaces/{id}/mcp-policy	web	Needs a recent sign-in; decides what MCP may do
+GET	/v1/workspaces/{id}/members	tool	member_list
+DELETE	/v1/workspaces/{id}/members/{user_id}	web	Forced removal needs a recent sign-in (RecentActor)
+PATCH	/v1/workspaces/{id}/members/{user_id}	web	Role change to or from OWNER/ADMIN is a privilege change; the web app asks for a recent sign-in
+PUT	/v1/workspaces/{id}/members/{user_id}/account	web	Account disable/enable needs a recent sign-in (RecentActor)
+GET	/v1/workspaces/{id}/members/{user_id}/offboarding-impact	tool	member_offboarding_impact
+GET	/v1/workspaces/{id}/organizations/{organization_id}	tool	workspace_overview covers the organisation tree; no separate tool
+GET	/v1/workspaces/{id}/people	tool	member_directory
+GET	/v1/workspaces/{id}/project-prefix	other	project domain (FEA-165)
+GET	/v1/workspaces/{id}/space	tool	workspace_overview (existing core tool)
+POST	/v1/workspaces/{id}/teams	tool	team_create
+PATCH	/v1/workspaces/{id}/teams/{team_id}	tool	team_update
+POST	/v1/workspaces/{id}/teams/{team_id}/archive	tool	team_archive
+PUT	/v1/workspaces/{id}/teams/{team_id}/department	tool	department_place_team
+GET	/v1/workspaces/{id}/teams/{team_id}/members	tool	team_members
+DELETE	/v1/workspaces/{id}/teams/{team_id}/members/{user_id}	tool	team_member_remove
+PUT	/v1/workspaces/{id}/teams/{team_id}/members/{user_id}	tool	team_member_set
+GET	/v1/workspaces/{id}/teams/{team_id}/projects	tool	team_projects
+POST	/v1/workspaces/{id}/teams/{team_id}/restore	tool	team_restore

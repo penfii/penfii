@@ -167,6 +167,7 @@ export const adminEn: Record<keyof typeof adminKo, string> = {
   'admin.audit.empty': 'No entries.',
   'admin.audit.more': 'Show more',
   'admin.audit.system': 'System',
+  'admin.audit.via': 'via {client}',
   'admin.audit.when': 'When',
   'admin.audit.who': 'By',
   'admin.audit.what': 'Action',

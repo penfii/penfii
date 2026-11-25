@@ -833,12 +833,12 @@ pub async fn set_designation(
         .bind(workspace)
         .bind(actor_id)
         .bind(project_id)
-        .bind(Uuid::new_v4())
-        .bind(serde_json::json!({
+        .bind(crate::origin::command_id(Uuid::new_v4()))
+        .bind(crate::origin::audit_data(serde_json::json!({
             "userId": user_id,
             "before": {"canWaiveDependencies": was_waive, "canManagePins": was_pins},
             "after": {"canWaiveDependencies": can_waive_dependencies, "canManagePins": can_manage_pins},
-        }))
+        })))
         .execute(&mut *tx)
         .await?;
     }

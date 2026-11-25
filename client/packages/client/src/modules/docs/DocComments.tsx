@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { DocComment } from '@penfii/contracts'
 import { api } from '../../api'
-import { Avatar, Button } from '../../design/ui'
+import { Avatar, Button, useConfirm } from '../../design/ui'
 import { formatMessageTime } from '../../format'
 import { useI18n } from '../../i18n/I18nProvider'
 import { queryKeys } from '../../queryKeys'
@@ -38,6 +38,8 @@ export function DocComments({
   const { t, locale } = useI18n()
   const queryClient = useQueryClient()
   const comments = useQuery(queries.docComments(docId))
+  const { confirm, dialog: confirmDialog } = useConfirm()
+  const [removing, setRemoving] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [picked, setPicked] = useState<PickedMention[]>([])
   const [failed, setFailed] = useState(false)
@@ -139,8 +141,25 @@ export function DocComments({
     caretAfter.current = start + item.name.length + 2
   }
 
+  async function removeComment(commentId: string) {
+    if (removing) return
+    const ok = await confirm({ title: t('docs.comments.deleteTitle'), body: t('docs.comments.deleteConfirm'), confirmLabel: t('docs.delete') })
+    if (!ok) return
+    setFailed(false)
+    setRemoving(commentId)
+    try {
+      await api.deleteDocComment(docId, commentId)
+      await refresh()
+    } catch {
+      setFailed(true)
+    } finally {
+      setRemoving(null)
+    }
+  }
+
   return (
     <section className="doc-comments" aria-label={t('docs.comments.title')}>
+      {confirmDialog}
       <h2>{t('docs.comments.title')}{comments.isSuccess ? <span className="count-pill">{comments.data.items.length}</span> : null}</h2>
       {comments.isPending ? <p className="hint" role="status">{t('loading')}</p> : null}
       {comments.isError ? <p className="board-error" role="alert">{t('docs.comments.loadError')}</p> : null}
@@ -176,7 +195,8 @@ export function DocComments({
                     <button
                       type="button"
                       className="link-button"
-                      onClick={() => void api.deleteDocComment(docId, comment.id).then(refresh).catch(() => setFailed(true))}
+                      disabled={removing !== null}
+                      onClick={() => void removeComment(comment.id)}
                     >
                       {t('docs.delete')}
                     </button>

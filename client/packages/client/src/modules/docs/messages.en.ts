@@ -81,6 +81,8 @@ export const docsEn: Record<keyof typeof docsKo, string> = {
   'docs.comments.error': 'Could not complete the comment',
   'docs.comments.edit': 'Edit',
   'docs.comments.edited': 'edited',
+  'docs.comments.deleteTitle': 'Delete comment',
+  'docs.comments.deleteConfirm': 'This deletes the comment and its attachments. It cannot be undone.',
   'docs.comments.save': 'Save',
   'docs.comments.mention': 'People to mention',
   'docs.access.open': 'Sharing',

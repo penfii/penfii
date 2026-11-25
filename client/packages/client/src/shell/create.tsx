@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { isApiError, isNotFound } from '@penfii/api-client'
+import { isApiError, isNotFound, newIdempotencyKey } from '@penfii/api-client'
 import type { InvitationCreated, Space, Team, TeamRole } from '@penfii/contracts'
 import { activeTeams } from '../modules/spaces/teamState'
 import { useNavigate } from 'react-router'
@@ -75,9 +75,14 @@ function CreateDialogs({
   const teams = space?.teams ?? []
   const offerTeams = activeTeams(teams)
 
+  // A channel name is not unique, so a retry is told apart by its key: sending the same form again (after no answer
+  // came back) reuses the key and gets the channel the first request made; a changed form, or a new dialog, gets a new one.
+  const channelAttempt = useRef<{ body: string; key: string } | null>(null)
+
   useEffect(() => {
     setNotice(null)
     setInvited(null)
+    channelAttempt.current = null
   }, [kind])
 
   async function refresh() {
@@ -174,7 +179,10 @@ function CreateDialogs({
           onSubmit={async (body) => {
             let fieldError: string | null = null
             await saved(async () => {
-              const channel = await api.createChannel(workspaceId, body)
+              const sent = JSON.stringify(body)
+              if (channelAttempt.current?.body !== sent) channelAttempt.current = { body: sent, key: newIdempotencyKey() }
+              const channel = await api.createChannel(workspaceId, body, channelAttempt.current.key)
+              channelAttempt.current = null
               if (body.projectId) void navigate(`/w/${workspaceId}/projects/${body.projectId}/chat/${channel.conversationId}`)
               else void navigate(`/w/${workspaceId}/c/${channel.conversationId}`)
             }, async (caught) => {

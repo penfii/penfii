@@ -48,7 +48,7 @@ Penfii is an open-source, self-hosted workspace for team chat, projects, tickets
 
 ## Connect an AI client with MCP
 
-The optional Model Context Protocol (MCP) gateway lets compatible AI clients perform supported actions, such as creating a ticket, on behalf of a person who approves the connection in their browser. The gateway checks that person's existing permissions and the workspace's MCP policy, and logs tool calls. A workspace can allow supported writes, restrict access to reads, or close MCP access.
+The optional Model Context Protocol (MCP) gateway lets compatible AI clients work in Penfii on behalf of a person who approves the connection in their browser: read and write Tickets, Docs, channel messages and threads, plan sprints, manage Projects, Teams and invitations, search, and handle their own Inbox. The gateway checks that person's existing permissions, the OAuth scopes they granted and the workspace's MCP policy, and logs tool calls. A workspace can allow supported writes, restrict access to reads, or close MCP access. Account security, OWNER/ADMIN roles, permanent deletes, webhook secrets and Push registration stay in the web app. See [the tool list](docs/mcp-tools.md).
 
 MCP is **off by default**. To enable it, set `PENFII_MCP_ENABLED=1` and configure `PENFII_PUBLIC_URL` with HTTPS, or HTTP on `localhost` or `127.0.0.1` for local use. Clients connect to `/mcp` on that origin and use OAuth with PKCE. Dynamic client registration is a separate setting. See the [MCP setup guide](docs/self-hosting.md#the-mcp-gateway-optional) and [configuration reference](docs/configuration.md#mcp-gateway) for client requirements and policy defaults.
 

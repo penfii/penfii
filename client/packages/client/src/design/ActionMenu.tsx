@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
 import { MoreIcon } from './icons'
 import { Sheet, SheetRow } from './Sheet'
 import { useDismiss } from './ui'
@@ -23,9 +23,35 @@ export function ActionMenu({ label, items }: { /** Names the button, so one row'
   const [open, setOpen] = useState(false)
   const root = useRef<HTMLDivElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
+  const panel = useRef<HTMLDivElement>(null)
+  const [place, setPlace] = useState<CSSProperties | undefined>(undefined)
   useDismiss(open && !mobile, () => setOpen(false), root)
   useEffect(() => {
     if (open && !mobile) root.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus()
+  }, [open, mobile])
+  // The panel is `position: fixed`, placed from the button: a table wrapper that scrolls sideways clips
+  // an absolutely placed menu (the last rows' actions were cut off). It opens upwards when there is no
+  // room below, and follows the button when the page scrolls or resizes.
+  useLayoutEffect(() => {
+    if (!open || mobile) {
+      setPlace(undefined)
+      return
+    }
+    const reposition = () => {
+      if (!trigger.current) return
+      const button = trigger.current.getBoundingClientRect()
+      const height = panel.current?.offsetHeight ?? 0
+      const below = button.bottom + 4
+      const up = below + height > window.innerHeight && button.top - 4 - height >= 0
+      setPlace({ position: 'fixed', right: Math.max(8, window.innerWidth - button.right), top: up ? button.top - 4 - height : below })
+    }
+    reposition()
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+    return () => {
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('resize', reposition)
+    }
   }, [open, mobile])
   if (items.length === 0) return null
 
@@ -60,7 +86,7 @@ export function ActionMenu({ label, items }: { /** Names the button, so one row'
         <MoreIcon />
       </button>
       {open && !mobile ? (
-        <div className="action-menu-panel" role="menu" aria-label={label}>
+        <div className="action-menu-panel" ref={panel} style={place} role="menu" aria-label={label}>
           {items.map((item) => (
             <button key={item.key} type="button" role="menuitem" className={item.danger ? 'action-menu-item danger' : 'action-menu-item'} disabled={item.disabled} onClick={() => pick(item)}>{item.label}</button>
           ))}

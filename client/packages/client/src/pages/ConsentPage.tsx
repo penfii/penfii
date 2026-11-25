@@ -17,6 +17,23 @@ const SCOPE_LABELS: Record<string, MessageKey> = {
   'ticket:read': 'consent.scope.ticket:read',
   'ticket:write': 'consent.scope.ticket:write',
   'project:manage': 'consent.scope.project:manage',
+  'workspace:write': 'consent.scope.workspace:write',
+  'member:write': 'consent.scope.member:write',
+  'project:read': 'consent.scope.project:read',
+  'project:write': 'consent.scope.project:write',
+  'doc:read': 'consent.scope.doc:read',
+  'doc:write': 'consent.scope.doc:write',
+  'doc:delete': 'consent.scope.doc:delete',
+  'conversation:read': 'consent.scope.conversation:read',
+  'conversation:write': 'consent.scope.conversation:write',
+  'file:read': 'consent.scope.file:read',
+  'file:write': 'consent.scope.file:write',
+  'plan:read': 'consent.scope.plan:read',
+  'plan:write': 'consent.scope.plan:write',
+  'personal:read': 'consent.scope.personal:read',
+  'personal:write': 'consent.scope.personal:write',
+  'team:write': 'consent.scope.team:write',
+  'admin:read': 'consent.scope.admin:read',
 }
 
 /**

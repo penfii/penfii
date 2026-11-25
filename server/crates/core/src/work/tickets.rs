@@ -962,6 +962,7 @@ pub async fn children(
         attach_derived(&mut tx, &mut item, actor_id).await?;
         out.push(item);
     }
+    super::attach_planned_ends(&mut tx, &mut out).await?;
     tx.commit().await?;
     Ok(out)
 }

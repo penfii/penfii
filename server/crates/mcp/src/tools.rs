@@ -3,7 +3,6 @@
 //! Nothing here decides who may see what; `core` does, on every call.
 
 use penfii_core::oauth::{Principal, RiskClass, policy, scopes};
-use penfii_core::search::{self, SearchError, SearchParams};
 use penfii_core::work::{TicketInput, TicketUpdate};
 use penfii_core::{CoreError, access, directory, organization, work};
 use serde_json::{Value, json};
@@ -18,20 +17,31 @@ use crate::catalog::{Operation, WorkspaceResolver};
 pub struct Failure {
     pub code: &'static str,
     pub message: String,
-    /// Scope the call would have needed (insufficient_scope only).
-    pub needed_scope: Option<String>,
+    /// The scopes the call needs that the connection does not have (insufficient_scope only).
+    pub needed_scopes: Vec<String>,
 }
 
 impl Failure {
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
-            needed_scope: None,
+            needed_scopes: Vec::new(),
         }
     }
 
-    fn invalid(message: impl Into<String>) -> Self {
+    /// The connection lacks these scopes: all of them at once, so one new consent is enough.
+    pub(crate) fn insufficient_scope(missing: Vec<String>) -> Self {
+        Self {
+            needed_scopes: missing.clone(),
+            ..Self::new(
+                "insufficient_scope",
+                format!("this connection was not granted {}", missing.join(", ")),
+            )
+        }
+    }
+
+    pub(crate) fn invalid(message: impl Into<String>) -> Self {
         Self::new("invalid_arguments", message)
     }
 
@@ -55,6 +65,15 @@ impl From<CoreError> for Failure {
             CoreError::Forbidden(message) => Self::new("forbidden", message),
             CoreError::Validation(message) => Self::new("invalid_arguments", message),
             CoreError::Rule { code, message } => Self::new(code, message),
+            // Facts that come with a conflict (`currentRevision`, ...) let the model read again and
+            // merge, so they are part of the message.
+            CoreError::Conflict {
+                code,
+                message,
+                extra,
+            } if !extra.is_empty() => {
+                Self::new(code, format!("{message} {}", Value::Object(extra)))
+            }
             CoreError::Conflict { code, message, .. } => Self::new(code, message),
             CoreError::ReauthRequired { .. } => {
                 Self::new("reauth_required", "recent authentication is required")
@@ -85,22 +104,91 @@ pub struct Done {
     pub value: Value,
     pub resource_type: Option<&'static str>,
     pub resource_id: Option<String>,
-    /// Revision a write produced; ties the call to its Activity row.
+    /// Revision or version a write produced (a Doc revision, a message version).
     pub resource_revision: Option<i64>,
 }
 
-fn uuid_arg(args: &Value, name: &str) -> Result<Uuid, Failure> {
+impl Done {
+    /// A result about one resource: the call log records its type and id.
+    pub(crate) fn about(value: Value, kind: &'static str, id: impl ToString) -> Self {
+        Self {
+            value,
+            resource_type: Some(kind),
+            resource_id: Some(id.to_string()),
+            resource_revision: None,
+        }
+    }
+
+    /// `about`, with the id read from the result's own `id` field (none when it has no such field).
+    pub(crate) fn about_own(value: Value, kind: &'static str) -> Self {
+        let id = value.get("id").and_then(Value::as_str).map(str::to_string);
+        Self {
+            value,
+            resource_type: Some(kind),
+            resource_id: id,
+            resource_revision: None,
+        }
+    }
+
+    /// The revision the write produced.
+    pub(crate) fn revision(mut self, revision: Option<i64>) -> Self {
+        self.resource_revision = revision;
+        self
+    }
+}
+
+pub(crate) fn uuid_arg(args: &Value, name: &str) -> Result<Uuid, Failure> {
     args.get(name)
         .and_then(Value::as_str)
         .and_then(|raw| Uuid::parse_str(raw).ok())
         .ok_or_else(|| Failure::invalid(format!("{name} must be a UUID")))
 }
 
-fn string_arg<'a>(args: &'a Value, name: &str) -> Option<&'a str> {
+/// A required string argument.
+pub(crate) fn text_arg(args: &Value, name: &str) -> Result<String, Failure> {
+    string_arg(args, name)
+        .map(str::to_string)
+        .ok_or_else(|| Failure::invalid(format!("{name} is required")))
+}
+
+/// A required integer argument.
+pub(crate) fn int_arg(args: &Value, name: &str) -> Result<i64, Failure> {
+    args.get(name)
+        .and_then(Value::as_i64)
+        .ok_or_else(|| Failure::invalid(format!("{name} must be an integer")))
+}
+
+/// An optional UUID argument: absent or null is `None`, anything else must be a UUID.
+pub(crate) fn optional_uuid(args: &Value, name: &str) -> Result<Option<Uuid>, Failure> {
+    match args.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(_) => uuid_arg(args, name).map(Some),
+    }
+}
+
+/// A required `YYYY-MM-DD` date argument.
+pub(crate) fn date_arg(args: &Value, name: &str) -> Result<chrono::NaiveDate, Failure> {
+    string_arg(args, name)
+        .and_then(|raw| raw.parse().ok())
+        .ok_or_else(|| Failure::invalid(format!("{name} must be a date (YYYY-MM-DD)")))
+}
+
+/// A required RFC 3339 date-time argument, in UTC.
+pub(crate) fn datetime_arg(
+    args: &Value,
+    name: &str,
+) -> Result<chrono::DateTime<chrono::Utc>, Failure> {
+    string_arg(args, name)
+        .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+        .map(|at| at.with_timezone(&chrono::Utc))
+        .ok_or_else(|| Failure::invalid(format!("{name} must be an RFC 3339 date-time")))
+}
+
+pub(crate) fn string_arg<'a>(args: &'a Value, name: &str) -> Option<&'a str> {
     args.get(name).and_then(Value::as_str)
 }
 
-fn limit_arg(args: &Value, default: i64) -> Result<i64, Failure> {
+pub(crate) fn limit_arg(args: &Value, default: i64) -> Result<i64, Failure> {
     match args.get("limit") {
         None | Some(Value::Null) => Ok(default),
         Some(value) => value
@@ -110,23 +198,14 @@ fn limit_arg(args: &Value, default: i64) -> Result<i64, Failure> {
     }
 }
 
-/// Steps 2 to 3 of the Authorization Model: scope, grant restriction, membership, Workspace
-/// policy. Returns the Workspace the operation targets, if any.
-pub async fn authorize(
+/// The Workspace an operation targets, from its resolver: `None` for operations that are not tied to
+/// one. No access check: callers that need one do it themselves; `call_tool` also uses it to name the
+/// Workspace on the log row of a refused call.
+pub async fn resolve_workspace(
     ctx: &McpContext,
-    principal: &Principal,
     op: &Operation,
     args: &Value,
 ) -> Result<Option<Uuid>, Failure> {
-    for needed in op.scopes {
-        if !scopes::grants(&principal.scopes, needed) {
-            return Err(Failure {
-                code: "insufficient_scope",
-                message: format!("this connection was not granted {needed}"),
-                needed_scope: Some((*needed).to_string()),
-            });
-        }
-    }
     let workspace_id = match op.resolver {
         WorkspaceResolver::None => return Ok(None),
         WorkspaceResolver::Argument => uuid_arg(args, "workspaceId")?,
@@ -134,6 +213,14 @@ pub async fn authorize(
             let project_id = uuid_arg(args, "projectId")?;
             sqlx::query_scalar::<_, Uuid>("SELECT workspace_id FROM penfii.projects WHERE id = $1")
                 .bind(project_id)
+                .fetch_optional(&ctx.pool)
+                .await?
+                .ok_or_else(|| Failure::from(CoreError::NotFound))?
+        }
+        WorkspaceResolver::Query { arg, sql } => {
+            let id = uuid_arg(args, arg)?;
+            sqlx::query_scalar::<_, Uuid>(sql)
+                .bind(id)
                 .fetch_optional(&ctx.pool)
                 .await?
                 .ok_or_else(|| Failure::from(CoreError::NotFound))?
@@ -146,6 +233,69 @@ pub async fn authorize(
                 .await?
                 .ok_or_else(|| Failure::from(CoreError::NotFound))?
         }
+    };
+    Ok(Some(workspace_id))
+}
+
+/// The MCP policies of the Workspaces this connection reaches: the person's Workspaces, narrowed by
+/// the grant's Workspace filter. Fails rather than leaving a Workspace out, so a check built on it
+/// cannot be passed because a restrictive policy could not be read.
+pub(crate) async fn reachable_policies(
+    ctx: &McpContext,
+    principal: &Principal,
+) -> Result<Vec<policy::McpPolicy>, Failure> {
+    let mut policies = Vec::new();
+    for workspace in organization::list_workspaces(&ctx.pool, principal.user_id).await? {
+        if principal
+            .workspace_filter
+            .as_ref()
+            .is_some_and(|allowed| !allowed.contains(&workspace.id))
+        {
+            continue;
+        }
+        policies.push(policy::effective(&ctx.pool, ctx.oauth.policy_defaults, workspace.id).await?);
+    }
+    Ok(policies)
+}
+
+/// The Workspace of a refused call, when the principal is an active member of it.
+pub async fn member_workspace(
+    ctx: &McpContext,
+    principal: &Principal,
+    op: &Operation,
+    args: &Value,
+) -> Option<Uuid> {
+    let workspace_id = resolve_workspace(ctx, op, args).await.ok().flatten()?;
+    let mut conn = ctx.pool.acquire().await.ok()?;
+    access::require_member(&mut conn, workspace_id, principal.user_id)
+        .await
+        .ok()
+        .map(|_| workspace_id)
+}
+
+/// Steps 2 to 3 of the Authorization Model: scope, grant restriction, membership, Workspace
+/// policy. Returns the Workspace the operation targets, if any.
+pub async fn authorize(
+    ctx: &McpContext,
+    principal: &Principal,
+    op: &Operation,
+    args: &Value,
+) -> Result<Option<Uuid>, Failure> {
+    let lacked = |needed: &&str| !scopes::grants(&principal.scopes, needed);
+    let mut missing: Vec<&str> = op.scopes.iter().copied().filter(lacked).collect();
+    if !missing.is_empty() {
+        // Name what the arguments need as well, so that one new consent is enough.
+        missing.extend(
+            crate::domains::argument_scope(op.id, args)
+                .filter(lacked)
+                .filter(|extra| !op.scopes.contains(extra)),
+        );
+        return Err(Failure::insufficient_scope(
+            missing.into_iter().map(str::to_string).collect(),
+        ));
+    }
+    let Some(workspace_id) = resolve_workspace(ctx, op, args).await? else {
+        return Ok(None);
     };
     if let Some(allowed) = &principal.workspace_filter
         && !allowed.contains(&workspace_id)
@@ -173,7 +323,23 @@ pub async fn run(
     args: &Value,
 ) -> Result<Done, Failure> {
     let user = principal.user_id;
+    if let Some(result) = crate::domains::run(ctx, principal, op, args).await {
+        return result;
+    }
     match op.id {
+        "workspace.mcp_policy" => {
+            let workspace_id = uuid_arg(args, "workspaceId")?;
+            let policy =
+                policy::get(&ctx.pool, ctx.oauth.policy_defaults, user, workspace_id).await?;
+            Ok(done(to_value(&policy)?))
+        }
+        "workspace.web_only" => Ok(done(json!({
+            "webOnly": crate::web_only::ENTRIES.iter().map(|entry| json!({
+                "action": entry.action,
+                "why": entry.why,
+                "whereInWeb": entry.where_in_web,
+            })).collect::<Vec<_>>(),
+        }))),
         "workspace.list" => {
             let mut items = Vec::new();
             for workspace in penfii_core::organization::list_workspaces(&ctx.pool, user).await? {
@@ -210,7 +376,6 @@ pub async fn run(
             .await?;
             Ok(done(to_value(&found)?))
         }
-        "search.query" => search_workspace(ctx, principal, args).await,
         "ticket.get" => {
             let ticket_id = uuid_arg(args, "ticketId")?;
             let ticket = work::get_ticket(&ctx.pool, user, ticket_id).await?;
@@ -286,6 +451,11 @@ pub async fn run(
                 .ok_or_else(|| Failure::invalid("expectedWorkflowVersion must be an integer"))?;
             let version =
                 work::delete_state(&ctx.pool, user, project_id, state_id, version).await?;
+            // The route tells open boards of the Project to look again; so does this.
+            announce(
+                ctx,
+                Some(penfii_core::platform::ChangeNotice::Project { project_id }),
+            );
             Ok(Done {
                 value: json!({"version": version}),
                 resource_type: Some("workflow_state"),
@@ -300,7 +470,7 @@ pub async fn run(
     }
 }
 
-fn done(value: Value) -> Done {
+pub(crate) fn done(value: Value) -> Done {
     Done {
         value,
         resource_type: None,
@@ -309,119 +479,13 @@ fn done(value: Value) -> Done {
     }
 }
 
-fn to_value<T: serde::Serialize>(value: &T) -> Result<Value, Failure> {
+pub(crate) fn to_value<T: serde::Serialize>(value: &T) -> Result<Value, Failure> {
     serde_json::to_value(value).map_err(|e| CoreError::Internal(e.to_string()).into())
-}
-
-/// Result kinds that exist as MCP-readable content today, with the scope each one needs
-///.
-const SEARCH_KINDS: &[(&str, &str)] = &[("ticket", "ticket:read"), ("person", "member:read")];
-
-async fn search_workspace(
-    ctx: &McpContext,
-    principal: &Principal,
-    args: &Value,
-) -> Result<Done, Failure> {
-    let workspace_id = uuid_arg(args, "workspaceId")?;
-    let query = string_arg(args, "query").unwrap_or("");
-    let kind = string_arg(args, "kind").unwrap_or("all");
-    let readable: Vec<&str> = SEARCH_KINDS
-        .iter()
-        .filter(|(_, scope)| scopes::grants(&principal.scopes, scope))
-        .map(|(kind, _)| *kind)
-        .collect();
-    let wanted: Vec<&str> = match kind {
-        "all" => readable.clone(),
-        other => {
-            let Some((name, scope)) = SEARCH_KINDS.iter().find(|(name, _)| *name == other) else {
-                return Err(Failure::invalid("kind must be all, ticket or person"));
-            };
-            if !readable.contains(name) {
-                return Err(Failure {
-                    code: "insufficient_scope",
-                    message: format!("this connection was not granted {scope}"),
-                    needed_scope: Some((*scope).to_string()),
-                });
-            }
-            vec![*name]
-        }
-    };
-    let limit = limit_arg(args, 20)?;
-    let mut results: Vec<Value> = Vec::new();
-    let mut next_cursor = Value::Null;
-    if wanted.contains(&"person") {
-        let found = directory::search(
-            &ctx.pool,
-            principal.user_id,
-            workspace_id,
-            query,
-            Some("person"),
-            Some(if wanted.len() == 1 { limit } else { 5 }),
-        )
-        .await?;
-        for hit in found.results {
-            results.push(json!({
-                "kind": "person", "id": hit.id, "title": hit.title, "subtitle": hit.subtitle,
-            }));
-        }
-    }
-    if wanted.contains(&"ticket") {
-        let params = SearchParams {
-            q: query.to_string(),
-            kind: "ticket".into(),
-            state_ids: Vec::new(),
-            limit: Some(limit),
-            cursor: string_arg(args, "cursor").map(str::to_string),
-            tz: None,
-        };
-        match search::search(
-            &ctx.pool,
-            ctx.search.as_ref(),
-            principal.user_id,
-            workspace_id,
-            params,
-        )
-        .await
-        {
-            Ok(response) => {
-                let value = to_value(&response)?;
-                if let Some(items) = value["results"].as_array() {
-                    results.extend(items.iter().cloned());
-                }
-                next_cursor = value["nextCursor"].clone();
-            }
-            Err(SearchError::Invalid(invalid)) => {
-                return Err(Failure::invalid(format!(
-                    "{}: {}",
-                    invalid.code, invalid.message
-                )));
-            }
-            Err(SearchError::Ambiguous { token, .. }) => {
-                return Err(Failure::new(
-                    "ambiguous_filter",
-                    format!("more than one match for {token}; use a more specific value"),
-                ));
-            }
-            Err(SearchError::Unavailable) => {
-                return Err(Failure::new(
-                    "search_unavailable",
-                    "search is not available right now; try again later",
-                ));
-            }
-            Err(SearchError::Core(error)) => return Err(error.into()),
-        }
-    }
-    Ok(done(json!({
-        "query": query,
-        "kinds": wanted,
-        "results": results,
-        "nextCursor": next_cursor,
-    })))
 }
 
 /// Plain text becomes a one-paragraph document; an object is passed to `core`, which validates
 /// rich text exactly as it does for the web app (JSON first, plain text as a convenience).
-fn rich_text(value: Option<&Value>, name: &str) -> Result<Option<Value>, Failure> {
+pub(crate) fn rich_text(value: Option<&Value>, name: &str) -> Result<Option<Value>, Failure> {
     match value {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(text)) => {
@@ -444,7 +508,7 @@ fn rich_text(value: Option<&Value>, name: &str) -> Result<Option<Value>, Failure
 }
 
 /// Retry key: the caller's, else a fresh one (no replay protection, and the tool says so).
-fn idempotency(args: &Value) -> Result<String, Failure> {
+pub(crate) fn idempotency(args: &Value) -> Result<String, Failure> {
     match args.get("idempotencyKey") {
         None | Some(Value::Null) => Ok(format!("mcp-{}", Uuid::new_v4())),
         Some(Value::String(key)) if !key.trim().is_empty() && key.len() <= 200 => {
@@ -455,7 +519,7 @@ fn idempotency(args: &Value) -> Result<String, Failure> {
 }
 
 /// `absent` leaves a field alone, `null` clears it, anything else sets it.
-fn nullable<T>(
+pub(crate) fn nullable<T>(
     args: &Value,
     name: &str,
     parse: impl Fn(&Value) -> Option<T>,
@@ -469,43 +533,86 @@ fn nullable<T>(
     }
 }
 
-fn parse_uuid(value: &Value) -> Option<Uuid> {
+pub(crate) fn parse_uuid(value: &Value) -> Option<Uuid> {
     value.as_str().and_then(|raw| Uuid::parse_str(raw).ok())
 }
 
-fn parse_date(value: &Value) -> Option<chrono::NaiveDate> {
+/// An array of UUIDs: absent is `None`, anything else must be an array of UUID strings.
+pub(crate) fn uuid_list(args: &Value, name: &str) -> Result<Option<Vec<Uuid>>, Failure> {
+    match args.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(parse_uuid)
+            .collect::<Option<Vec<_>>>()
+            .map(Some)
+            .ok_or_else(|| Failure::invalid(format!("{name} must be an array of UUIDs"))),
+        Some(_) => Err(Failure::invalid(format!(
+            "{name} must be an array of UUIDs"
+        ))),
+    }
+}
+
+pub(crate) fn parse_estimate(value: &Value) -> Option<penfii_core::plan_fields::EstimateInput> {
+    let object = value.as_object()?;
+    Some(penfii_core::plan_fields::EstimateInput {
+        value: object.get("value")?.as_str()?.to_string(),
+        unit: match object.get("unit") {
+            None | Some(Value::Null) => None,
+            Some(unit) => Some(unit.as_str()?.to_string()),
+        },
+    })
+}
+
+pub(crate) fn parse_schedule(value: &Value) -> Option<penfii_core::plan_fields::ScheduleInput> {
+    let object = value.as_object()?;
+    Some(penfii_core::plan_fields::ScheduleInput {
+        planned_start_at: match object.get("plannedStartAt") {
+            None | Some(Value::Null) => None,
+            Some(at) => Some(at.as_str()?.parse::<chrono::DateTime<chrono::Utc>>().ok()?),
+        },
+        duration_minutes: match object.get("durationMinutes") {
+            None | Some(Value::Null) => None,
+            Some(minutes) => Some(minutes.as_i64()?),
+        },
+        is_schedule_milestone: match object.get("isScheduleMilestone") {
+            None | Some(Value::Null) => false,
+            Some(flag) => flag.as_bool()?,
+        },
+    })
+}
+
+pub(crate) fn parse_date(value: &Value) -> Option<chrono::NaiveDate> {
     value.as_str().and_then(|raw| raw.parse().ok())
 }
 
-fn revision_arg(args: &Value) -> Result<i64, Failure> {
+pub(crate) fn revision_arg(args: &Value) -> Result<i64, Failure> {
     args.get("expectedRevision")
         .and_then(Value::as_i64)
         .ok_or_else(|| Failure::invalid("expectedRevision must be an integer"))
 }
 
-/// The same post-commit effect the route applies: open browsers learn of the change.
-fn announce(ctx: &McpContext, change: Option<penfii_core::ChangeNotice>) {
-    if let Some(change) = change {
+/// The same post-commit effect the route applies: open browsers learn of the change. Takes one
+/// notice (`Some`/`None`) or a list of them; nobody listening is not an error.
+pub(crate) fn announce(
+    ctx: &McpContext,
+    changes: impl IntoIterator<Item = penfii_core::ChangeNotice>,
+) {
+    for change in changes {
         let _ = ctx.changes.send(change);
     }
 }
 
-/// `previous` is the revision the caller expected: a result that did not move past it wrote
-/// nothing, so the log must not claim a revision (and with it the Activity row) for this call.
-fn ticket_done(
+/// A Ticket command's result. The log names the Ticket but no revision: the revision a call wrote
+/// names the call itself (its `command_id`, see `penfii_core::origin`), and a call that wrote
+/// nothing (a replay, a move that kept the revision) must not be credited with someone else's.
+pub(crate) fn ticket_done(
     ctx: &McpContext,
     ticket: penfii_contracts::Ticket,
     change: Option<penfii_core::ChangeNotice>,
-    previous: Option<i64>,
 ) -> Result<Done, Failure> {
     announce(ctx, change);
-    let wrote = previous.is_none_or(|previous| ticket.revision_no > previous);
-    Ok(Done {
-        value: to_value(&ticket)?,
-        resource_type: Some("ticket"),
-        resource_id: Some(ticket.id.to_string()),
-        resource_revision: wrote.then_some(ticket.revision_no),
-    })
+    Ok(Done::about(to_value(&ticket)?, "ticket", ticket.id))
 }
 
 async fn ticket_create(
@@ -522,16 +629,16 @@ async fn ticket_create(
             .unwrap_or("TASK")
             .to_string(),
         parent_id: nullable(args, "parentId", parse_uuid)?.flatten(),
-        channel_id: None,
+        channel_id: nullable(args, "channelId", parse_uuid)?.flatten(),
         status_id: nullable(args, "statusId", parse_uuid)?.flatten(),
         assignee_id: nullable(args, "assigneeId", parse_uuid)?.flatten(),
         priority: nullable(args, "priority", |v| v.as_str().map(str::to_string))?.flatten(),
         due_on: nullable(args, "dueOn", parse_date)?.flatten(),
-        label_ids: Vec::new(),
-        type_id: None,
-        estimate: None,
-        schedule: None,
-        file_ids: Vec::new(),
+        label_ids: uuid_list(args, "labelIds")?.unwrap_or_default(),
+        type_id: nullable(args, "typeId", parse_uuid)?.flatten(),
+        estimate: nullable(args, "estimate", parse_estimate)?.flatten(),
+        schedule: nullable(args, "schedule", parse_schedule)?.flatten(),
+        file_ids: uuid_list(args, "fileIds")?.unwrap_or_default(),
     };
     let (ticket, change) = work::create_ticket(
         &ctx.pool,
@@ -541,7 +648,7 @@ async fn ticket_create(
         &idempotency(args)?,
     )
     .await?;
-    ticket_done(ctx, ticket, change, None)
+    ticket_done(ctx, ticket, change)
 }
 
 async fn ticket_update(
@@ -556,7 +663,11 @@ async fn ticket_update(
         assignee_id: nullable(args, "assigneeId", parse_uuid)?,
         priority: nullable(args, "priority", |v| v.as_str().map(str::to_string))?,
         due_on: nullable(args, "dueOn", parse_date)?,
-        ..TicketUpdate::default()
+        label_ids: uuid_list(args, "labelIds")?,
+        parent_id: nullable(args, "parentId", parse_uuid)?,
+        type_id: nullable(args, "typeId", parse_uuid)?,
+        estimate: nullable(args, "estimate", parse_estimate)?,
+        schedule: nullable(args, "schedule", parse_schedule)?,
     };
     let expected = revision_arg(args)?;
     let (ticket, change) = work::update_ticket(
@@ -568,7 +679,7 @@ async fn ticket_update(
         &idempotency(args)?,
     )
     .await?;
-    ticket_done(ctx, ticket, change, Some(expected))
+    ticket_done(ctx, ticket, change)
 }
 
 async fn ticket_change_status(
@@ -586,5 +697,5 @@ async fn ticket_change_status(
         &idempotency(args)?,
     )
     .await?;
-    ticket_done(ctx, ticket, change, Some(expected))
+    ticket_done(ctx, ticket, change)
 }

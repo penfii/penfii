@@ -71,20 +71,75 @@ pub(super) fn is_link_activity(kind: &str) -> bool {
     )
 }
 
-/// Which OAuth client made a change, if it came through MCP: the Activity row or
-/// revision is the person's own, and `mcp_call_log` says an MCP call produced it. Keys are
-/// `<ticket id>:<revision>` for revisions and the comment id for comments. A change whose log
-/// row has been purged simply has no marker.
-async fn mcp_clients(
-    conn: &mut PgConnection,
-    revisions: &[(Uuid, i64)],
-    comments: &[String],
-) -> Result<HashMap<String, String>, CoreError> {
-    if revisions.is_empty() && comments.is_empty() {
-        return Ok(HashMap::new());
+/// Which OAuth client made each change that came through MCP. The Activity row or revision is the
+/// person's own; what names the client is the MCP call that wrote it ([`crate::origin`]): the row's
+/// `command_id` is that call's `mcp_call_log` id. A change made in the web app has a command id of
+/// its own and no client; a change whose log row has been purged has no marker either.
+///
+/// Rows written before command ids named the call are matched the old way, by the log's
+/// (Ticket, revision) or the comment a `ticket_comment` call created. Only those rows are looked up
+/// so: a row whose command is a known call never falls back.
+struct McpClients {
+    by_call: HashMap<Uuid, String>,
+    earlier: HashMap<Earlier, String>,
+}
+
+impl McpClients {
+    fn via(&self, command_id: Uuid, earlier: Option<&Earlier>) -> Option<String> {
+        self.by_call
+            .get(&command_id)
+            .or_else(|| earlier.and_then(|key| self.earlier.get(key)))
+            .cloned()
     }
-    let tickets: Vec<String> = revisions.iter().map(|(id, _)| id.to_string()).collect();
-    let numbers: Vec<i64> = revisions.iter().map(|(_, no)| *no).collect();
+}
+
+/// What a row was matched by before command ids named the call.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Earlier {
+    Revision(Uuid, i64),
+    Comment(String),
+}
+
+/// Each row's command id and its earlier key, in the rows' order.
+type ClientKeys = Vec<(Uuid, Option<Earlier>)>;
+
+async fn mcp_clients(conn: &mut PgConnection, keys: &ClientKeys) -> Result<McpClients, CoreError> {
+    let mut found = McpClients {
+        by_call: HashMap::new(),
+        earlier: HashMap::new(),
+    };
+    if keys.is_empty() {
+        return Ok(found);
+    }
+    let commands: Vec<Uuid> = keys.iter().map(|(command, _)| *command).collect();
+    let rows = sqlx::query(
+        "SELECT l.id, c.client_name
+         FROM penfii.mcp_call_log l JOIN penfii.oauth_clients c ON c.id = l.client_pk
+         WHERE l.id = ANY($1)",
+    )
+    .bind(&commands)
+    .fetch_all(&mut *conn)
+    .await?;
+    for row in rows {
+        found
+            .by_call
+            .insert(row.try_get("id")?, row.try_get("client_name")?);
+    }
+    let (mut tickets, mut numbers, mut comments) = (Vec::new(), Vec::new(), Vec::new());
+    for (command, earlier) in keys {
+        match earlier {
+            _ if found.by_call.contains_key(command) => {}
+            Some(Earlier::Revision(ticket, no)) => {
+                tickets.push(ticket.to_string());
+                numbers.push(*no);
+            }
+            Some(Earlier::Comment(id)) => comments.push(id.clone()),
+            None => {}
+        }
+    }
+    if tickets.is_empty() && comments.is_empty() {
+        return Ok(found);
+    }
     let rows = sqlx::query(
         "SELECT DISTINCT ON (l.resource_type, l.resource_id, l.resource_revision)
                 l.resource_type, l.resource_id, l.resource_revision, c.client_name
@@ -93,70 +148,60 @@ async fn mcp_clients(
            AND ((l.resource_type = 'ticket'
                  AND (l.resource_id, l.resource_revision) IN
                      (SELECT x.t, x.r FROM unnest($1::text[], $2::bigint[]) AS x(t, r)))
-             OR (l.resource_type = 'ticket_comment' AND l.resource_id = ANY($3)))
+             OR (l.resource_type = 'ticket_comment' AND l.operation = 'ticket.comment'
+                 AND l.resource_id = ANY($3)))
          ORDER BY l.resource_type, l.resource_id, l.resource_revision, l.at",
     )
     .bind(&tickets)
     .bind(&numbers)
-    .bind(comments)
+    .bind(&comments)
     .fetch_all(&mut *conn)
     .await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| -> Result<_, sqlx::Error> {
-            Ok({
-                let id: String = row.try_get("resource_id")?;
-                let key = match row.try_get::<Option<i64>, _>("resource_revision")? {
-                    Some(revision) => format!("{id}:{revision}"),
-                    None => id,
-                };
-                (key, row.try_get("client_name")?)
-            })
-        })
-        .collect::<Result<HashMap<_, _>, sqlx::Error>>()?)
+    for row in rows {
+        let id: String = row.try_get("resource_id")?;
+        let key = match row.try_get::<Option<i64>, _>("resource_revision")? {
+            Some(revision) => match Uuid::parse_str(&id) {
+                Ok(ticket) => Earlier::Revision(ticket, revision),
+                Err(_) => continue,
+            },
+            None => Earlier::Comment(id),
+        };
+        found.earlier.insert(key, row.try_get("client_name")?);
+    }
+    Ok(found)
+}
+
+/// The key an Activity row had in the earlier matching: its comment, or the revision it produced
+/// (link kinds other than creation only point at whatever revision was current, so they had none).
+fn earlier_key(row: &sqlx::postgres::PgRow) -> Result<Option<Earlier>, sqlx::Error> {
+    let kind: String = row.try_get("activity_kind")?;
+    if kind == "ticket.commented" {
+        let data: Value = row.try_get("data")?;
+        return Ok(data
+            .get("commentId")
+            .and_then(Value::as_str)
+            .map(|id| Earlier::Comment(id.to_string())));
+    }
+    if is_link_activity(&kind) && kind != "ticket.created" {
+        return Ok(None);
+    }
+    let ticket_id: Uuid = row.try_get("ticket_id")?;
+    Ok(row
+        .try_get::<Option<i64>, _>("ticket_revision_no")?
+        .map(|no| Earlier::Revision(ticket_id, no)))
+}
+
+fn activity_keys(rows: &[sqlx::postgres::PgRow]) -> Result<ClientKeys, sqlx::Error> {
+    rows.iter()
+        .map(|row| Ok((row.try_get("command_id")?, earlier_key(row)?)))
+        .collect()
 }
 
 fn activity_via(
-    clients: &HashMap<String, String>,
-    kind: &str,
-    ticket_id: Uuid,
-    revision_no: Option<i64>,
-    data: &Value,
-) -> Option<String> {
-    if kind == "ticket.commented" {
-        let comment = data.get("commentId")?.as_str()?;
-        return clients.get(comment).cloned();
-    }
-    // `is_link_activity` also lists kinds that carry no field changes; creation still has its
-    // own revision, the others only point at whatever revision was current.
-    if is_link_activity(kind) && kind != "ticket.created" {
-        return None;
-    }
-    clients
-        .get(&format!("{ticket_id}:{}", revision_no?))
-        .cloned()
-}
-
-/// The revisions (Ticket, number) and comment ids the rows refer to.
-type ActivityKeys = (Vec<(Uuid, i64)>, Vec<String>);
-
-fn activity_keys(rows: &[sqlx::postgres::PgRow]) -> Result<ActivityKeys, sqlx::Error> {
-    let mut revisions = Vec::new();
-    let mut comments = Vec::new();
-    for row in rows {
-        let kind: String = row.try_get("activity_kind")?;
-        if kind == "ticket.commented" {
-            let data: Value = row.try_get("data")?;
-            if let Some(id) = data.get("commentId").and_then(Value::as_str) {
-                comments.push(id.to_string());
-            }
-        } else if (!is_link_activity(&kind) || kind == "ticket.created")
-            && let Some(no) = row.try_get::<Option<i64>, _>("ticket_revision_no")?
-        {
-            revisions.push((row.try_get::<Uuid, _>("ticket_id")?, no));
-        }
-    }
-    Ok((revisions, comments))
+    clients: &McpClients,
+    row: &sqlx::postgres::PgRow,
+) -> Result<Option<String>, sqlx::Error> {
+    Ok(clients.via(row.try_get("command_id")?, earlier_key(row)?.as_ref()))
 }
 
 pub async fn ticket_activity(
@@ -171,7 +216,7 @@ pub async fn ticket_activity(
     let mut tx = pool.begin().await?;
     let access = read_access(&mut tx, actor_id, ticket_id).await?;
     let mut rows = sqlx::query(
-        "SELECT a.id,a.ticket_id,a.ticket_revision_no,a.actor_user_id,u.display_name AS actor_name,a.activity_kind,a.data,a.occurred_at
+        "SELECT a.id,a.ticket_id,a.ticket_revision_no,a.actor_user_id,u.display_name AS actor_name,a.activity_kind,a.data,a.command_id,a.occurred_at
          FROM penfii.activity_entries a LEFT JOIN penfii.users u ON u.id=a.actor_user_id
          WHERE a.ticket_id=$1 AND ($2::timestamptz IS NULL OR (a.occurred_at,a.id) < ($2::timestamptz,$3::uuid))
          ORDER BY a.occurred_at DESC,a.id DESC LIMIT $4",
@@ -195,8 +240,7 @@ pub async fn ticket_activity(
     let revisions = with_previous(with_revision.into_iter());
     let names = status_names(&mut tx, access.project_id).await?;
     let views = revision_views(&mut tx, ticket_id, &revisions, &names).await?;
-    let (revision_keys, comment_keys) = activity_keys(&rows)?;
-    let clients = mcp_clients(&mut tx, &revision_keys, &comment_keys).await?;
+    let clients = mcp_clients(&mut tx, &activity_keys(&rows)?).await?;
     tx.commit().await?;
     let next_cursor = if more {
         match rows.last() {
@@ -223,8 +267,8 @@ pub async fn ticket_activity(
                         _ => Vec::new(),
                     },
                 };
+                let via = activity_via(&clients, &row)?;
                 let data: Value = row.try_get("data")?;
-                let via = activity_via(&clients, &kind, ticket_id, revision_no, &data);
                 TicketActivity {
                     id: row.try_get("id")?,
                     ticket_id: row.try_get("ticket_id")?,
@@ -251,9 +295,8 @@ pub async fn activity(
 ) -> Result<Vec<TicketActivity>, CoreError> {
     let mut tx = pool.begin().await?;
     let _ = require_project_role(&mut tx, project_id, actor_id, false).await?;
-    let rows=sqlx::query("SELECT a.id,a.ticket_id,a.origin_channel_id,a.ticket_revision_no,a.actor_user_id,u.display_name AS actor_name,a.activity_kind,a.data,a.occurred_at FROM penfii.activity_entries a JOIN penfii.tickets t ON t.id=a.ticket_id AND t.trashed_at IS NULL AND t.purged_at IS NULL LEFT JOIN penfii.users u ON u.id=a.actor_user_id WHERE a.origin_project_id=$1 ORDER BY a.occurred_at DESC,a.id DESC LIMIT 100").bind(project_id).fetch_all(&mut *tx).await?;
-    let (revision_keys, comment_keys) = activity_keys(&rows)?;
-    let clients = mcp_clients(&mut tx, &revision_keys, &comment_keys).await?;
+    let rows=sqlx::query("SELECT a.id,a.ticket_id,a.origin_channel_id,a.ticket_revision_no,a.actor_user_id,u.display_name AS actor_name,a.activity_kind,a.data,a.command_id,a.occurred_at FROM penfii.activity_entries a JOIN penfii.tickets t ON t.id=a.ticket_id AND t.trashed_at IS NULL AND t.purged_at IS NULL LEFT JOIN penfii.users u ON u.id=a.actor_user_id WHERE a.origin_project_id=$1 ORDER BY a.occurred_at DESC,a.id DESC LIMIT 100").bind(project_id).fetch_all(&mut *tx).await?;
+    let clients = mcp_clients(&mut tx, &activity_keys(&rows)?).await?;
     let mut out = Vec::new();
     for row in rows {
         let channel: Option<Uuid> = row.try_get("origin_channel_id")?;
@@ -262,14 +305,8 @@ pub async fn activity(
         }
         let kind: String = row.try_get("activity_kind")?;
         let revision_no: Option<i64> = row.try_get("ticket_revision_no")?;
+        let via = activity_via(&clients, &row)?;
         let data: Value = row.try_get("data")?;
-        let via = activity_via(
-            &clients,
-            &kind,
-            row.try_get("ticket_id")?,
-            revision_no,
-            &data,
-        );
         out.push(TicketActivity {
             id: row.try_get("id")?,
             ticket_id: row.try_get("ticket_id")?,
@@ -300,7 +337,7 @@ pub async fn revisions(
     let mut tx = pool.begin().await?;
     let access = read_access(&mut tx, actor_id, ticket_id).await?;
     let mut rows = sqlx::query(
-        "SELECT r.revision_no,r.actor_user_id,u.display_name AS actor_name,r.recorded_at,r.restore_source_revision_no
+        "SELECT r.revision_no,r.actor_user_id,u.display_name AS actor_name,r.recorded_at,r.restore_source_revision_no,r.command_id
          FROM penfii.ticket_revisions r LEFT JOIN penfii.users u ON u.id=r.actor_user_id
          WHERE r.ticket_id=$1 AND ($2::bigint IS NULL OR r.revision_no < $2)
          ORDER BY r.revision_no DESC LIMIT $3",
@@ -319,13 +356,16 @@ pub async fn revisions(
     let numbers = with_previous(listed.into_iter());
     let names = status_names(&mut tx, access.project_id).await?;
     let views = revision_views(&mut tx, ticket_id, &numbers, &names).await?;
-    let keys: Vec<(Uuid, i64)> = rows
+    let keys = rows
         .iter()
-        .map(|row| -> Result<_, sqlx::Error> {
-            Ok((ticket_id, row.try_get::<i64, _>("revision_no")?))
+        .map(|row| {
+            Ok((
+                row.try_get("command_id")?,
+                Some(Earlier::Revision(ticket_id, row.try_get("revision_no")?)),
+            ))
         })
-        .collect::<Result<Vec<_>, sqlx::Error>>()?;
-    let clients = mcp_clients(&mut tx, &keys, &[]).await?;
+        .collect::<Result<ClientKeys, sqlx::Error>>()?;
+    let clients = mcp_clients(&mut tx, &keys).await?;
     tx.commit().await?;
     let next_before = if more {
         match rows.last() {
@@ -355,7 +395,10 @@ pub async fn revisions(
                     recorded_at: row.try_get("recorded_at")?,
                     changed_fields,
                     restore_source_revision_no: row.try_get("restore_source_revision_no")?,
-                    via: clients.get(&format!("{ticket_id}:{revision_no}")).cloned(),
+                    via: clients.via(
+                        row.try_get("command_id")?,
+                        Some(&Earlier::Revision(ticket_id, revision_no)),
+                    ),
                 }
             })
         })

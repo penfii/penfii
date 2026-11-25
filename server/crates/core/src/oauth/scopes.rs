@@ -13,8 +13,18 @@ pub const REGISTRY: &[ScopeInfo] = &[
         scope: "workspace:read",
         high_risk: false,
     },
+    // Creates a Workspace and changes its settings.
+    ScopeInfo {
+        scope: "workspace:write",
+        high_risk: false,
+    },
     ScopeInfo {
         scope: "member:read",
+        high_risk: false,
+    },
+    // Invites people with the MEMBER role; never OWNER/ADMIN (web only).
+    ScopeInfo {
+        scope: "member:write",
         high_risk: false,
     },
     ScopeInfo {
@@ -29,10 +39,78 @@ pub const REGISTRY: &[ScopeInfo] = &[
         scope: "ticket:write",
         high_risk: false,
     },
+    ScopeInfo {
+        scope: "project:read",
+        high_risk: false,
+    },
+    // Project settings, workflow states, labels.
+    ScopeInfo {
+        scope: "project:write",
+        high_risk: false,
+    },
     // Creates Projects and changes workflow structure; a *:manage scope is high-risk.
     ScopeInfo {
         scope: "project:manage",
         high_risk: true,
+    },
+    ScopeInfo {
+        scope: "doc:read",
+        high_risk: false,
+    },
+    ScopeInfo {
+        scope: "doc:write",
+        high_risk: false,
+    },
+    // Deleting a Doc subtree has no undo in the product; a *:delete scope is high-risk.
+    ScopeInfo {
+        scope: "doc:delete",
+        high_risk: true,
+    },
+    // Channels, DMs, messages, threads. Reading never changes read state.
+    ScopeInfo {
+        scope: "conversation:read",
+        high_risk: false,
+    },
+    // Creating channels/DMs, members, messages, reactions, read state.
+    ScopeInfo {
+        scope: "conversation:write",
+        high_risk: false,
+    },
+    ScopeInfo {
+        scope: "file:read",
+        high_risk: false,
+    },
+    ScopeInfo {
+        scope: "file:write",
+        high_risk: false,
+    },
+    // Boards, views, timelines, sprints, milestones, dependencies, reports.
+    ScopeInfo {
+        scope: "plan:read",
+        high_risk: false,
+    },
+    ScopeInfo {
+        scope: "plan:write",
+        high_risk: false,
+    },
+    // Inbox, Later, favorites, drafts, subscriptions, notification settings.
+    ScopeInfo {
+        scope: "personal:read",
+        high_risk: false,
+    },
+    ScopeInfo {
+        scope: "personal:write",
+        high_risk: false,
+    },
+    // Teams, departments and their members (daily organisation work).
+    ScopeInfo {
+        scope: "team:write",
+        high_risk: false,
+    },
+    // Audit log, webhook list, trash and orphaned-resource lists, MCP policy.
+    ScopeInfo {
+        scope: "admin:read",
+        high_risk: false,
     },
 ];
 

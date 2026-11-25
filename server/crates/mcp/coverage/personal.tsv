@@ -1,0 +1,71 @@
+# METHOD	path	STATUS(tool|web|excluded|other)	tool or reason
+DELETE	/v1/channels/{id}/mute	tool	channel_mute_set (muted false)
+DELETE	/v1/drafts	excluded	ends a compose box input session (UI mechanism); draft_delete discards a draft
+DELETE	/v1/drafts/{id}	tool	draft_delete
+DELETE	/v1/favorite-folders/{id}	tool	favorite_folder_delete
+DELETE	/v1/later/{id}	tool	later_remove
+DELETE	/v1/later/{id}/reminder	tool	later_reminder_cancel
+DELETE	/v1/me/avatar	web	avatar change is done with the upload in the web app
+DELETE	/v1/me/identities/{provider}	web	account security
+DELETE	/v1/me/oauth-grants	web	revoke all MCP access (RecentActor)
+DELETE	/v1/me/oauth-grants/{id}	web	connected apps
+DELETE	/v1/me/password	web	account security
+DELETE	/v1/me/push-subscriptions/{id}	web	Push device registration
+DELETE	/v1/me/sessions	web	account security
+DELETE	/v1/me/sessions/{id}	web	account security
+DELETE	/v1/messages/{id}/subscription	tool	subscription_set (kind THREAD, watching false)
+DELETE	/v1/pins/{id}	other	project domain
+DELETE	/v1/projects/{id}/subscription	tool	subscription_set (kind PROJECT, watching false)
+DELETE	/v1/tickets/{id}/subscription	tool	subscription_set (kind TICKET, watching false)
+DELETE	/v1/workspaces/{id}/favorites/{kind}/{target_id}	tool	favorite_remove
+GET	/v1/drafts	excluded	compose-box restore of one draft by context (UI mechanism); draft_list covers reading
+GET	/v1/me	tool	me_get
+GET	/v1/me/email-change	web	account security
+GET	/v1/me/identities	web	external sign-in links (account security)
+GET	/v1/me/mfa	web	account security
+GET	/v1/me/muted-channels	tool	channel_mute_list
+GET	/v1/me/notification-preferences	tool	notification_preferences_get
+GET	/v1/me/oauth-grants	web	connected apps; revocation is the person's own security decision
+GET	/v1/me/push-subscriptions	web	Push device registration
+GET	/v1/me/sessions	web	sessions (account security)
+GET	/v1/messages/{id}/subscription	tool	subscription_get (kind THREAD)
+GET	/v1/projects/{id}/pins	other	project domain (pins are project work)
+GET	/v1/projects/{id}/subscription	tool	subscription_get (kind PROJECT)
+GET	/v1/push/vapid-public-key	web	Push registration is a browser permission flow
+GET	/v1/tickets/{id}/subscription	tool	subscription_get (kind TICKET)
+GET	/v1/users/{id}/avatar	excluded	image bytes for the web UI; has_avatar is in me_get
+GET	/v1/workspaces/{id}/drafts	tool	draft_list
+GET	/v1/workspaces/{id}/favorite-folders	tool	favorite_folder_list
+GET	/v1/workspaces/{id}/favorites	tool	favorite_list
+GET	/v1/workspaces/{id}/inbox	tool	inbox_list
+GET	/v1/workspaces/{id}/later	tool	later_list
+GET	/v1/workspaces/{id}/subscriptions	tool	subscription_list
+PATCH	/v1/favorite-folders/{id}	tool	favorite_folder_rename
+PATCH	/v1/later/{id}	tool	later_update
+PATCH	/v1/me	web	changes e-mail/password (account security)
+PATCH	/v1/me/profile	tool	me_update_profile
+POST	/v1/inbox/{id}/commands/{command}	tool	inbox_update
+POST	/v1/me/email-change	web	account security
+POST	/v1/me/mfa/disable	web	account security
+POST	/v1/me/mfa/enable	web	account security
+POST	/v1/me/mfa/recovery-codes	web	account security
+POST	/v1/me/mfa/setup	web	account security
+POST	/v1/me/push-subscriptions	web	Push device registration
+POST	/v1/me/reauth/password	web	sign-in re-confirmation
+POST	/v1/me/reauth/{provider}/start	web	sign-in re-confirmation
+POST	/v1/projects/{id}/pins	other	project domain
+POST	/v1/workspaces/{id}/favorite-folders	tool	favorite_folder_create
+POST	/v1/workspaces/{id}/inbox/commands/read-all	tool	inbox_read_all
+POST	/v1/workspaces/{id}/later	tool	later_add
+PUT	/v1/channels/{id}/mute	tool	channel_mute_set (muted true)
+PUT	/v1/drafts	tool	draft_save
+PUT	/v1/later/{id}/reminder	tool	later_reminder_set
+PUT	/v1/me/avatar	web	binary image upload
+PUT	/v1/me/notification-preferences	tool	notification_preferences_set
+PUT	/v1/messages/{id}/subscription	tool	subscription_set (kind THREAD)
+PUT	/v1/projects/{id}/subscription	tool	subscription_set (kind PROJECT)
+PUT	/v1/tickets/{id}/subscription	tool	subscription_set (kind TICKET)
+PUT	/v1/workspaces/{id}/favorite-folders/order	tool	favorite_folder_order
+PUT	/v1/workspaces/{id}/favorites	tool	favorite_add
+PUT	/v1/workspaces/{id}/favorites/order	tool	favorite_order
+PUT	/v1/workspaces/{id}/favorites/{kind}/{target_id}/folder	tool	favorite_move

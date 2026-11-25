@@ -166,6 +166,7 @@ export const adminKo = {
   'admin.audit.empty': '기록이 없습니다.',
   'admin.audit.more': '더 보기',
   'admin.audit.system': '시스템',
+  'admin.audit.via': '{client}를 통해',
   'admin.audit.when': '시각',
   'admin.audit.who': '수행자',
   'admin.audit.what': '내용',

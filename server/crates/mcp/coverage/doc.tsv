@@ -1,0 +1,27 @@
+GET	/v1/workspaces/{id}/docs/tree	tool	doc_tree
+POST	/v1/workspaces/{id}/docs	tool	doc_create
+GET	/v1/docs/{id}	tool	doc_get
+PATCH	/v1/docs/{id}	tool	doc_update
+DELETE	/v1/docs/{id}	tool	doc_delete
+PUT	/v1/docs/{id}/content	tool	doc_save
+GET	/v1/docs/{id}/versions	tool	doc_version_list
+POST	/v1/docs/{id}/versions	tool	doc_version_create
+GET	/v1/docs/{id}/versions/{versionNo}	tool	doc_version_get (restore = doc_version_restore: get + save, as the web app does)
+POST	/v1/docs/{id}/move	tool	doc_move
+PUT	/v1/docs/{id}/visibility	tool	doc_set_visibility
+GET	/v1/docs/{id}/participants	tool	doc_participants
+PUT	/v1/docs/{id}/participants	tool	doc_set_participants
+GET	/v1/docs/{id}/comments	tool	doc_comment_list
+POST	/v1/docs/{id}/comments	tool	doc_comment_create
+PATCH	/v1/docs/{id}/comments/{commentId}	tool	doc_comment_edit
+DELETE	/v1/docs/{id}/comments/{commentId}	tool	doc_comment_delete
+POST	/v1/docs/{id}/files	tool	doc_file_attach
+GET	/v1/workspaces/{id}/doc-templates	tool	doc_template_list
+POST	/v1/workspaces/{id}/doc-templates	tool	doc_template_create
+DELETE	/v1/workspaces/{id}/doc-templates/{templateId}	tool	doc_template_delete
+POST	/v1/workspaces/{id}/references/resolve	tool	doc_resolve_references
+GET	/v1/tickets/{id}/references	tool	ticket_references_list
+GET	/v1/docs/{id}/references	tool	doc_references
+POST	/v1/docs/{id}/manager-recovery	web	RecentActor recover_doc_manager; see workspace_web_only
+GET	/v1/workspaces/{id}/docs-without-manager	other	admin domain (orphaned-resource list)
+GET	/v1/docs/{id}/collab	excluded	WebSocket co-editing (Yjs) is not an MCP tool; edit with doc_save

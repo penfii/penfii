@@ -16,7 +16,7 @@ use uuid::Uuid;
 use super::{finish, key};
 use crate::AppState;
 use crate::error::ApiError;
-use crate::extract::{self, Actor, Body, Q, RawJson};
+use crate::extract::{self, Actor, Body, Q, RawJson, optional_idempotency_key};
 
 use axum::Router;
 use axum::routing::{get, patch, post, put};
@@ -65,12 +65,16 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/conversations/{id}/changes", get(list_changes))
 }
 
+/// Channel names need not be unique. An `Idempotency-Key` makes a retry return the first channel
+/// instead of creating another; without one every request creates.
 async fn create_channel(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Actor(user_id): Actor,
+    headers: HeaderMap,
     Body(body): Body<CreateChannelRequest>,
 ) -> Result<Response, ApiError> {
+    let key = optional_idempotency_key(&headers)?;
     let channel = conversation::create_channel(
         &state.pool,
         user_id,
@@ -80,6 +84,7 @@ async fn create_channel(
         &body.visibility,
         body.team_id,
         body.project_id,
+        key.as_deref(),
     )
     .await?;
     Ok((StatusCode::CREATED, Json(channel)).into_response())

@@ -1,0 +1,35 @@
+PATCH	/v1/channels/{id}	tool	channel_update + channel_set_visibility
+POST	/v1/channels/{id}/join	tool	channel_join
+POST	/v1/channels/{id}/manager-recovery	web	web: channel manager recovery needs a recent sign-in (recover_channel_manager)
+GET	/v1/channels/{id}/members	tool	channel_members_list
+PUT	/v1/channels/{id}/members/{user_id}	tool	channel_member_add
+PATCH	/v1/channels/{id}/members/{user_id}	tool	channel_member_set_role
+DELETE	/v1/channels/{id}/members/{user_id}	tool	channel_leave (self) / channel_member_remove (other)
+PUT	/v1/channels/{id}/mute	other	personal domain (channel mute)
+DELETE	/v1/channels/{id}/mute	other	personal domain (channel mute)
+GET	/v1/channels/{id}/webhooks	other	admin domain (webhook list)
+POST	/v1/channels/{id}/webhooks	web	web: webhook creation needs a recent sign-in (create_webhook)
+GET	/v1/conversations/{id}	tool	conversation_get
+GET	/v1/conversations/{id}/changes	tool	conversation_changes_list
+POST	/v1/conversations/{id}/manual-unread	tool	conversation_mark_unread
+GET	/v1/conversations/{id}/messages	tool	message_list
+POST	/v1/conversations/{id}/messages	tool	message_send
+GET	/v1/conversations/{id}/read	tool	conversation_read_state
+POST	/v1/conversations/{id}/read	tool	conversation_mark_read
+PATCH	/v1/messages/{id}	tool	message_edit
+DELETE	/v1/messages/{id}	tool	message_delete
+GET	/v1/messages/{id}/history	tool	message_history
+PUT	/v1/messages/{id}/reactions	tool	message_react
+DELETE	/v1/messages/{id}/reactions	tool	message_unreact
+GET	/v1/messages/{id}/subscription	other	personal domain (message subscription)
+PUT	/v1/messages/{id}/subscription	other	personal domain (message subscription)
+DELETE	/v1/messages/{id}/subscription	other	personal domain (message subscription)
+GET	/v1/messages/{id}/thread	tool	thread_messages_list
+POST	/v1/threads/{rootId}/manual-unread	tool	thread_mark_unread
+GET	/v1/threads/{rootId}/read	tool	thread_read_state
+POST	/v1/threads/{rootId}/read	tool	thread_mark_read
+POST	/v1/workspaces/{id}/channels	tool	channel_create
+POST	/v1/workspaces/{id}/dms	tool	dm_create
+GET	/v1/ws	excluded	WebSocket; use conversation_changes_list to follow a conversation
+GET	/v1/ws/projects/{id}	excluded	WebSocket; use conversation_changes_list to follow a conversation
+GET	/v1/ws/user	excluded	WebSocket; use conversation_changes_list to follow a conversation

@@ -68,7 +68,7 @@ pub(super) async fn save_snapshot(
     sqlx::query(
         "INSERT INTO penfii.ticket_revisions(ticket_id,revision_no,actor_kind,actor_user_id,initiated_by_user_id,command_id,snapshot_schema_version,snapshot,security_context,restore_source_revision_no,restore_metadata)
          VALUES($1,$2,'USER',$3,$3,$4,1,$5,jsonb_build_object('projectId',$6::text,'channelId',$7::text),$8,$9)",
-    ).bind(ticket.id).bind(ticket.revision_no).bind(actor_id).bind(command_id).bind(snapshot)
+    ).bind(ticket.id).bind(ticket.revision_no).bind(actor_id).bind(crate::origin::command_id(command_id)).bind(snapshot)
      .bind(ticket.project_id).bind(ticket.channel_id).bind(restore_source).bind(restore_metadata).execute(&mut *conn).await?;
     Ok(())
 }
@@ -196,7 +196,7 @@ pub(crate) async fn record_change(
         "INSERT INTO penfii.activity_entries(id,workspace_id,origin_project_id,origin_channel_id,ticket_id,ticket_revision_no,actor_kind,actor_user_id,command_id,activity_kind,data,security_context)
          VALUES($1,$2,$3,$4,$5,$6,'USER',$7,$8,$9,$10,jsonb_build_object('projectId',$3::text,'channelId',$4::text))",
     ).bind(Uuid::new_v4()).bind(ticket.workspace_id).bind(ticket.project_id).bind(ticket.channel_id)
-     .bind(ticket.id).bind(ticket.revision_no).bind(actor_id).bind(command_id).bind(kind).bind(facts.clone())
+     .bind(ticket.id).bind(ticket.revision_no).bind(actor_id).bind(crate::origin::command_id(command_id)).bind(kind).bind(facts.clone())
      .execute(&mut *conn).await?;
     let facts = with_before_after(conn, ticket, kind, facts).await?;
     let event_id = crate::events::emit(

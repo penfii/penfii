@@ -100,7 +100,7 @@ pub async fn create_comment(
     sqlx::query(
         "INSERT INTO penfii.activity_entries(id,workspace_id,origin_project_id,origin_channel_id,ticket_id,actor_kind,actor_user_id,command_id,activity_kind,data,security_context)
          VALUES($1,$2,$3,$4,$5,'USER',$6,$7,'ticket.commented',$8,jsonb_build_object('projectId',$3::text,'channelId',$4::text))",
-    ).bind(Uuid::new_v4()).bind(workspace).bind(project).bind(channel).bind(ticket_id).bind(actor_id).bind(Uuid::new_v4()).bind(json!({"commentId":id}))
+    ).bind(Uuid::new_v4()).bind(workspace).bind(project).bind(channel).bind(ticket_id).bind(actor_id).bind(crate::origin::command_id(Uuid::new_v4())).bind(json!({"commentId":id}))
      .execute(&mut *tx).await?;
     crate::events::emit(&mut tx, crate::events::NewEvent {
         workspace_id: workspace, target_kind: "TICKET", target_id: ticket_id, target_version: None,

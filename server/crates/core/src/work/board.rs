@@ -50,6 +50,7 @@ pub async fn board(
     });
     attach_labels_batch(&mut tx, &mut tickets).await?;
     planning::attach_planning(&mut tx, &mut tickets, actor_id).await?;
+    super::attach_planned_ends(&mut tx, &mut tickets).await?;
     // Child counts come from the tickets this viewer can already see.
     let categories: HashMap<Uuid, &str> =
         states.iter().map(|s| (s.id, s.category.as_str())).collect();

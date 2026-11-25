@@ -19,13 +19,13 @@ use uuid::Uuid;
 
 use crate::common::{self, OWNER_EMAIL, OWNER_PASSWORD, Reply, limits, send, sign_in as login};
 
-const PUBLIC: &str = "https://penfii.test";
-const CLIENT: &str = "https://client.example/oauth/client.json";
-const CALLBACK: &str = "https://client.example/callback";
-const VERIFIER: &str = "a-test-code-verifier-that-is-long-enough-0123456789";
+pub(crate) const PUBLIC: &str = "https://penfii.test";
+pub(crate) const CLIENT: &str = "https://client.example/oauth/client.json";
+pub(crate) const CALLBACK: &str = "https://client.example/callback";
+pub(crate) const VERIFIER: &str = "a-test-code-verifier-that-is-long-enough-0123456789";
 
 #[derive(Default, Clone)]
-struct FakeClients(Arc<Mutex<HashMap<String, Value>>>);
+pub(crate) struct FakeClients(Arc<Mutex<HashMap<String, Value>>>);
 
 impl ClientFetcher for FakeClients {
     fn fetch(&self, url: &str) -> BoxFuture<'_, Result<(Value, i64), CoreError>> {
@@ -38,7 +38,7 @@ impl ClientFetcher for FakeClients {
     }
 }
 
-async fn api(
+pub(crate) async fn api(
     app: &axum::Router,
     method: &str,
     path: &str,
@@ -49,7 +49,7 @@ async fn api(
 }
 
 /// No CSRF header, no cookie: how real OAuth clients call.
-async fn get_plain(app: &axum::Router, path: &str) -> Reply {
+pub(crate) async fn get_plain(app: &axum::Router, path: &str) -> Reply {
     send(
         app,
         Request::builder().uri(path).body(Body::empty()).unwrap(),
@@ -57,7 +57,7 @@ async fn get_plain(app: &axum::Router, path: &str) -> Reply {
     .await
 }
 
-async fn form(app: &axum::Router, path: &str, pairs: &[(&str, &str)]) -> Reply {
+pub(crate) async fn form(app: &axum::Router, path: &str, pairs: &[(&str, &str)]) -> Reply {
     let body = url::form_urlencoded::Serializer::new(String::new())
         .extend_pairs(pairs)
         .finish();
@@ -73,22 +73,30 @@ async fn form(app: &axum::Router, path: &str, pairs: &[(&str, &str)]) -> Reply {
     .await
 }
 
-fn challenge_of(verifier: &str) -> String {
+pub(crate) fn challenge_of(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
 
-struct Env {
-    pool: PgPool,
-    app: axum::Router,
-    clients: FakeClients,
-    owner_cookie: String,
-    owner_id: Uuid,
-    workspace_id: Uuid,
-    outsider_cookie: String,
-    changes: tokio::sync::broadcast::Sender<penfii_core::ChangeNotice>,
+pub(crate) struct Env {
+    pub(crate) pool: PgPool,
+    pub(crate) app: axum::Router,
+    pub(crate) clients: FakeClients,
+    pub(crate) owner_cookie: String,
+    pub(crate) owner_id: Uuid,
+    pub(crate) workspace_id: Uuid,
+    pub(crate) outsider_cookie: String,
+    pub(crate) changes: tokio::sync::broadcast::Sender<penfii_core::ChangeNotice>,
 }
 
-async fn setup(pool: PgPool) -> Env {
+pub(crate) async fn setup(pool: PgPool) -> Env {
+    setup_with(pool, |_| {}).await
+}
+
+/// `setup` with a change to the router configuration (object storage, mail, ...).
+pub(crate) async fn setup_with(
+    pool: PgPool,
+    tweak: impl FnOnce(&mut penfii_http_api::RouterConfig),
+) -> Env {
     let owner = common::setup(&pool).await;
     crate::common::migrate(&pool).await;
     identity::create_account(
@@ -114,11 +122,13 @@ async fn setup(pool: PgPool) -> Env {
     let mut config = OAuthConfig::new(PUBLIC, Arc::new(clients.clone())).unwrap();
     config.dcr_enabled = true;
     config.allowed_origins = vec!["https://console.penfii.test".into()];
-    let app = penfii_http_api::router_from(penfii_http_api::RouterConfig {
+    let mut router_config = penfii_http_api::RouterConfig {
         changes: Some(changes.clone()),
         oauth: Some(config),
         ..penfii_http_api::RouterConfig::new(pool.clone(), limits(), false)
-    });
+    };
+    tweak(&mut router_config);
+    let app = penfii_http_api::router_from(router_config);
     let owner_cookie = login(&app, OWNER_EMAIL, OWNER_PASSWORD).await;
     let outsider_cookie = login(&app, "outsider@penfii.test", "outsider-test-passphrase").await;
     Env {
@@ -133,7 +143,7 @@ async fn setup(pool: PgPool) -> Env {
     }
 }
 
-fn authorize_path(
+pub(crate) fn authorize_path(
     client: &str,
     redirect: &str,
     scope: &str,
@@ -155,14 +165,14 @@ fn authorize_path(
     format!("/oauth/authorize?{query}")
 }
 
-fn request_id(location: &str) -> String {
+pub(crate) fn request_id(location: &str) -> String {
     location
         .strip_prefix("/consent?request=")
         .unwrap()
         .to_string()
 }
 
-fn query_of(location: &str) -> HashMap<String, String> {
+pub(crate) fn query_of(location: &str) -> HashMap<String, String> {
     url::Url::parse(location)
         .unwrap()
         .query_pairs()
@@ -171,7 +181,7 @@ fn query_of(location: &str) -> HashMap<String, String> {
 }
 
 /// Authorize + consent; returns the authorization code.
-async fn get_code(env: &Env, cookie: &str, scope: &str, approve: &[&str]) -> String {
+pub(crate) async fn get_code(env: &Env, cookie: &str, scope: &str, approve: &[&str]) -> String {
     let start = get_plain(
         &env.app,
         &authorize_path(CLIENT, CALLBACK, scope, &challenge_of(VERIFIER), "st-1"),
@@ -194,7 +204,7 @@ async fn get_code(env: &Env, cookie: &str, scope: &str, approve: &[&str]) -> Str
     back["code"].clone()
 }
 
-async fn exchange(env: &Env, code: &str) -> Reply {
+pub(crate) async fn exchange(env: &Env, code: &str) -> Reply {
     form(
         &env.app,
         "/oauth/token",
@@ -209,7 +219,7 @@ async fn exchange(env: &Env, code: &str) -> Reply {
     .await
 }
 
-async fn token_pair(env: &Env, scope: &str, approve: &[&str]) -> (String, String) {
+pub(crate) async fn token_pair(env: &Env, scope: &str, approve: &[&str]) -> (String, String) {
     let code = get_code(env, &env.owner_cookie, scope, approve).await;
     let reply = exchange(env, &code).await;
     assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
@@ -219,7 +229,7 @@ async fn token_pair(env: &Env, scope: &str, approve: &[&str]) -> (String, String
     )
 }
 
-async fn mcp(
+pub(crate) async fn mcp(
     app: &axum::Router,
     token: Option<&str>,
     headers: &[(&str, &str)],
@@ -239,13 +249,18 @@ async fn mcp(
     send(app, builder.body(Body::from(body.to_string())).unwrap()).await
 }
 
-fn modern_meta() -> Value {
+pub(crate) fn modern_meta() -> Value {
     json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28",
            "io.modelcontextprotocol/clientInfo": {"name": "t", "version": "1"},
            "io.modelcontextprotocol/clientCapabilities": {}})
 }
 
-async fn modern_call(app: &axum::Router, token: &str, tool: &str, arguments: Value) -> Reply {
+pub(crate) async fn modern_call(
+    app: &axum::Router,
+    token: &str,
+    tool: &str,
+    arguments: Value,
+) -> Reply {
     mcp(
         app,
         Some(token),
@@ -260,7 +275,7 @@ async fn modern_call(app: &axum::Router, token: &str, tool: &str, arguments: Val
     .await
 }
 
-async fn modern_list(app: &axum::Router, token: &str) -> Reply {
+pub(crate) async fn modern_list(app: &axum::Router, token: &str) -> Reply {
     mcp(
         app,
         Some(token),
@@ -270,7 +285,7 @@ async fn modern_list(app: &axum::Router, token: &str) -> Reply {
     .await
 }
 
-fn tool_names(reply: &Reply) -> Vec<String> {
+pub(crate) fn tool_names(reply: &Reply) -> Vec<String> {
     reply.body["result"]["tools"]
         .as_array()
         .unwrap()
@@ -279,14 +294,40 @@ fn tool_names(reply: &Reply) -> Vec<String> {
         .collect()
 }
 
-const ALL_SCOPES: &[&str] = &[
+/// The tools of the first release. Later tools appear in `tools/list` too; the tests that pin the
+/// exact first-release list for a token look at these only.
+pub(crate) const FIRST_RELEASE_TOOLS: &[&str] = &[
+    "workspace_list",
+    "workspace_overview",
+    "member_search",
+    "search",
+    "ticket_get",
+    "ticket_comments_list",
+    "project_workflow",
+    "ticket_create",
+    "ticket_update",
+    "ticket_change_status",
+    "ticket_comment",
+    "project_create",
+    "workflow_state_delete",
+];
+
+pub(crate) fn first_release_tool_names(reply: &Reply) -> Vec<String> {
+    tool_names(reply)
+        .into_iter()
+        .filter(|name| FIRST_RELEASE_TOOLS.contains(&name.as_str()))
+        .collect()
+}
+
+pub(crate) const ALL_SCOPES: &[&str] = &[
     "workspace:read",
     "member:read",
     "search:read",
     "ticket:read",
     "ticket:write",
 ];
-const ALL_SCOPE_TEXT: &str = "workspace:read member:read search:read ticket:read ticket:write";
+pub(crate) const ALL_SCOPE_TEXT: &str =
+    "workspace:read member:read search:read ticket:read ticket:write";
 
 #[sqlx::test(migrator = "crate::common::GUARD")]
 async fn metadata_and_challenge_follow_the_adr(pool: PgPool) {
@@ -382,19 +423,21 @@ async fn full_flow_tokens_tools_refresh_and_revocation(pool: PgPool) {
     assert_eq!(listed.body["result"]["resultType"], "complete");
     assert_eq!(listed.body["result"]["cacheScope"], "private");
     assert_eq!(
-        tool_names(&listed),
+        first_release_tool_names(&listed),
         [
             "workspace_list",
             "workspace_overview",
             "member_search",
-            "search",
             "ticket_get",
             "ticket_comments_list",
             "project_workflow",
             "ticket_create",
             "ticket_update",
             "ticket_change_status",
-            "ticket_comment"
+            "ticket_comment",
+            // Not callable with this grant (project:write), listed so a client can ask for it.
+            "project_create",
+            "search"
         ]
     );
     let called = modern_call(&env.app, &access, "workspace_list", json!({})).await;
@@ -488,7 +531,7 @@ async fn full_flow_tokens_tools_refresh_and_revocation(pool: PgPool) {
         json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
     )
     .await;
-    assert_eq!(tool_names(&legacy_list).len(), 11);
+    assert_eq!(first_release_tool_names(&legacy_list).len(), 12);
     assert!(legacy_list.body["result"].get("resultType").is_none());
     let ping = mcp(
         &env.app,
@@ -960,11 +1003,23 @@ async fn scope_policy_and_authorization_are_checked_on_every_call(pool: PgPool) 
     let env = setup(pool).await;
     // A token with only workspace:read.
     let (narrow, _) = token_pair(&env, "workspace:read", &["workspace:read"]).await;
-    assert_eq!(
-        tool_names(&modern_list(&env.app, &narrow).await),
-        ["workspace_list", "workspace_overview"]
-    );
-    // Calling a tool that is not listed is still refused at call time: 403 + challenge.
+    // The scope does not hide a tool: what it lists is what the policy allows (here the standard
+    // one, so the destructive and administrative tools are not there).
+    let narrow_all = tool_names(&modern_list(&env.app, &narrow).await);
+    for listed in [
+        "workspace_list",
+        "doc_get",
+        "message_list",
+        "ticket_list",
+        "doc_save",
+        "message_send",
+        "invitation_create",
+        "project_create",
+    ] {
+        assert!(narrow_all.contains(&listed.to_string()), "{listed}");
+    }
+    assert!(!narrow_all.contains(&"workflow_state_delete".to_string()));
+    // Calling a listed tool without its scope is refused at call time: 403 + challenge.
     let denied = modern_call(
         &env.app,
         &narrow,
@@ -1521,12 +1576,12 @@ async fn client_metadata_documents_are_validated_and_dcr_is_public_only(pool: Pg
     assert_eq!(tokens.status, StatusCode::OK, "{:?}", tokens.body);
 }
 
-const CHATGPT: &str = "https://chatgpt.com/oauth/client.json";
-const CHATGPT_CALLBACK: &str = "https://chatgpt.com/connector_platform_oauth_redirect";
+pub(crate) const CHATGPT: &str = "https://chatgpt.com/oauth/client.json";
+pub(crate) const CHATGPT_CALLBACK: &str = "https://chatgpt.com/connector_platform_oauth_redirect";
 
 /// The document ChatGPT published (2026-11): a `private_key_jwt` preference, `none` among the
 /// supported methods, a JWKS URL and a JWT bearer grant this server does not offer.
-fn chatgpt_document() -> Value {
+pub(crate) fn chatgpt_document() -> Value {
     json!({
         "client_id": CHATGPT,
         "client_uri": "https://chatgpt.com/",
@@ -1543,7 +1598,7 @@ fn chatgpt_document() -> Value {
 }
 
 /// Authorize + approve `workspace:read` for any client; returns the code.
-async fn code_for(env: &Env, client: &str, redirect: &str) -> String {
+pub(crate) async fn code_for(env: &Env, client: &str, redirect: &str) -> String {
     let start = get_plain(
         &env.app,
         &authorize_path(
@@ -1577,7 +1632,7 @@ async fn code_for(env: &Env, client: &str, redirect: &str) -> String {
     back["code"].clone()
 }
 
-async fn token_with(
+pub(crate) async fn token_with(
     app: &axum::Router,
     pairs: &[(&str, &str)],
     authorization: Option<&str>,
@@ -1997,7 +2052,7 @@ async fn ticket_tools_match_the_routes_and_keep_project_access(pool: PgPool) {
     }
 }
 
-async fn rest(
+pub(crate) async fn rest(
     env: &Env,
     method: &str,
     path: &str,
@@ -2012,7 +2067,7 @@ async fn rest(
     .await
 }
 
-async fn token_for(env: &Env, cookie: &str, scope: &str) -> String {
+pub(crate) async fn token_for(env: &Env, cookie: &str, scope: &str) -> String {
     let scopes: Vec<&str> = scope.split(' ').collect();
     let code = get_code(env, cookie, scope, &scopes).await;
     exchange(env, &code).await.body["access_token"]
@@ -2021,7 +2076,56 @@ async fn token_for(env: &Env, cookie: &str, scope: &str) -> String {
         .to_string()
 }
 
-async fn add_member(env: &Env, email: &str, role: &str) -> String {
+/// A token for `scope` from another MCP client (`client_id` is its metadata document URL, `name` the
+/// name it shows), approved by the person signed in with `cookie`.
+pub(crate) async fn token_for_client(
+    env: &Env,
+    cookie: &str,
+    client_id: &str,
+    name: &str,
+    scope: &str,
+) -> String {
+    let callback = format!("{}/callback", client_id.rsplit_once('/').unwrap().0);
+    env.clients.0.lock().unwrap().insert(
+        client_id.into(),
+        json!({"client_id": client_id, "client_name": name, "redirect_uris": [callback],
+               "token_endpoint_auth_method": "none"}),
+    );
+    let start = get_plain(
+        &env.app,
+        &authorize_path(client_id, &callback, scope, &challenge_of(VERIFIER), "st-c"),
+    )
+    .await;
+    assert_eq!(start.status, StatusCode::FOUND, "{:?}", start.body);
+    let id = request_id(&start.location.unwrap());
+    let scopes: Vec<&str> = scope.split(' ').collect();
+    let decision = api(
+        &env.app,
+        "POST",
+        &format!("/v1/oauth/requests/{id}/decision"),
+        Some(cookie),
+        Some(json!({"approve": true, "scopes": scopes})),
+    )
+    .await;
+    assert_eq!(decision.status, StatusCode::OK, "{:?}", decision.body);
+    let code = query_of(decision.body["redirectTo"].as_str().unwrap())["code"].clone();
+    let reply = form(
+        &env.app,
+        "/oauth/token",
+        &[
+            ("grant_type", "authorization_code"),
+            ("code", &code),
+            ("redirect_uri", &callback),
+            ("client_id", client_id),
+            ("code_verifier", VERIFIER),
+        ],
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    reply.body["access_token"].as_str().unwrap().to_string()
+}
+
+pub(crate) async fn add_member(env: &Env, email: &str, role: &str) -> String {
     let account = identity::create_account(
         &env.pool,
         BootstrapInput {
@@ -2047,17 +2151,17 @@ async fn add_member(env: &Env, email: &str, role: &str) -> String {
     login(&env.app, email, "member-test-passphrase").await
 }
 
-fn structured(reply: &Reply) -> &Value {
+pub(crate) fn structured(reply: &Reply) -> &Value {
     &reply.body["result"]["structuredContent"]
 }
 
-fn error_code(reply: &Reply) -> &str {
+pub(crate) fn error_code(reply: &Reply) -> &str {
     reply.body["result"]["structuredContent"]["error"]["code"]
         .as_str()
         .unwrap_or("")
 }
 
-fn tool_destructive(reply: &Reply, name: &str) -> bool {
+pub(crate) fn tool_destructive(reply: &Reply, name: &str) -> bool {
     reply.body["result"]["tools"]
         .as_array()
         .unwrap()
@@ -2155,16 +2259,26 @@ async fn write_tools_are_ports_of_the_routes_with_the_same_effects_and_rules(poo
     .await
     .unwrap();
     assert_eq!(actor, Some(env.owner_id));
-    let logged: (String, Option<i64>, String) = sqlx::query_as(
-        "SELECT operation, resource_revision, outcome FROM penfii.mcp_call_log
-         WHERE operation = 'ticket.create' ORDER BY at LIMIT 1",
+    // The revision names the call that wrote it (its command id is the call's log row), and the
+    // log row names the Ticket but claims no revision of its own.
+    let logged: (String, Option<String>, Option<i64>, String) = sqlx::query_as(
+        "SELECT l.operation, l.resource_id, l.resource_revision, l.outcome
+         FROM penfii.mcp_call_log l JOIN penfii.ticket_revisions r ON r.command_id = l.id
+         WHERE r.ticket_id = $1 AND r.revision_no = $2",
     )
+    .bind(Uuid::parse_str(&ticket_id).unwrap())
+    .bind(revision)
     .fetch_one(&env.pool)
     .await
     .unwrap();
     assert_eq!(
         logged,
-        ("ticket.create".into(), Some(revision), "ok".into())
+        (
+            "ticket.create".into(),
+            Some(ticket_id.clone()),
+            None,
+            "ok".into()
+        )
     );
 
     let stale = modern_call(
@@ -2387,11 +2501,12 @@ async fn writes_follow_existing_roles_for_owner_admin_member_outsider_and_disabl
                 &env.app,
                 &owner_manage,
                 "project_create",
-                make("Denied by policy")
+                make("Created under the standard policy")
             )
             .await
         ),
-        "policy_denied"
+        "",
+        "creating a Project is routine management (Write): the standard policy allows it"
     );
     let allow_admin = json!({"mcpEnabled": true, "allowWrite": true, "allowDestructive": false, "allowAdministrative": true});
     let policy_path = format!("/v1/workspaces/{}/mcp-policy", env.workspace_id);
@@ -2441,7 +2556,7 @@ async fn writes_follow_existing_roles_for_owner_admin_member_outsider_and_disabl
         web_member.status.is_success(),
         mcp_member.body["result"]["isError"] == false
     );
-    // Core lets any Workspace member create a Project, so MCP does too once policy allows it.
+    // Core lets only an owner or admin create a Project; MCP gives the same answer as the web route.
     assert_eq!(
         web_member.status.is_success(),
         error_code(&mcp_member).is_empty()
@@ -2754,7 +2869,7 @@ async fn default_consent_is_read_only_and_writes_need_an_explicit_request_and_ti
         .as_str()
         .unwrap()
         .to_string();
-    assert!(!tool_names(&modern_list(&env.app, &token).await).contains(&"ticket_create".into()));
+    assert!(tool_names(&modern_list(&env.app, &token).await).contains(&"ticket_create".into()));
     let denied = modern_call(
         &env.app,
         &token,
@@ -2766,7 +2881,7 @@ async fn default_consent_is_read_only_and_writes_need_an_explicit_request_and_ti
     let upgrade = denied.header("www-authenticate").unwrap();
     assert!(upgrade.contains("insufficient_scope"), "{upgrade}");
     assert!(
-        upgrade.contains("workspace:read ticket:read ticket:write"),
+        upgrade.contains("scope=\"ticket:write workspace:read ticket:read\""),
         "{upgrade}"
     );
 }
@@ -2954,9 +3069,16 @@ async fn activity_and_revisions_show_which_client_made_a_change_and_audit_covers
 
     // Audit: grants are recorded, and administrative calls are recorded whether they run or not.
     let manage = token_for(&env, &env.owner_cookie, "workspace:read project:manage").await;
-    let args = json!({"workspaceId": env.workspace_id, "name": "Audited"});
+    // Giving someone a Project role is Administrative: off under the standard policy.
+    add_member(&env, "grantee@penfii.test", "MEMBER").await;
+    let grantee: Uuid =
+        sqlx::query_scalar("SELECT id FROM penfii.users WHERE email_key = 'grantee@penfii.test'")
+            .fetch_one(&env.pool)
+            .await
+            .unwrap();
+    let args = json!({"projectId": project_id, "userId": grantee, "role": "VIEWER"});
     assert_eq!(
-        error_code(&modern_call(&env.app, &manage, "project_create", args.clone()).await),
+        error_code(&modern_call(&env.app, &manage, "project_grant_set", args.clone()).await),
         "policy_denied"
     );
     let allow = json!({"mcpEnabled": true, "allowWrite": true, "allowDestructive": false, "allowAdministrative": true});
@@ -2970,7 +3092,7 @@ async fn activity_and_revisions_show_which_client_made_a_change_and_audit_covers
     )
     .await;
     assert!(put.status.is_success(), "{:?}", put.body);
-    let ok = modern_call(&env.app, &manage, "project_create", args).await;
+    let ok = modern_call(&env.app, &manage, "project_grant_set", args).await;
     assert_eq!(ok.body["result"]["isError"], false, "{:?}", ok.body);
     let audits: Vec<(String, String)> = sqlx::query_as(
         "SELECT action_code, outcome_code FROM penfii.audit_entries
@@ -2980,11 +3102,11 @@ async fn activity_and_revisions_show_which_client_made_a_change_and_audit_covers
     .await
     .unwrap();
     assert!(
-        audits.contains(&("mcp.project_create".into(), "POLICY_DENIED".into())),
+        audits.contains(&("mcp.project_grant_set".into(), "POLICY_DENIED".into())),
         "{audits:?}"
     );
     assert!(
-        audits.contains(&("mcp.project_create".into(), "OK".into())),
+        audits.contains(&("mcp.project_grant_set".into(), "OK".into())),
         "{audits:?}"
     );
     assert!(
@@ -3269,32 +3391,33 @@ async fn an_agent_can_finish_ticket_work_with_only_what_the_tools_tell_it(pool: 
     )
     .await;
     assert_eq!(wrong.body["result"]["isError"], true);
-    // A read-only connection gets no write tools, and still gets project_workflow.
+    // A read-only connection discovers the write tools too (calling one is refused), and has
+    // project_workflow.
     let reader = token_for(&env, &env.owner_cookie, "workspace:read ticket:read").await;
     let names = tool_names(&modern_list(&env.app, &reader).await);
     assert!(names.contains(&"project_workflow".to_string()));
-    assert!(!names.contains(&"ticket_change_status".to_string()));
+    assert!(names.contains(&"ticket_change_status".to_string()));
 }
 
 // ---- FEA-139: what ends which access --------------------------------------------------------------
 
 /// A second device of the owner: its cookie.
-async fn second_device(env: &Env) -> String {
+pub(crate) async fn second_device(env: &Env) -> String {
     login(&env.app, OWNER_EMAIL, OWNER_PASSWORD).await
 }
 
-async fn web_alive(env: &Env, cookie: &str) -> bool {
+pub(crate) async fn web_alive(env: &Env, cookie: &str) -> bool {
     api(&env.app, "GET", "/v1/me", Some(cookie), None)
         .await
         .status
         == StatusCode::OK
 }
 
-async fn mcp_alive(env: &Env, token: &str) -> bool {
+pub(crate) async fn mcp_alive(env: &Env, token: &str) -> bool {
     modern_list(&env.app, token).await.status == StatusCode::OK
 }
 
-async fn live_grants(env: &Env) -> i64 {
+pub(crate) async fn live_grants(env: &Env) -> i64 {
     sqlx::query_scalar("SELECT count(*) FROM penfii.oauth_grants WHERE revoked_at IS NULL")
         .fetch_one(&env.pool)
         .await

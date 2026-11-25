@@ -173,6 +173,15 @@ pub fn idempotency_key(headers: &HeaderMap) -> Result<String, ApiError> {
     Ok(value.to_string())
 }
 
+/// An `Idempotency-Key` a route accepts but does not require: absent is `None`, present must be valid.
+pub fn optional_idempotency_key(headers: &HeaderMap) -> Result<Option<String>, ApiError> {
+    if headers.contains_key("idempotency-key") {
+        idempotency_key(headers).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
 /// The cookie that ties an external sign-in attempt to the browser that started it. It is only sent to
 /// the sign-in endpoints (`Path=/v1/auth`), lives as long as the attempt, and is `Lax` so that the
 /// provider's redirect back (a top-level GET) carries it.

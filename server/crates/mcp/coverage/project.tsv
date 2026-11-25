@@ -1,0 +1,41 @@
+DELETE	/v1/pins/{id}	tool	project_pin_remove
+PATCH	/v1/projects/{id}	tool	project_update
+GET	/v1/projects/{id}/activity	other	plan domain (FEA-168, project activity)
+POST	/v1/projects/{id}/admin-recovery	web	RecentActor; Workspace settings > Recovery
+GET	/v1/projects/{id}/archive	other	admin domain (FEA-171, archive list)
+GET	/v1/projects/{id}/board	other	plan domain (FEA-168, board); ticket_list covers the plain list
+GET	/v1/projects/{id}/calendar	tool	project_calendar_get
+PUT	/v1/projects/{id}/calendar	tool	project_calendar_put
+DELETE	/v1/projects/{id}/grants/{user_id}	tool	project_grant_remove
+PUT	/v1/projects/{id}/grants/{user_id}	tool	project_grant_set
+GET	/v1/projects/{id}/labels	tool	label_list
+POST	/v1/projects/{id}/labels	tool	label_create
+GET	/v1/projects/{id}/members	tool	project_members_list
+PUT	/v1/projects/{id}/members/{user_id}/designation	tool	project_designation_set
+POST	/v1/projects/{id}/milestones	other	plan domain (FEA-167)
+GET	/v1/projects/{id}/permissions	tool	project_permissions_get
+GET	/v1/projects/{id}/pins	tool	project_pins_list
+POST	/v1/projects/{id}/pins	tool	project_pin_add
+GET	/v1/projects/{id}/planning	other	plan domain (FEA-168)
+GET	/v1/projects/{id}/private-channels	tool	project_private_channels_list
+GET	/v1/projects/{id}/schedule	other	plan domain (FEA-168)
+POST	/v1/projects/{id}/sprints	other	plan domain (FEA-167)
+GET	/v1/projects/{id}/status-summary	other	plan domain (FEA-168)
+DELETE	/v1/projects/{id}/subscription	other	personal domain (FEA-170)
+GET	/v1/projects/{id}/subscription	other	personal domain (FEA-170)
+PUT	/v1/projects/{id}/subscription	other	personal domain (FEA-170)
+DELETE	/v1/projects/{id}/teams/{team_id}	tool	project_team_unlink
+PUT	/v1/projects/{id}/teams/{team_id}	tool	project_team_link
+GET	/v1/projects/{id}/teams/{team_id}/members	tool	project_team_members_list
+PUT	/v1/projects/{id}/teams/{team_id}/participation	tool	project_team_participation_set
+GET	/v1/projects/{id}/ticket-types	tool	project_ticket_types
+GET	/v1/projects/{id}/trash	other	admin domain (FEA-171, trash list)
+GET	/v1/projects/{id}/velocity	other	plan domain (FEA-168)
+GET	/v1/projects/{id}/views	other	plan domain (FEA-168)
+POST	/v1/projects/{id}/views	other	plan domain (FEA-168)
+GET	/v1/projects/{id}/workflow	tool	project_workflow
+POST	/v1/projects/{id}/workflow/states	tool	workflow_state_create
+DELETE	/v1/projects/{id}/workflow/states/{state_id}	tool	workflow_state_delete
+PATCH	/v1/projects/{id}/workflow/states/{state_id}	tool	workflow_state_update
+GET	/v1/workspaces/{id}/project-prefix	tool	project_prefix_check
+POST	/v1/workspaces/{id}/projects	tool	project_create

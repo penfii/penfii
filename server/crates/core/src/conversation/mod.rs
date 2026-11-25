@@ -43,6 +43,15 @@ pub(crate) struct ChannelRow {
     role: Option<String>,
 }
 
+/// Creates a channel; the creator becomes its manager. A channel is known by its id: its name is a
+/// label, and another channel may carry the same one, in the same place or elsewhere (so a name
+/// says nothing about channels the creator cannot see).
+///
+/// What keeps a retry from making a second channel is the idempotency key, not the name: the same
+/// key with the same request returns the channel the first request made, the same key with a
+/// different request is refused (`idempotency_conflict`), and a request without a key always
+/// creates. The key is the creator's own (per person and Workspace), and the permission checks run
+/// again before a stored result is returned.
 #[allow(clippy::too_many_arguments)]
 pub async fn create_channel(
     pool: &PgPool,
@@ -53,6 +62,7 @@ pub async fn create_channel(
     visibility: &str,
     team_id: Option<Uuid>,
     project_id: Option<Uuid>,
+    idempotency_key: Option<&str>,
 ) -> Result<Channel, CoreError> {
     let name = require_label(name, "name")?;
     let description = match description.map(str::trim).filter(|value| !value.is_empty()) {
@@ -130,6 +140,24 @@ pub async fn create_channel(
     } else if !workspace_admin {
         return Err(CoreError::forbidden("workspace owner or admin required"));
     }
+    let request = serde_json::json!({
+        "name": name, "description": description, "visibility": visibility,
+        "teamId": team_id, "projectId": project_id,
+    });
+    if let Some(key) = idempotency_key
+        && let Some(channel) = crate::platform::replay::<Channel>(
+            &mut tx,
+            workspace_id,
+            actor_id,
+            key,
+            "channel.create",
+            &request,
+        )
+        .await?
+    {
+        tx.commit().await?;
+        return Ok(channel);
+    }
     let channel = insert_channel(
         &mut tx,
         actor_id,
@@ -141,6 +169,9 @@ pub async fn create_channel(
         project_id,
     )
     .await?;
+    if let Some(key) = idempotency_key {
+        crate::platform::finish(&mut tx, workspace_id, actor_id, key, 201, &channel).await?;
+    }
     tx.commit().await?;
     Ok(channel)
 }

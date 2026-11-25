@@ -1570,6 +1570,8 @@ export interface paths {
                 header: {
                     /** @description Required on every mutation. Missing yields 403 csrf. */
                     "X-Penfii-Client": components["parameters"]["Client"];
+                    /** @description Channel names are not unique. With a key, a retry of the same request returns the channel the first one created (201) and the same key with a different request is refused (409 idempotency_conflict); without one every request creates a channel. */
+                    "Idempotency-Key"?: string;
                 };
                 path: {
                     id: string;
@@ -1611,6 +1613,15 @@ export interface paths {
                 };
                 /** @description not_found */
                 404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description idempotency_conflict (the Idempotency-Key was used with a different request) */
+                409: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -8443,6 +8454,8 @@ export interface components {
             targetLabel?: string | null;
             /** @description The person the entry is about when the target is a Team or Project */
             subjectLabel?: string | null;
+            /** @description The MCP client the actor used, when the action came through MCP (data has via=mcp, grantId, clientPk and mcpCallId); null for the web app */
+            via?: string | null;
         };
         AuditPage: {
             items: components["schemas"]["AuditRecord"][];

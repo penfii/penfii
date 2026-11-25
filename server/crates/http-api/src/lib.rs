@@ -204,6 +204,13 @@ pub fn router_from(config: RouterConfig) -> Router {
             config,
             search.clone(),
             changes.clone(),
+            penfii_mcp::Services {
+                knowledge: knowledge.clone(),
+                collab: collab.clone(),
+                objects: objects.clone(),
+                limits: limits.clone(),
+                mailer: mailer.clone(),
+            },
         ))
     });
     let upload_budget = routes::files::upload_budget(&limits, upload_budget_bytes);

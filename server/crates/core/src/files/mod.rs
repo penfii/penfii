@@ -64,6 +64,12 @@ impl UploadBody {
     }
 }
 
+impl From<Vec<u8>> for UploadBody {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self::from(bytes::Bytes::from(bytes))
+    }
+}
+
 impl From<bytes::Bytes> for UploadBody {
     fn from(bytes: bytes::Bytes) -> Self {
         Self::from_chunks(vec![bytes])

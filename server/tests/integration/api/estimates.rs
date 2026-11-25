@@ -782,7 +782,7 @@ async fn a_schedule_is_a_ticket_field_and_its_end_is_derived_from_the_current_ca
     let (_, read) = get_as(world, &owner, &format!("/v1/tickets/{id}")).await;
     assert_eq!(read["schedule"]["plannedEndAt"], "2026-11-04T01:00:00Z");
     assert_eq!(read["revisionNo"], revision_before);
-    // A list leaves the derived end empty.
+    // A list gives the same derived end as the Ticket read on its own.
     let board = board_json(world, &project_id).await;
     let in_board = board["columns"]
         .as_array()
@@ -792,7 +792,7 @@ async fn a_schedule_is_a_ticket_field_and_its_end_is_derived_from_the_current_ca
         .find(|t| t["id"] == id.as_str())
         .unwrap();
     assert_eq!(in_board["schedule"]["durationMinutes"], 600);
-    assert!(in_board["schedule"]["plannedEndAt"].is_null());
+    assert_eq!(in_board["schedule"]["plannedEndAt"], "2026-11-04T01:00:00Z");
 
     // Starting on a Friday afternoon, over the weekend; a holiday on Monday pushes it again.
     let (s, v) = patch_as(world, &owner, &format!("/v1/tickets/{id}"), "p71s-r2", json!({"expectedRevision":1,"schedule":{"plannedStartAt":"2026-11-06T06:00:00Z","durationMinutes":240}})).await;

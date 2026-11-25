@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
-use crate::extract::{Actor, Body, Q, RecentActor};
+use crate::extract::{Actor, Body, Q, RecentActor, Session};
 
 use axum::Router;
 use axum::routing::{delete, get, patch, post, put};
@@ -128,10 +128,11 @@ struct RoleBody {
 async fn change_member_role(
     State(state): State<AppState>,
     Path((id, target)): Path<(Uuid, Uuid)>,
-    Actor(user_id): Actor,
+    Session(session): Session,
     Body(body): Body<RoleBody>,
 ) -> Result<Response, ApiError> {
-    admin::change_member_role(&state.pool, user_id, id, target, &body.role).await?;
+    // OWNER/ADMIN changes ask for a recent sign-in inside Core (`reauth_required`).
+    admin::change_member_role(&state.pool, &session, id, target, &body.role).await?;
     Ok(no_content())
 }
 

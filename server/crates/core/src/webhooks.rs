@@ -853,20 +853,22 @@ struct Audit<'a> {
 async fn audit(conn: &mut PgConnection, event: Audit<'_>) -> Result<(), CoreError> {
     sqlx::query(
         "INSERT INTO penfii.audit_entries
-            (id, workspace_id, actor_user_id, action_code, outcome_code, target_kind, target_id, data)
-         VALUES ($1, $2, $3, $4, 'OK', 'WEBHOOK', $5, $6)",
+            (id, workspace_id, actor_user_id, action_code, outcome_code, target_kind, target_id,
+             command_id, data)
+         VALUES ($1, $2, $3, $4, 'OK', 'WEBHOOK', $5, $6, $7)",
     )
     .bind(Uuid::new_v4())
     .bind(event.workspace_id)
     .bind(event.actor_id)
     .bind(event.action)
     .bind(event.webhook_id)
-    .bind(json!({
+    .bind(crate::origin::command_id(Uuid::new_v4()))
+    .bind(crate::origin::audit_data(json!({
         "channelId": event.channel_id,
         "authMode": event.auth_mode,
         "actorId": event.integration_actor,
         "actorCanRead": event.actor_can_read,
-    }))
+    })))
     .execute(&mut *conn)
     .await?;
     Ok(())
