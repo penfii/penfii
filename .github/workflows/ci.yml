@@ -138,6 +138,15 @@ jobs:
         run: docker compose --env-file docker/.env.example -f docker/compose.yaml config --quiet
       - name: Images
         run: docker compose --env-file docker/.env.example -f docker/compose.yaml build
+      # The release ZIP's compose.yaml (docker/install) is valid and equals docker/compose.yaml except for the images;
+      # the ZIP builds, and builds to the same bytes twice. Nothing is published (.github/workflows/release.yml does that).
+      - name: Install package
+        run: |
+          docker compose --env-file docker/.env.example -f docker/install/compose.yaml config --quiet
+          docker/release/check-install-compose.py
+          docker/release/package.sh 0.0.0 "$RUNNER_TEMP/zip1"
+          docker/release/package.sh 0.0.0 "$RUNNER_TEMP/zip2"
+          cmp "$RUNNER_TEMP/zip1/penfii-v0.0.0-docker.zip" "$RUNNER_TEMP/zip2/penfii-v0.0.0-docker.zip"
 
   # Secrets in the whole history of the branch.
   gitleaks:

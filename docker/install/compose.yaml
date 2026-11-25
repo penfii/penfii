@@ -1,0 +1,272 @@
+# Penfii official Docker install (the compose.yaml of the release ZIP): the same stack as the repository's
+# docker/compose.yaml, with prebuilt images from the GitHub Container Registry instead of a build from source.
+# No source checkout, Rust or Node is needed.
+#
+#   cp .env.example .env     # then edit it
+#   docker compose pull
+#   docker compose up -d
+#   docker compose run --rm admin-cli bootstrap --email ... --display-name ... \
+#       --workspace-name ... --time-zone ...   # asks for the password (--password-stdin in a script)
+#
+# The images of a release are pinned by tag: the release ZIP's copy of this file carries its own version as the
+# default of PENFII_VERSION, so a file and its images always belong together. PENFII_IMAGE_PREFIX only changes
+# where they are pulled from (a mirror or a private registry); it does not change what they are.
+#
+# The database schema is applied by the one-shot `db-setup` service (with the schema owner's credential) before
+# core-api starts, and core-api itself only holds a runtime role that cannot change the schema.
+#
+# Least privilege: containers drop every Linux capability they do not need and cannot gain new ones;
+# core-api and web run as non-root users on a read-only root file system. Two networks keep the services
+# apart: `frontend` (web and core-api only) and `data` (internal: no route to the outside) for PostgreSQL,
+# OpenSearch and MinIO, which only core-api and the one-shot jobs reach.
+#
+# docker/install/compose.yaml in the repository is the source of this file; docker/release/check-install-compose.py
+# keeps it equal to docker/compose.yaml except for the images.
+name: penfii
+
+services:
+  postgres:
+    image: postgres:17.11-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: penfii
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: penfii
+    # Not published on the host: only the other services reach it. For psql, use
+    # `docker compose exec postgres psql -U penfii penfii` (docs/development.md has a local-only override).
+    volumes:
+      - penfii-pg:/var/lib/postgresql/data
+    networks: [data]
+    security_opt: ["no-new-privileges:true"]
+    # The image starts as root, fixes the volume's ownership and drops to the postgres user.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U penfii -d penfii"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # One-shot database setup, run on every `docker compose up` before core-api starts. It makes the two
+  # database roles (this needs the PostgreSQL superuser: POSTGRES_USER) and applies the schema
+  # migrations with the schema owner's credential. core-api and admin-cli only get the runtime role.
+  # Safe to run again. An installation from before the roles existed keeps its objects owned by
+  # `penfii`: set PENFII_DB_OWNER_USER=penfii and PENFII_DB_OWNER_PASSWORD to POSTGRES_PASSWORD (see
+  # docs/self-hosting.md, "Upgrading to separate database roles").
+  db-setup:
+    image: ${PENFII_IMAGE_PREFIX:-ghcr.io/penfii}/core-api:${PENFII_VERSION:-dev}
+    restart: "no"
+    entrypoint: ["sh", "-c", 'admin-cli db-provision --owner-role "$$PENFII_DB_OWNER_USER" --runtime-role "$$PENFII_DB_RUNTIME_USER" && admin-cli migrate']
+    depends_on:
+      postgres: {condition: service_healthy}
+    networks: [data]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    read_only: true
+    environment:
+      PENFII_PROVISION_DATABASE_URL: postgres://penfii:${POSTGRES_PASSWORD}@postgres:5432/penfii
+      PENFII_MIGRATION_DATABASE_URL: postgres://${PENFII_DB_OWNER_USER:-penfii_owner}:${PENFII_DB_OWNER_PASSWORD:?set PENFII_DB_OWNER_PASSWORD in .env}@postgres:5432/penfii
+      PENFII_DB_OWNER_USER: ${PENFII_DB_OWNER_USER:-penfii_owner}
+      PENFII_DB_OWNER_PASSWORD: ${PENFII_DB_OWNER_PASSWORD}
+      PENFII_DB_RUNTIME_USER: ${PENFII_DB_RUNTIME_USER:-penfii_app}
+      PENFII_DB_RUNTIME_PASSWORD: ${PENFII_DB_RUNTIME_PASSWORD:?set PENFII_DB_RUNTIME_PASSWORD in .env}
+
+  # Derived data: rebuildable from PostgreSQL with `admin-cli search-reindex`.
+  opensearch:
+    image: ${PENFII_IMAGE_PREFIX:-ghcr.io/penfii}/opensearch:${PENFII_VERSION:-dev}
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      # The node is reachable on the compose network only; it is not published.
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    volumes:
+      - penfii-os:/usr/share/opensearch/data
+    networks: [data]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # S3-compatible file storage. `minio-setup` below makes the bucket `penfii` and, when an app key pair is
+  # set, the account core-api uses; the key pair set here is MinIO's root account.
+  minio:
+    image: pgsty/silo:RELEASE.2026-09-16T00-00-00Z
+    restart: unless-stopped
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ${PENFII_S3_ACCESS_KEY:?set PENFII_S3_ACCESS_KEY in .env}
+      MINIO_ROOT_PASSWORD: ${PENFII_S3_SECRET_KEY:?set PENFII_S3_SECRET_KEY in .env}
+    volumes:
+      - penfii-files:/data
+    networks: [data]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://127.0.0.1:9000/minio/health/live >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # One-shot object storage setup, run on every `docker compose up` before core-api starts (the image
+  # ships `mc`). It makes the bucket and, if PENFII_S3_APP_ACCESS_KEY and PENFII_S3_APP_SECRET_KEY are set,
+  # an account that may only read, write and delete objects in that bucket. Without them it warns and
+  # core-api keeps using the root key pair, as before. MinIO keeps the account in its data volume, so a
+  # backup of that volume holds it. Safe to run again.
+  minio-setup:
+    image: pgsty/silo:RELEASE.2026-09-16T00-00-00Z
+    restart: "no"
+    entrypoint: ["sh", "/setup.sh"]
+    depends_on:
+      minio: {condition: service_healthy}
+    networks: [data]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: ["/tmp"]
+    volumes:
+      - ./minio/setup.sh:/setup.sh:ro
+    environment:
+      ROOT_USER: ${PENFII_S3_ACCESS_KEY}
+      ROOT_PASSWORD: ${PENFII_S3_SECRET_KEY}
+      BUCKET: penfii
+      APP_USER: ${PENFII_S3_APP_ACCESS_KEY:-}
+      APP_PASSWORD: ${PENFII_S3_APP_SECRET_KEY:-}
+
+  core-api:
+    image: ${PENFII_IMAGE_PREFIX:-ghcr.io/penfii}/core-api:${PENFII_VERSION:-dev}
+    restart: unless-stopped
+    depends_on:
+      db-setup: {condition: service_completed_successfully}
+      opensearch: {condition: service_healthy}
+      minio-setup: {condition: service_completed_successfully}
+    # frontend: web, and the way out for mail and external sign-in; data: PostgreSQL, OpenSearch, MinIO.
+    networks: [frontend, data]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: ["/tmp"]
+    environment:
+      # The runtime role: row access only, no schema changes. core-api does not migrate.
+      DATABASE_URL: postgres://${PENFII_DB_RUNTIME_USER:-penfii_app}:${PENFII_DB_RUNTIME_PASSWORD:?set PENFII_DB_RUNTIME_PASSWORD in .env}@postgres:5432/penfii
+      PENFII_BIND: 0.0.0.0:8080
+      PENFII_PUBLIC_URL: ${PENFII_PUBLIC_URL:?set PENFII_PUBLIC_URL in .env}
+      PENFII_ALLOWED_ORIGINS: ${PENFII_PUBLIC_URL}
+      # Whose X-Forwarded-For core-api believes: the web container (and the proxy in front of it).
+      # core-api is not published and the only other container on the `frontend` network is web, so the
+      # default is that network's subnet (PENFII_FRONTEND_SUBNET). A proxy on another machine must be
+      # added (keeping the subnet), or all visitors share its address. See .env.example.
+      PENFII_TRUSTED_PROXIES: ${PENFII_TRUSTED_PROXIES:-${PENFII_FRONTEND_SUBNET:-172.29.240.0/24}}
+      PENFII_DB_MAX_CONNECTIONS: ${PENFII_DB_MAX_CONNECTIONS:-10}
+      PENFII_OPENSEARCH_URL: http://opensearch:9200
+      PENFII_OPENSEARCH_INDEX_PREFIX: ${PENFII_OPENSEARCH_INDEX_PREFIX:-penfii}
+      PENFII_S3_ENDPOINT: http://minio:9000
+      PENFII_S3_BUCKET: penfii
+      # The app account made by minio-setup; the root key pair only while no app key pair is set (an
+      # installation from before the split keeps working that way; minio-setup warns about it).
+      PENFII_S3_ACCESS_KEY: ${PENFII_S3_APP_ACCESS_KEY:-${PENFII_S3_ACCESS_KEY}}
+      PENFII_S3_SECRET_KEY: ${PENFII_S3_APP_SECRET_KEY:-${PENFII_S3_SECRET_KEY}}
+      # minio-setup made the bucket, so the app account does not have to.
+      PENFII_S3_ENSURE_BUCKET: "0"
+      PENFII_SESSION_TTL_SECONDS: ${PENFII_SESSION_TTL_SECONDS:?set PENFII_SESSION_TTL_SECONDS in .env}
+      PENFII_MESSAGE_BODY_MAX_BYTES: ${PENFII_MESSAGE_BODY_MAX_BYTES:?set PENFII_MESSAGE_BODY_MAX_BYTES in .env}
+      PENFII_INVITE_TTL_SECONDS: ${PENFII_INVITE_TTL_SECONDS:?set PENFII_INVITE_TTL_SECONDS in .env}
+      PENFII_FILE_MAX_BYTES: ${PENFII_FILE_MAX_BYTES:?set PENFII_FILE_MAX_BYTES in .env}
+      PENFII_MESSAGE_FILE_MAX_COUNT: ${PENFII_MESSAGE_FILE_MAX_COUNT:?set PENFII_MESSAGE_FILE_MAX_COUNT in .env}
+      PENFII_MESSAGE_FILE_MAX_BYTES: ${PENFII_MESSAGE_FILE_MAX_BYTES:?set PENFII_MESSAGE_FILE_MAX_BYTES in .env}
+      # MCP gateway for AI clients: off unless PENFII_MCP_ENABLED=1 (the web container already forwards
+      # /oauth, /.well-known and /mcp here).
+      PENFII_MCP_ENABLED: ${PENFII_MCP_ENABLED:-0}
+      PENFII_MCP_DEFAULT_POLICY: ${PENFII_MCP_DEFAULT_POLICY:-standard}
+      PENFII_MCP_DCR_ENABLED: ${PENFII_MCP_DCR_ENABLED:-0}
+      # Web Push: off while PENFII_VAPID_PRIVATE_KEY is empty (make a pair with `admin-cli vapid-keys`).
+      PENFII_VAPID_PRIVATE_KEY: ${PENFII_VAPID_PRIVATE_KEY:-}
+      PENFII_VAPID_SUBJECT: ${PENFII_VAPID_SUBJECT:-}
+      # E-mail (optional): off while PENFII_SMTP_HOST is empty; invitations are then shared as links.
+      PENFII_SMTP_HOST: ${PENFII_SMTP_HOST:-}
+      PENFII_SMTP_PORT: ${PENFII_SMTP_PORT:-}
+      PENFII_SMTP_SECURITY: ${PENFII_SMTP_SECURITY:-}
+      PENFII_SMTP_USER: ${PENFII_SMTP_USER:-}
+      PENFII_SMTP_PASSWORD: ${PENFII_SMTP_PASSWORD:-}
+      PENFII_SMTP_FROM: ${PENFII_SMTP_FROM:-}
+      # Incoming webhooks: Signature mode needs this key (`openssl rand -hex 32`); URL-secret mode does not.
+      PENFII_WEBHOOK_KEK: ${PENFII_WEBHOOK_KEK:-}
+      PENFII_MFA_ENCRYPTION_KEY: ${PENFII_MFA_ENCRYPTION_KEY:-}
+    # /readyz answers 200 while PostgreSQL answers. The image has no curl, so bash opens the socket.
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - 'exec 3<>/dev/tcp/127.0.0.1/8080 && printf "GET /readyz HTTP/1.0\r\n\r\n" >&3 && head -n1 <&3 | grep -q " 200 "'
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # The service name core-api is part of the web image's Caddyfile (reverse_proxy core-api:8080).
+  web:
+    image: ${PENFII_IMAGE_PREFIX:-ghcr.io/penfii}/web:${PENFII_VERSION:-dev}
+    restart: unless-stopped
+    depends_on:
+      core-api: {condition: service_healthy}
+    networks: [frontend]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: ["/tmp"]
+    environment:
+      # Whose X-Forwarded-For the web server believes (space-separated), i.e. the TLS proxy in front.
+      PENFII_EDGE_PROXIES: ${PENFII_EDGE_PROXIES:-private_ranges}
+    ports:
+      # The container listens on 8080: it runs as a non-root user, which cannot bind port 80.
+      - "${PENFII_HTTP_BIND:-127.0.0.1}:${PENFII_HTTP_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Operator commands: `docker compose run --rm admin-cli <command>` (bootstrap, create-user, workspace-list,
+  # user-set-password, search-status, search-reindex, ...). Not started by `up`.
+  admin-cli:
+    profiles: ["cli"]
+    image: ${PENFII_IMAGE_PREFIX:-ghcr.io/penfii}/core-api:${PENFII_VERSION:-dev}
+    entrypoint: ["admin-cli"]
+    depends_on:
+      db-setup: {condition: service_completed_successfully}
+    networks: [data]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: ["/tmp"]
+    environment:
+      # Commands run as the runtime role; only `admin-cli migrate` uses the owner's credential.
+      DATABASE_URL: postgres://${PENFII_DB_RUNTIME_USER:-penfii_app}:${PENFII_DB_RUNTIME_PASSWORD:?set PENFII_DB_RUNTIME_PASSWORD in .env}@postgres:5432/penfii
+      PENFII_MIGRATION_DATABASE_URL: postgres://${PENFII_DB_OWNER_USER:-penfii_owner}:${PENFII_DB_OWNER_PASSWORD:?set PENFII_DB_OWNER_PASSWORD in .env}@postgres:5432/penfii
+      PENFII_OPENSEARCH_URL: http://opensearch:9200
+      PENFII_OPENSEARCH_INDEX_PREFIX: ${PENFII_OPENSEARCH_INDEX_PREFIX:-penfii}
+
+networks:
+  # web and core-api. Pinned, so core-api can trust X-Forwarded-For from exactly this network. If the
+  # range collides with one of yours, set PENFII_FRONTEND_SUBNET (a network that already exists keeps its
+  # old range until `docker compose down` removes it).
+  frontend:
+    ipam:
+      config:
+        - subnet: ${PENFII_FRONTEND_SUBNET:-172.29.240.0/24}
+  # PostgreSQL, OpenSearch, MinIO and the jobs that set them up: no route to the outside world.
+  data:
+    internal: true
+
+volumes:
+  penfii-pg:
+  penfii-os:
+  penfii-files:
