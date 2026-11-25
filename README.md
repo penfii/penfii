@@ -54,7 +54,11 @@ MCP is **off by default**. To enable it, set `PENFII_MCP_ENABLED=1` and configur
 
 ## Quick start
 
-You need Git and Docker with Compose v2. Plan for at least 4 GiB of host memory. Docker Compose is the supported deployment method. It builds Penfii from source, so the first start takes several minutes. There are currently no published Penfii container images.
+You need Docker with Compose v2 (and Git for the source route). Plan for at least 4 GiB of host memory. Docker Compose is the supported deployment method.
+
+**From a release (no source, no build):** download `penfii-vX.Y.Z-docker.zip` and `SHA256SUMS` from [GitHub Releases](https://github.com/penfii/penfii/releases), unpack it, copy `.env.example` to `.env`, replace every `CHANGE_ME`, then `docker compose pull && docker compose up -d` and create the first account as in step 3. The [installation guide](docs/self-hosting.md#install-from-the-release-zip) has the details. The images are `linux/amd64`.
+
+**From source:** this builds Penfii on your machine, so the first start takes several minutes.
 
 1. Clone the repository and check out the `v0.4.1` release tag.
 

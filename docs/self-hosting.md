@@ -1,6 +1,6 @@
 # Self-hosting
 
-`docker/compose.yaml` is the supported way to run Penfii. It starts PostgreSQL, OpenSearch (with the Korean analyzer), MinIO (S3-compatible file storage), the server (`core-api`) and the web app, and builds the server and web images from this checkout. There are no published images.
+Docker Compose is the supported way to run Penfii. It starts PostgreSQL, OpenSearch (with the Korean analyzer), MinIO (S3-compatible file storage), the server (`core-api`) and the web app. There are two ways to get it: the **release ZIP** (prebuilt images from `ghcr.io/penfii`, nothing to build; [below](#install-from-the-release-zip)) or `docker/compose.yaml` in a clone of this repository, which builds the images from source ([Install](#install)).
 
 Penfii is at v0.4.1, an early release: read [Known limitations](known-limitations.md) first.
 
@@ -10,6 +10,23 @@ Penfii is at v0.4.1, an early release: read [Known limitations](known-limitation
 - Memory: OpenSearch runs with a 512 MB Java heap. On a nearly empty instance its container used about 1.4 GiB, so plan for a host with 4 GiB or more for the whole stack. These are observations from a development instance, not a sizing guide.
 - On Linux hosts, OpenSearch's own documentation asks for `vm.max_map_count=262144` for production use.
 - Time for the first start: it compiles the server in release mode and builds the web app, which takes several minutes. Later starts reuse the Docker cache.
+
+## Install from the release zip
+
+Every release on [GitHub Releases](https://github.com/penfii/penfii/releases) has `penfii-vX.Y.Z-docker.zip` and a `SHA256SUMS` file. The ZIP holds `compose.yaml`, `.env.example`, `minio/setup.sh`, a README and the licence, and no source code. Its `compose.yaml` pulls `ghcr.io/penfii/core-api`, `web` and `opensearch` at the release's own version (images are `linux/amd64` only; other platforms are not tested). It is the same stack as the source install below: the same services, volumes, networks, database roles and container restrictions.
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+unzip penfii-vX.Y.Z-docker.zip && cd penfii
+cp .env.example .env     # edit it as described under Install
+docker compose pull
+docker compose up -d
+docker compose run --rm admin-cli bootstrap --email owner@example.com --display-name Owner --workspace-name Penfii --time-zone Asia/Seoul
+```
+
+Everything under [Install](#install) about `.env` and [Create the first account](#create-the-first-account) applies unchanged; skip the clone and the build. `docker compose ps --all` shows the services healthy and `db-setup` and `minio-setup` exited with code 0. Each image names the commit it was built from: `docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' ghcr.io/penfii/core-api:X.Y.Z`.
+
+To **upgrade**, unpack the new ZIP into a new directory, copy your `.env` over, compare it with the new `.env.example`, run `docker compose down` (no `-v`) in the old directory and `docker compose pull && docker compose up -d` in the new one. Both use the Compose project name `penfii`, so the data volumes carry over; `db-setup` applies pending migrations first. The same works for an installation made from source: keep its `docker/.env`, bring it down, and start the unpacked directory. Back up first and read [Updating](#updating) and the changelog for the versions you cross.
 
 ## Install
 

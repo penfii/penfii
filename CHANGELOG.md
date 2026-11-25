@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Official Docker install from a release ZIP and prebuilt images** (FEA-154, FEA-155, FEA-156): a release now comes with `penfii-vX.Y.Z-docker.zip` (a `compose.yaml` that pulls `ghcr.io/penfii/core-api`, `web` and `opensearch` at the release tag, `.env.example`, `minio/setup.sh`, a README) and a `SHA256SUMS` file; no source checkout, Rust or Node is needed. The stack is the same as `docker/compose.yaml` (database roles, MinIO app account, networks, non-root read-only containers); a check keeps the two files equal except for the images. Images are `linux/amd64`. They carry OCI labels (version, source commit), a provenance and an SBOM attestation, and the release has CycloneDX SBOMs and a report-only Grype scan. See [Self-hosting](docs/self-hosting.md#install-from-the-release-zip).
+- `.github/workflows/release.yml` (started by hand) builds the images from the checkout of an existing release tag, never from newer code on `main`, publishes them without replacing an existing tag, installs from the ZIP with the published images and creates a draft GitHub Release.
+
 ## 0.4.1
 
 MCP gateway release, with an updated OpenSearch image. No database migration and no new setting.
