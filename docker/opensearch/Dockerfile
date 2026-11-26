@@ -1,5 +1,5 @@
 # OpenSearch with the Korean analyzer (nori) that the search mapping needs.
-FROM opensearchproject/opensearch:2.19.8
+FROM opensearchproject/opensearch:3.10.0
 RUN /usr/share/opensearch/bin/opensearch-plugin install --batch analysis-nori
 # Penfii uses none of these bundled plugins (it needs indexing, search and nori), and they carry the vulnerable
 # libraries (bcprov, jline, spark/jetty) that the base image's scan reports: the performance analyzer, ML Commons
