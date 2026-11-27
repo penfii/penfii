@@ -221,7 +221,7 @@
   .ticket-panel-head { margin-inline: calc(var(--space-3) * -1); padding-inline: var(--space-3); }
 }
 
-/* Narrow, default, and wide follow the panel's own width (OpenPencil 2.2a). */
+/* Narrow, default, and wide follow the panel's own width. */
 @container ticket-panel (max-width: 420px) {
   .prop-summary { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; }
   .ticket-side:not(.props-open) .prop-grid,
@@ -699,7 +699,7 @@
 .board-viewport::-webkit-scrollbar { height: 10px; width: 10px; }
 .board-viewport::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 99px; }
 
-/* ---- Ticket detail: long content (OpenPencil 2.2b) ---- */
+/* ---- Ticket detail: long content ---- */
 .section-chips button.active { border-color: var(--accent); color: var(--text); background: var(--accent-soft, transparent); font-weight: 600; }
 .chip-count { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .compact-title { display: flex; align-items: center; gap: var(--space-2); min-width: 0; border: 0; background: transparent; padding: 0; color: inherit; text-align: left; font-weight: 600; flex: 1 1 auto; }

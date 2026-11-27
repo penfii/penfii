@@ -14,7 +14,7 @@ export const MAIN_MIN = 640
 export const MAIN_VISIBLE_MIN = 320
 /**
  * The chat (or board) column keeps this much before the context nav is put away.
- * OpenPencil 9.1: when a thread or ticket panel is open and the main column would fall under 720,
+ * When a thread or ticket panel is open and the main column would fall under 720,
  * the nav collapses first and the rail stays.
  */
 export const CHAT_COMFORT = 720

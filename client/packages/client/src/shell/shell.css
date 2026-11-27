@@ -524,7 +524,7 @@ button.tree-link { border: 0; background: transparent; }
 }
 
 /*
- * OpenPencil 9.1: a side pane that would push the main column under 720px puts the context nav over the page instead.
+ * A side pane that would push the main column under 720px puts the context nav over the page instead.
  * Its "Show sidebar" tab keeps a strip of its own beside the rail, so the page (also scrolled sideways) never runs under it.
  */
 @media (min-width: 961px) {

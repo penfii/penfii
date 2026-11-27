@@ -60,10 +60,10 @@ You need Docker with Compose v2 (and Git for the source route). Plan for at leas
 
 **From source:** this builds Penfii on your machine, so the first start takes several minutes.
 
-1. Clone the repository and check out the `v0.4.1` release tag.
+1. Clone the repository and check out the `v0.5.0` release tag.
 
    ```sh
-   git clone --branch v0.4.1 https://github.com/penfii/penfii.git
+   git clone --branch v0.5.0 https://github.com/penfii/penfii.git
    cd penfii/docker
    cp .env.example .env
    ```
@@ -89,7 +89,7 @@ Before opening the instance to others, follow the [network and TLS guide](docs/s
 
 ## Project status and upgrades
 
-**v0.4.1 is an early release.** The API, database schema, and settings may change between 0.x releases. Back up before upgrading and check the [upgrade instructions](docs/self-hosting.md#updating) and [changelog](CHANGELOG.md) for your starting version. The web editor saves documents explicitly and has no live co-editing. Run a single API instance for live updates. See [known limitations](docs/known-limitations.md) before hosting Penfii for a team.
+**v0.5.0 is an early release.** The API, database schema, and settings may change between 0.x releases. Back up before upgrading and check the [upgrade instructions](docs/self-hosting.md#updating) and [changelog](CHANGELOG.md) for your starting version. The web editor saves documents explicitly and has no live co-editing. Run a single API instance for live updates. See [known limitations](docs/known-limitations.md) before hosting Penfii for a team.
 
 ## Architecture and documentation
 

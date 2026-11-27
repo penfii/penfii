@@ -1,10 +1,10 @@
 # Known limitations
 
-Penfii is at v0.4.1, an early release. This list says what is missing or not yet safe to rely on. It is kept short on purpose; if you find something that belongs here, open an issue.
+Penfii is at v0.5.0, an early release. This list says what is missing or not yet safe to rely on. It is kept short on purpose; if you find something that belongs here, open an issue.
 
 ## Stability
 
-- The HTTP API, the database schema and the settings can change between 0.x releases, and there is no upgrade guarantee. The database migrations from v0.1.0 to v0.2.0 are tested (v0.2.1, v0.2.2, v0.3.0, v0.3.1 and v0.4.1 add none; v0.4.0 adds migration 0003, which `db-setup` applies on the first start); read the [changelog](../CHANGELOG.md) for the settings an upgrade needs.
+- The HTTP API, the database schema and the settings can change between 0.x releases, and there is no upgrade guarantee. The database migrations from v0.1.0 to v0.2.0 are tested (v0.2.1, v0.2.2, v0.3.0, v0.3.1 and v0.4.1 add none; v0.4.0 adds migration 0003 and v0.5.0 adds migration 0004, which `db-setup` applies on the first start); read the [changelog](../CHANGELOG.md) for the settings an upgrade needs.
 - Backups, upgrades and monitoring are your responsibility. A database restore check is in [Self-hosting](self-hosting.md#restore) (`docker/scripts/restore-check.sh`). It does not start the application; `docker/scripts/restore-rehearsal.sh` does, on a copy in a second Compose project ([restore rehearsal](self-hosting.md#restore-rehearsal)). There is no point-in-time recovery, no scheduled backup and no off-machine copy. Moving between releases is described in [Self-hosting](self-hosting.md#updating); there is no way back to an older release other than restoring a backup.
 - Object storage is assumed not to use S3 Versioning. Deleting a file removes the current object after the database commit; older versions in a versioned bucket are left behind.
 

@@ -2,7 +2,7 @@
 
 Docker Compose is the supported way to run Penfii. It starts PostgreSQL, OpenSearch (with the Korean analyzer), MinIO (S3-compatible file storage), the server (`core-api`) and the web app. There are two ways to get it: the **release ZIP** (prebuilt images from `ghcr.io/penfii`, nothing to build; [below](#install-from-the-release-zip)) or `docker/compose.yaml` in a clone of this repository, which builds the images from source ([Install](#install)).
 
-Penfii is at v0.4.1, an early release: read [Known limitations](known-limitations.md) first.
+Penfii is at v0.5.0, an early release: read [Known limitations](known-limitations.md) first.
 
 ## What you need
 
@@ -33,7 +33,7 @@ To **upgrade**, unpack the new ZIP into a new directory, copy your `.env` over, 
 ```sh
 git clone https://github.com/penfii/penfii.git
 cd penfii
-git checkout v0.4.1      # a release tag; leave this out to run the latest commit of the default branch
+git checkout v0.5.0      # a release tag; leave this out to run the latest commit of the default branch
 cd docker
 cp .env.example .env
 ```
@@ -227,12 +227,20 @@ Back up first ([Backup](#backup)), then check out the release and rebuild:
 
 ```sh
 git fetch --tags
-git checkout v0.4.1
+git checkout v0.5.0
 cd docker
 docker compose up -d --build
 ```
 
 `docker compose up` runs the one-shot `db-setup` service again before core-api starts (it is started again when its image is unchanged and re-created when the image changed), and `db-setup` applies pending database migrations with the schema owner's credential. core-api itself never migrates: it checks the history and refuses to start when it is behind. There is no upgrade guarantee between 0.x releases: read the [changelog](../CHANGELOG.md) of every release you move across before you start.
+
+### From v0.4.1 to v0.5.0
+
+v0.5.0 adds sign-in conveniences (*Keep me signed in*), Doc full width, live Doc page updates, the rich text comment editor and Markdown input for MCP (see the [changelog](../CHANGELOG.md#050)). Nothing new is required: back up ([Backup](#backup)), then check out `v0.5.0` and run `docker compose up -d --build` with the same `docker/.env`, or, for an installation from the release ZIP, unpack the v0.5.0 ZIP and follow its upgrade steps ([Install from the release zip](#install-from-the-release-zip)). Coming from v0.4.0 or older, read the sections below as well.
+
+- **Database:** one migration, `0004_after_v0_4_1.sql`, is applied by `db-setup` on the first start, in one transaction. It only adds columns (long sessions on `sessions` and `auth_attempts`, *Full width* on `doc_pages`) with defaults that keep existing rows as they were; people who are signed in stay signed in. There is no down migration: v0.4.1 does not start on the upgraded database (it does not know migration 4), so going back means restoring the backup.
+- **Settings:** `PENFII_LONG_SESSION_ENABLED`, `PENFII_LONG_SESSION_MAX_AGE_SECONDS` and `PENFII_LONG_SESSION_IDLE_SECONDS` are optional (on, 30 days, 7 days without activity). Set `PENFII_LONG_SESSION_ENABLED=0` to keep every sign-in an ordinary session. See [Long sessions](configuration.md#long-sessions).
+- **OpenSearch:** the image no longer has the security plugin and the other plugins Penfii does not use, so it has no authentication or TLS at all. Keep it on the internal `data` network, as the Compose files do. The data volume carries over unchanged; indices that the removed plugins made stay unused. If you run your own OpenSearch, nothing changes.
 
 ### From v0.4.0 to v0.4.1
 
