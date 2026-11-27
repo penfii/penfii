@@ -1,4 +1,5 @@
 import { MuteButton } from '../modules/attention/MuteButton'
+import { FavoriteButton } from '../modules/personal/SavedButtons'
 import { useEffect, useRef, useState } from 'react'
 import type { Channel } from '@penfii/contracts'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -97,9 +98,15 @@ export function ConversationFrame() {
           <h1>{title}</h1>
           {subtitle ? <p>{subtitle}</p> : null}
         </div>
+        {dm ? (
+          <div className="context-actions">
+            <FavoriteButton workspaceId={workspaceId} kind="DM" targetId={dm.conversationId} />
+          </div>
+        ) : null}
         {channel ? (
           <div className="context-actions">
             <MemberStack members={members ?? []} />
+            <FavoriteButton workspaceId={workspaceId} kind="CHANNEL" targetId={channel.id} />
             <MuteButton channelId={channel.id} />
             {/* A member who does not run the channel's people still sees them here, and invites when the channel allows it. */}
             {channel.visibility === 'PRIVATE' && !canRunChannelPeople(channel, project) ? (

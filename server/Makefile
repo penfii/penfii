@@ -1,6 +1,6 @@
 # Quality gate for the server. `make check` is what to run before every commit; it does what CI
 # does (fmt, clippy, cargo-deny, unused dependencies, notices, and `cargo test --locked` on PostgreSQL 17 with
-# OpenSearch + nori). `make tools` installs the pinned cargo-deny and cargo-shear.
+# OpenSearch + nori). `make tools` installs the pinned cargo-deny, cargo-shear and sqlx-cli.
 # Every integration test creates and drops a database of its own (`#[sqlx::test]`) on the server in
 # DATABASE_URL, so they only ever run against throwaway containers (`integration`) or a server you
 # point at on purpose (`test`).
@@ -33,8 +33,8 @@ fmt-check: ## Fail if the code is not formatted
 lint: ## clippy on every target, warnings are errors
 	cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
-tools: ## Install the pinned cargo-deny and cargo-shear (scripts/install-tools.sh)
-	scripts/install-tools.sh
+tools: ## Install the pinned cargo-deny, cargo-shear and sqlx-cli
+	scripts/install-tools.sh $(TOOLS)
 
 licenses: ## cargo-deny licence check: every resolved crate is in the GPL-3.0-compatible set of deny.toml
 	$(call need,cargo-deny)
@@ -64,26 +64,7 @@ test: ## cargo test against DATABASE_URL and PENFII_TEST_OPENSEARCH_URL (a test 
 	SQLX_OFFLINE=true cargo test --locked
 
 integration: ## cargo test in throwaway PostgreSQL + OpenSearch containers (same as CI)
-	PG="penfii-check-pg-$$$$"
-	OS="penfii-check-os-$$$$"
-	docker image inspect $(OS_IMAGE) >/dev/null 2>&1 || docker build -q -t $(OS_IMAGE) ../docker/opensearch >/dev/null
-	docker run -d --rm --name "$$PG" -e POSTGRES_USER=penfii -e POSTGRES_PASSWORD=penfii -e POSTGRES_DB=penfii -p 127.0.0.1::5432 $(PG_IMAGE) $(PG_TEST_FLAGS) >/dev/null
-	docker run -d --rm --name "$$OS" -e discovery.type=single-node -e DISABLE_SECURITY_PLUGIN=true -e DISABLE_INSTALL_DEMO_CONFIG=true -e OPENSEARCH_JAVA_OPTS="-Xms512m -Xmx512m" -p 127.0.0.1::9200 $(OS_IMAGE) >/dev/null
-	trap 'docker stop "$$PG" "$$OS" >/dev/null 2>&1 || true' EXIT
-	PG_PORT="$$(docker port "$$PG" 5432/tcp | head -1 | sed 's/.*://')"
-	OS_PORT="$$(docker port "$$OS" 9200/tcp | head -1 | sed 's/.*://')"
-	for _ in $$(seq 1 60); do docker exec "$$PG" pg_isready -U penfii >/dev/null 2>&1 && break; sleep 1; done
-	for _ in $$(seq 1 90); do curl -fs "http://127.0.0.1:$$OS_PORT/_cluster/health" >/dev/null 2>&1 && break; sleep 2; done
-	sleep 2
-	command -v sqlx >/dev/null || { echo "sqlx is not installed: make tools" >&2; exit 1; }
-	export DATABASE_URL="postgres://penfii:penfii@127.0.0.1:$$PG_PORT/penfii"
-	export PENFII_TEST_OPENSEARCH_URL="http://127.0.0.1:$$OS_PORT"
-	export PENFII_MIGRATION_DATABASE_URL="$$DATABASE_URL"
-	# Checked queries compile from server/.sqlx. The database in DATABASE_URL is empty until migrated,
-	# and prepare --check then compares .sqlx with that migrated database.
-	SQLX_OFFLINE=true cargo run -q -p admin-cli -- migrate
-	env -u SQLX_OFFLINE cargo sqlx prepare --check --workspace -- --locked
-	SQLX_OFFLINE=true cargo test --locked
+	PG_IMAGE="$(PG_IMAGE)" OS_IMAGE="$(OS_IMAGE)" PG_TEST_FLAGS="$(PG_TEST_FLAGS)" scripts/integration.sh
 
 opensearch: ## Start (or create once) the persistent local OpenSearch + nori on 127.0.0.1:9200
 	docker image inspect $(OS_IMAGE) >/dev/null 2>&1 || docker build -q -t $(OS_IMAGE) ../docker/opensearch >/dev/null

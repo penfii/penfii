@@ -10087,8 +10087,11 @@
                       "TEAM",
                       "TICKET",
                       "VIEW",
-                      "CHANNEL"
-                    ]
+                      "CHANNEL",
+                      "DM",
+                      "DOC"
+                    ],
+                    "description": "DM is a direct-message conversation id; DOC is a Doc page id"
                   },
                   "targetId": {
                     "type": "string",
@@ -10157,6 +10160,14 @@
                         }
                       }
                     }
+                  },
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "ALL",
+                      "LISTED"
+                    ],
+                    "description": "ALL (default): the listed Favorites come first in the order given and the others keep their relative order after them. LISTED: only the listed Favorites change places, among the places they already hold; every other Favorite (another folder, one the caller cannot open now) keeps its place."
                   }
                 },
                 "required": [

@@ -92,7 +92,7 @@ export const layoutKo = {
   'saved.favorite.remove': '즐겨찾기에서 제거',
   'saved.favorite.removeTitle': '{title} 즐겨찾기 제거',
   'saved.favorites.empty': '즐겨찾기가 없습니다',
-  'saved.favorites.emptyBody': '프로젝트·팀·티켓의 별 버튼을 눌러 바로가기를 만드세요. 구독이나 알림은 만들어지지 않습니다.',
+  'saved.favorites.emptyBody': '프로젝트·업무·채널·DM·문서·팀·저장된 보기의 별 버튼을 눌러 바로가기를 만드세요. 구독이나 알림은 만들어지지 않습니다.',
   'saved.kind.PROJECT': '프로젝트',
   'saved.kind.TEAM': '팀',
   'saved.kind.TICKET': '작업',

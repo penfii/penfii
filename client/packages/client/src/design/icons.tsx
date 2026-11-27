@@ -22,7 +22,8 @@ export const EyeIcon = () => <Icon><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 
 export const PinIcon = () => <Icon><path d="M9 4h6l-1 6 3 3H7l3-3zM12 13v7" /></Icon>
 export const BookmarkIcon = () => <Icon><path d="M6 4h12v16l-6-4-6 4z" /></Icon>
 export const ThreadIcon = () => <Icon><path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-5 4v-4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" /></Icon>
-export const StarIcon = () => <Icon><path d="m12 4 2.4 5 5.6.7-4.1 3.8 1.1 5.5-5-2.8-5 2.8 1.1-5.5L4 9.7 9.6 9z" /></Icon>
+/** A star; `filled` when the thing is in Favorites, outlined when it is not. */
+export const StarIcon = ({ filled = false }: { filled?: boolean }) => <Icon><path d="m12 4 2.4 5 5.6.7-4.1 3.8 1.1 5.5-5-2.8-5 2.8 1.1-5.5L4 9.7 9.6 9z" fill={filled ? 'currentColor' : 'none'} /></Icon>
 
 export const PlayIcon = () => <Icon><path d="M8 5.5v13l11-6.5z" /></Icon>
 export const ExpandIcon = () => <Icon><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7" /></Icon>

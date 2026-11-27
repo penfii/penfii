@@ -170,7 +170,9 @@ test.describe('FEA-196: a conversation that cannot be opened', () => {
   })
 
   test('a person who is removed from a private channel while it is open sees it, and its messages and box go away', async ({ browser, request, watchPage, allowProblem }) => {
-    allowProblem(/40[34] |Failed to load resource/)
+    // The server refuses the removed member's reads, and also a reconnect of the conversation socket if the page makes
+    // one before it learns of the removal (a 404 handshake; whether that happens first is timing).
+    allowProblem(/40[34] |Failed to load resource|WebSocket handshake: Unexpected response code: 404/)
     const owner = await apiAs(request, accountA.email)
     const workspaceId = await owner.workspaceId()
     const channel = await owner.createChannel(workspaceId, `qa-private-${randomUUID().slice(0, 6)}`, 'PRIVATE')
@@ -386,7 +388,7 @@ test.describe('FEA-198: the ticket panels across window widths', () => {
     await logIn(page, accountA.email)
     await page.setViewportSize({ width: 1400, height: 900 })
     await page.goto(`/w/${workspaceId}/projects/${project.id}/work?panel=ticket-new&newProject=${project.id}`)
-    const title = page.getByLabel('Title').first()
+    const title = page.getByRole('complementary', { name: 'Create ticket' }).getByRole('textbox', { name: /^Title\b/ })
     await expect(title).toBeVisible()
     await title.fill('Draft that must survive')
     const url = page.url()

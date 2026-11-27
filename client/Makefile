@@ -10,7 +10,7 @@ SHELL := bash
 
 NODE_IMAGE ?= node:22.23.3-bookworm-slim
 
-.PHONY: help install typecheck lint knip test build budget licenses audit types contract notices e2e-seed e2e quick check
+.PHONY: help install typecheck lint knip test build budget licenses audit types contract notices e2e-seed e2e e2e-external quick check
 
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | sed -E 's/:.*## /\t/' | column -t -s $$'\t'
@@ -51,8 +51,11 @@ contract: ## Fail when packages/contracts/openapi.json differs from the server's
 e2e-seed: ## Make the end-to-end test accounts in the running Compose stack (see docs/development.md)
 	apps/e2e/seed.sh
 
-e2e: ## Playwright against the running Compose stack, http://127.0.0.1:8080 or $$E2E_BASE_URL (not part of `make check`)
-	npm run e2e
+e2e: ## Playwright in a disposable Compose stack (not part of make check)
+	apps/e2e/run.sh
+
+e2e-external: ## Playwright against the test stack explicitly set in E2E_BASE_URL
+	apps/e2e/run.sh --external
 
 notices: ## Regenerate THIRD-PARTY-NOTICES.md from package-lock.json
 	node scripts/check-licenses.mjs --notices > THIRD-PARTY-NOTICES.md

@@ -1,0 +1,12 @@
+# CI builds into its own tags so the image transfer can also be exercised locally.
+services:
+  core-api:
+    image: penfii-ci-core-api:${CI_IMAGE_TAG:-local}
+  db-setup:
+    image: penfii-ci-core-api:${CI_IMAGE_TAG:-local}
+  admin-cli:
+    image: penfii-ci-core-api:${CI_IMAGE_TAG:-local}
+  web:
+    image: penfii-ci-web:${CI_IMAGE_TAG:-local}
+  opensearch:
+    image: penfii-ci-opensearch:${CI_IMAGE_TAG:-local}

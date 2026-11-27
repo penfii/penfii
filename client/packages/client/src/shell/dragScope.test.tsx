@@ -53,7 +53,8 @@ describe('Dragging a conversation in the chat list', () => {
     expect(menu.parentElement).toBe(document.body)
     expect(document.activeElement).toBe(await screen.findByRole('menuitem', { name: 'One' }))
     fireEvent.keyDown(menu, { key: 'ArrowDown' })
-    expect(document.activeElement?.getAttribute('role')).toBe('menuitem')
+    // The arrows also reach the Favorite row at the end of the menu.
+    expect(['menuitem', 'menuitemcheckbox']).toContain(document.activeElement?.getAttribute('role'))
     fireEvent.keyDown(menu, { key: 'Escape' })
     expect(screen.queryByRole('menu')).toBeNull()
     expect(document.activeElement).toBe(trigger)

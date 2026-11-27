@@ -871,7 +871,8 @@ export type BulkChange =
 export type BulkItemResult = { ticketId: string; key: string | null; ok: boolean; code: string | null; message: string | null }
 export type BulkResult = { total: number; succeeded: number; failed: number; items: BulkItemResult[] }
 
-export type SavedKind = 'PROJECT' | 'TEAM' | 'TICKET' | 'VIEW' | 'CHANNEL'
+/** What a Favorite can point at. DM is the conversation id of a direct message; DOC a Doc page. */
+export type SavedKind = 'PROJECT' | 'TEAM' | 'TICKET' | 'VIEW' | 'CHANNEL' | 'DM' | 'DOC'
 /** What Later can hold. */
 export type LaterKind = 'TICKET' | 'MESSAGE' | 'FILE'
 

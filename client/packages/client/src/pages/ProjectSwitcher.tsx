@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { FavoriteButton } from '../modules/personal/SavedButtons'
 import { Link, useNavigate } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import type { FavoriteItem, Project } from '@penfii/contracts'
@@ -152,6 +153,7 @@ function SwitcherPanel({
                       <span>{project.name}</span>
                       {project.id === projectId ? <small>{t('projects.switch.current')}</small> : project.ticketPrefix ? <small>{project.ticketPrefix}</small> : null}
                     </Link>
+                    <FavoriteButton workspaceId={workspaceId} kind="PROJECT" targetId={project.id} label={project.name} className="icon-button project-switch-favorite" />
                   </li>
                 ))}
               </ul>

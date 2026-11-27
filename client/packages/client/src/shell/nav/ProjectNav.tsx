@@ -11,6 +11,7 @@ import { canManageChannelSettings, isWorkspaceManager } from '../../modules/spac
 import { useWorkspaceRole } from '../../modules/spaces/useWorkspaceRole'
 import { useCreate } from '../create'
 import { ChannelLink } from './ChatNav'
+import { FavoriteButton } from '../../modules/personal/SavedButtons'
 import { queries } from '../../queries'
 import { myProjects } from '../../pages/projectsModel'
 
@@ -172,6 +173,7 @@ export function ProjectNav({
                       {visibleSlice(projectChannels, channelsExpanded, (channel) => channel.unreadCount > 0).shown.map((channel) => (
                         <li key={channel.id}>
                           <ChannelLink workspaceId={workspaceId} channel={channel} to={`/w/${workspaceId}/projects/${projectId}/chat/${channel.conversationId}`} canManageSettings={canManageChannelSettings(channel, workspaceRole, { canManage: projectCanManage })} />
+                          <FavoriteButton workspaceId={workspaceId} kind="CHANNEL" targetId={channel.id} label={`# ${channel.name}`} className="icon-add tree-favorite" />
                         </li>
                       ))}
                     </ul>

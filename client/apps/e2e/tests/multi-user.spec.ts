@@ -37,7 +37,7 @@ const w = (path = '') => `${baseURL}/w/${workspaceId}${path}`
 const projectUrl = (path = '') => w(`/projects/${projectId}${path}`)
 const sidebar = (page: Page) => page.getByRole('complementary').first()
 const projectCard = (page: Page, name: string) => page.locator('.result-list a.result-hit').filter({ hasText: name })
-const notFound = (page: Page) => page.locator('[data-state="not-found"]')
+const notFound = (page: Page) => page.getByRole('heading', { name: 'This conversation cannot be opened', exact: true })
 const apiResponse = (page: Page, method: string, path: RegExp) =>
   page.waitForResponse((response) => response.request().method() === method && path.test(new URL(response.url()).pathname))
 
@@ -549,7 +549,7 @@ test('document: two people save the same page at the same moment while a third r
   for (const [actor, text] of [[owner, texts.owner], [member, texts.member]] as const) {
     await actor.act('start editing and type', async () => {
       await actor.page.getByRole('button', { name: 'Edit' }).click()
-      await actor.page.locator('.ProseMirror[contenteditable="true"]').first().click()
+      await actor.page.locator('[data-doc-editor] .bn-editor[contenteditable=true]').click()
       await actor.page.keyboard.type(text)
       await expect(actor.page.getByRole('status').filter({ hasText: 'Unsaved changes' })).toBeVisible()
     })
@@ -572,7 +572,7 @@ test('document: two people save the same page at the same moment while a third r
   expect(content).not.toContain(texts[loserName])
   await loser.act('be told the save was refused, draft kept', async () => {
     await expect(loser.page.getByText('Someone saved this page first').first()).toBeVisible()
-    await expect(loser.page.locator('.ProseMirror[contenteditable="true"]').first()).toContainText(texts[loserName])
+    await expect(loser.page.locator('[data-doc-editor] .bn-editor[contenteditable=true]')).toContainText(texts[loserName])
   })
   const reader = member2.page
   const live = await showsLive(member2, 'the saved page text', () => expect(reader.getByText(texts[winner])).toBeVisible({ timeout: 8_000 }))
@@ -594,7 +594,7 @@ test('mentions and read state belong to each person', async () => {
     await actor.page.goto(w())
     await expect(actor.page.getByRole('heading', { name: workspaceName, level: 1 })).toBeVisible()
   })))
-  const before = { member: await unread(member), member2: await unread(member2), owner: await unread(owner) }
+  const before = { member: await unread(member), member2: await unread(member2) }
   const marker = `mention-${stamp}`
   await owner.act('mention MU Member in the room', async () => {
     await owner.page.goto(projectUrl(`/chat/${room.id}`))
@@ -614,7 +614,7 @@ test('mentions and read state belong to each person', async () => {
   expect(await inbox(owner), 'the author gets no inbox item for their own mention').not.toContain(marker)
   await expect.poll(() => unread(member)).toBe(before.member + 1)
   await expect.poll(() => unread(member2)).toBe(before.member2 + 1)
-  expect(await unread(owner), 'the author has nothing unread').toBe(0)
+  await expect.poll(() => unread(owner), { message: 'opening the room clears the author’s unread count' }).toBe(0)
 
   await member.act('see the mention in the Inbox (live) and open the room', async () => {
     await member.page.goto(w('/inbox'))

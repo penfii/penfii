@@ -11,6 +11,39 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { ancestorIds, buildTree, canMoveUnder, expandAll, findInForest, flatten, forestHas, groupByProject, matchingDocs } from './treeModel'
 import { ruleCode, useDocTree, useDocTreeCommands } from './useDocs'
 import { CloseIcon } from '../../design/icons'
+import { FavoriteButton } from '../personal/SavedButtons'
+
+/**
+ * Shortcuts to the starred pages of this tree, in the person's Saved order. Only pages this very tree
+ * shows count (the global tree: every readable page; a Project's: the pages of that Project), and they
+ * are named as the tree names them, so a move, a rename or a lost share changes both at once. A
+ * shortcut opens the page the way its row does, so a page with unsaved edits still asks first.
+ */
+function FavoriteDocs({ workspaceId, projectId, nodes, selectedId, onSelect }: { workspaceId: string; projectId: string | null; nodes: DocNode[]; selectedId: string | null; onSelect: (id: string) => void }) {
+  const { t } = useI18n()
+  const favorites = useQuery({ ...queries.favorites(workspaceId), enabled: workspaceId.length > 0 })
+  const byId = new Map(nodes.map((node) => [node.id, node]))
+  const pages = (favorites.data ?? [])
+    .filter((item) => item.kind === 'DOC' && (!projectId || item.projectId === projectId))
+    .map((item) => byId.get(item.targetId))
+    .filter((node): node is DocNode => node !== undefined)
+  if (pages.length === 0) return null
+  return (
+    <section className="doc-favorites" aria-label={t('saved.tab.favorites')}>
+      <h3 className="doc-favorites-head">{t('saved.tab.favorites')}</h3>
+      <ul>
+        {pages.map((node) => (
+          <li key={node.id} className={node.id === selectedId ? 'doc-favorite is-selected' : 'doc-favorite'}>
+            <button type="button" className="doc-favorite-open" aria-current={node.id === selectedId ? 'page' : undefined} onClick={() => onSelect(node.id)}>
+              {node.title || t('docs.untitled')}
+            </button>
+            <FavoriteButton workspaceId={workspaceId} kind="DOC" targetId={node.id} label={node.title || t('docs.untitled')} className="doc-tree-favorite" />
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
 
 function readCollapsedGroups(workspaceId: string): Set<string> {
   try {
@@ -258,6 +291,7 @@ export function DocTree({
           <button type="button" className="link-button" onClick={() => setQuery('')}>{t('docs.new.showInList')}</button>
         </p>
       ) : null}
+      <FavoriteDocs workspaceId={workspaceId} projectId={projectId ?? null} nodes={nodes} selectedId={selectedId} onSelect={onSelect} />
       {rows.length === 0 ? <p className="tree-empty">{t('docs.tree.empty')}</p> : null}
       <ul className="doc-tree" role="tree" aria-label={t('nav.docs')} onKeyDown={onKeyDown}>
         {(groups ?? [null]).flatMap((group) => {
@@ -365,6 +399,7 @@ export function DocTree({
                     {node.title || t('docs.untitled')}
                   </button>
                 )}
+                <FavoriteButton workspaceId={workspaceId} kind="DOC" targetId={node.id} label={node.title || t('docs.untitled')} className="doc-tree-favorite" />
                 <span className="doc-tree-actions">
                   {node.rights.edit ? (
                     <>

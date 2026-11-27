@@ -8,3 +8,4 @@
 *.key
 **/node_modules
 **/dist
+client/apps/e2e

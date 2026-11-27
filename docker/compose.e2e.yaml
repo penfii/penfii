@@ -1,0 +1,25 @@
+# Used by client/apps/e2e/run.sh with a disposable project and an explicit environment.
+services:
+  db-setup:
+    image: ${E2E_PROJECT:?}-core-api:local
+  core-api:
+    image: ${E2E_PROJECT:?}-core-api:local
+    environment:
+      PENFII_SMTP_HOST: mailpit
+      PENFII_SMTP_PORT: "1025"
+      PENFII_SMTP_SECURITY: none
+      PENFII_SMTP_FROM: Penfii Test <e2e@example.test>
+  admin-cli:
+    image: ${E2E_PROJECT:?}-core-api:local
+  opensearch:
+    image: ${E2E_PROJECT:?}-opensearch:local
+  web:
+    image: ${E2E_PROJECT:?}-web:local
+    ports: !override ["127.0.0.1::8080"]
+  mailpit:
+    image: axllent/mailpit:v1.27
+    networks: [frontend]
+    ports: ["127.0.0.1::8025"]
+networks:
+  frontend:
+    ipam: !reset null

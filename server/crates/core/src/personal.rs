@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::error::CoreError;
 use crate::project_role::{channel_allowed, project_role, require_project_role};
 
-const FAVORITE_KINDS: &[&str] = &["PROJECT", "TEAM", "TICKET", "VIEW", "CHANNEL"];
+const FAVORITE_KINDS: &[&str] = &["PROJECT", "TEAM", "TICKET", "VIEW", "CHANNEL", "DM", "DOC"];
 const LATER_KINDS: &[&str] = &["TICKET", "MESSAGE", "FILE"];
 const POSITION_STEP: i64 = 1024;
 
@@ -109,6 +109,10 @@ async fn resolve(
             if scope == "PERSONAL" && owner != actor_id {
                 return Ok(None);
             }
+            // A Team's or the Workspace's view is listed only to its owner (`planning::views::list_views`).
+            if project_id.is_none() && owner != actor_id {
+                return Ok(None);
+            }
             if let Some(project) = project_id
                 && project_role(conn, project, actor_id).await?.1.is_none()
             {
@@ -139,6 +143,62 @@ async fn resolve(
             }
             found.title = Some(row.try_get("name")?);
             found.project_id = row.try_get("project_id")?;
+        }
+        "DM" => {
+            let is_dm: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM penfii.conversations WHERE id=$1 AND workspace_id=$2 AND kind='DM')",
+            )
+            .bind(target_id)
+            .bind(workspace_id)
+            .fetch_one(&mut *conn)
+            .await?;
+            if !is_dm
+                || crate::access::load_conversation(conn, actor_id, target_id)
+                    .await?
+                    .is_none_or(|access| !access.can_read())
+            {
+                return Ok(None);
+            }
+            // Named like the side list names it: the other people, by name. A DM with oneself has
+            // nobody else; the client shows its usual fallback for an empty title.
+            let names: Vec<String> = sqlx::query_scalar(
+                "SELECT u.display_name FROM penfii.dm_members m JOIN penfii.users u ON u.id=m.user_id
+                 WHERE m.conversation_id=$1 AND u.id<>$2 ORDER BY u.display_name, u.id",
+            )
+            .bind(target_id)
+            .bind(actor_id)
+            .fetch_all(&mut *conn)
+            .await?;
+            found.title = Some(names.join(", "));
+            found.conversation_id = Some(target_id);
+        }
+        "DOC" => {
+            let row = sqlx::query(
+                "SELECT p.title, p.project_id, pr.name AS project_name FROM penfii.doc_pages p
+                 LEFT JOIN penfii.projects pr ON pr.id=p.project_id
+                 WHERE p.id=$1 AND p.workspace_id=$2 AND p.deleted_at IS NULL",
+            )
+            .bind(target_id)
+            .bind(workspace_id)
+            .fetch_optional(&mut *conn)
+            .await?;
+            let Some(row) = row else { return Ok(None) };
+            if !crate::visibility::docs(conn, actor_id, &[target_id])
+                .await?
+                .contains(&target_id)
+            {
+                return Ok(None);
+            }
+            found.title = Some(row.try_get("title")?);
+            let project_id: Option<Uuid> = row.try_get("project_id")?;
+            // The Project it belongs to is named only to someone who takes part in that Project; a
+            // page shared more widely than its Project does not reveal the Project's name.
+            if let Some(project) = project_id
+                && crate::access::in_share_scope(conn, project, None, actor_id).await?
+            {
+                found.subtitle = row.try_get("project_name")?;
+                found.project_id = Some(project);
+            }
         }
         "MESSAGE" => {
             let row = sqlx::query(
@@ -259,6 +319,21 @@ pub async fn list_favorites(
     Ok(items)
 }
 
+/// Serializes the changes to one person's Favorites in one Workspace (add, order, folder delete), so
+/// two at once never compute the same new position or reorder over each other.
+async fn lock_favorites(
+    conn: &mut PgConnection,
+    actor_id: Uuid,
+    workspace_id: Uuid,
+) -> Result<(), CoreError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('favorites:' || $1::text || ':' || $2::text, 0))")
+        .bind(actor_id)
+        .bind(workspace_id)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
 pub async fn add_favorite(
     pool: &PgPool,
     actor_id: Uuid,
@@ -274,7 +349,9 @@ pub async fn add_favorite(
     let target = resolve(&mut tx, actor_id, workspace_id, kind, target_id)
         .await?
         .ok_or(CoreError::NotFound)?;
-    // The same target is saved once; saving it again keeps its place.
+    lock_favorites(&mut tx, actor_id, workspace_id).await?;
+    // The same target is saved once; saving it again keeps its place and its folder. A new one goes
+    // after every other Favorite of the Workspace, whatever folder they are in.
     sqlx::query(
         "INSERT INTO penfii.favorites(user_id,workspace_id,kind,target_id,position)
          SELECT $1,$2,$3,$4,coalesce(max(position),0)+$5 FROM penfii.favorites WHERE user_id=$1 AND workspace_id=$2
@@ -288,7 +365,7 @@ pub async fn add_favorite(
     .execute(&mut *tx)
     .await?;
     let row = sqlx::query(
-        "SELECT position,created_at FROM penfii.favorites WHERE user_id=$1 AND kind=$2 AND target_id=$3",
+        "SELECT position,created_at,folder_id FROM penfii.favorites WHERE user_id=$1 AND kind=$2 AND target_id=$3",
     )
     .bind(actor_id)
     .bind(kind)
@@ -300,7 +377,7 @@ pub async fn add_favorite(
         target,
         position: row.try_get("position")?,
         created_at: row.try_get("created_at")?,
-        folder_id: None,
+        folder_id: row.try_get("folder_id")?,
     })
 }
 
@@ -324,53 +401,133 @@ pub async fn remove_favorite(
     Ok(())
 }
 
-/// Sets the order of the person's Favorites. Shortcuts not named keep their relative order after
-/// the named ones; names that are not Favorites are ignored.
+/// What a Favorites order request names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FavoriteOrderScope {
+    /// The named Favorites come first, in the order given; the others keep their relative order
+    /// after them. A list of every Favorite sets the whole order.
+    #[default]
+    All,
+    /// Only the named Favorites change places, among the places they already hold; every other
+    /// Favorite (another folder, another kind, one the person cannot open now) keeps its place.
+    Listed,
+}
+
+impl FavoriteOrderScope {
+    pub fn parse(value: Option<&str>) -> Result<Self, CoreError> {
+        match value {
+            None | Some("ALL") => Ok(Self::All),
+            Some("LISTED") => Ok(Self::Listed),
+            Some(_) => Err(CoreError::validation("scope is ALL or LISTED")),
+        }
+    }
+}
+
+/// The new order of `current` (every Favorite, in its present order) for a request naming `named`.
+/// A name given twice counts where it first appears; names that are not Favorites are ignored.
+fn favorite_order<K: Clone + PartialEq>(
+    current: &[K],
+    named: &[K],
+    scope: FavoriteOrderScope,
+) -> Vec<K> {
+    let mut wanted: Vec<K> = Vec::new();
+    for key in named {
+        if current.contains(key) && !wanted.contains(key) {
+            wanted.push(key.clone());
+        }
+    }
+    match scope {
+        FavoriteOrderScope::All => wanted
+            .iter()
+            .cloned()
+            .chain(current.iter().filter(|key| !wanted.contains(key)).cloned())
+            .collect(),
+        // The places of the named ones, in order, take them in the order given.
+        FavoriteOrderScope::Listed => {
+            let mut next = wanted.iter();
+            current
+                .iter()
+                .map(|key| {
+                    if wanted.contains(key) {
+                        next.next().unwrap_or(key).clone()
+                    } else {
+                        key.clone()
+                    }
+                })
+                .collect()
+        }
+    }
+}
+
+/// Sets the order of the person's Favorites (see [`FavoriteOrderScope`]). Every Favorite of the
+/// Workspace, also one the person cannot open now, gets a distinct position in the new order, so
+/// two never tie and a hidden one keeps its relative place.
 pub async fn order_favorites(
     pool: &PgPool,
     actor_id: Uuid,
     workspace_id: Uuid,
     order: Vec<(String, Uuid)>,
+    scope: FavoriteOrderScope,
 ) -> Result<(), CoreError> {
     if order.len() > 500 {
         return Err(CoreError::validation("too many favorites"));
     }
     let mut tx = pool.begin().await?;
     crate::access::require_member(&mut tx, workspace_id, actor_id).await?;
-    sqlx::query(
-        "SELECT user_id FROM penfii.favorites WHERE user_id=$1 AND workspace_id=$2 FOR UPDATE",
+    lock_favorites(&mut tx, actor_id, workspace_id).await?;
+    let current: Vec<(String, Uuid)> = sqlx::query_as(
+        "SELECT kind,target_id FROM penfii.favorites WHERE user_id=$1 AND workspace_id=$2
+         ORDER BY position,created_at,target_id",
     )
     .bind(actor_id)
     .bind(workspace_id)
     .fetch_all(&mut *tx)
     .await?;
-    for (index, (kind, target_id)) in order.iter().enumerate() {
-        sqlx::query(
-            "UPDATE penfii.favorites SET position=$5 WHERE user_id=$1 AND workspace_id=$2 AND kind=$3 AND target_id=$4",
-        )
-        .bind(actor_id)
-        .bind(workspace_id)
-        .bind(kind)
-        .bind(target_id)
-        .bind((index as i64 + 1) * POSITION_STEP)
-        .execute(&mut *tx)
-        .await?;
-    }
-    // Unnamed ones go after, keeping their order.
+    let next = favorite_order(&current, &order, scope);
+    let kinds: Vec<&str> = next.iter().map(|(kind, _)| kind.as_str()).collect();
+    let ids: Vec<Uuid> = next.iter().map(|(_, id)| *id).collect();
+    let positions: Vec<i64> = (1..=next.len() as i64).map(|n| n * POSITION_STEP).collect();
     sqlx::query(
-        "UPDATE penfii.favorites f SET position=$3+r.rn*$4 FROM (
-            SELECT kind,target_id,row_number() OVER (ORDER BY position,created_at,target_id) AS rn
-            FROM penfii.favorites WHERE user_id=$1 AND workspace_id=$2 AND position<=0) r
-         WHERE f.user_id=$1 AND f.kind=r.kind AND f.target_id=r.target_id AND f.position<=0",
+        "UPDATE penfii.favorites f SET position=v.position
+         FROM unnest($3::text[], $4::uuid[], $5::bigint[]) AS v(kind,target_id,position)
+         WHERE f.user_id=$1 AND f.workspace_id=$2 AND f.kind=v.kind AND f.target_id=v.target_id
+           AND f.position<>v.position",
     )
     .bind(actor_id)
     .bind(workspace_id)
-    .bind((order.len() as i64 + 1) * POSITION_STEP)
-    .bind(POSITION_STEP)
+    .bind(&kinds)
+    .bind(&ids)
+    .bind(&positions)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::{FavoriteOrderScope, favorite_order};
+
+    #[test]
+    fn all_puts_the_named_first_and_keeps_the_rest_in_order() {
+        let current = ["a", "b", "c", "d", "e"];
+        let got = favorite_order(&current, &["d", "zz", "b", "d"], FavoriteOrderScope::All);
+        assert_eq!(got, ["d", "b", "a", "c", "e"]);
+    }
+
+    #[test]
+    fn listed_swaps_only_within_the_named_places() {
+        // A folder holds b and d; a, c and e (other groups, hidden ones) keep their places.
+        let current = ["a", "b", "c", "d", "e"];
+        let got = favorite_order(&current, &["d", "b"], FavoriteOrderScope::Listed);
+        assert_eq!(got, ["a", "d", "c", "b", "e"]);
+        let got = favorite_order(&current, &["d", "b", "b", "zz"], FavoriteOrderScope::Listed);
+        assert_eq!(got, ["a", "d", "c", "b", "e"]);
+        assert_eq!(
+            favorite_order(&current, &[], FavoriteOrderScope::Listed),
+            current
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1129,11 +1286,14 @@ pub async fn delete_folder(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(CoreError::NotFound)?;
+    lock_favorites(&mut tx, actor_id, workspace).await?;
+    // After every Favorite of the Workspace (not only the top-level ones), so the moved ones never
+    // share a position with a Favorite in another folder.
     let moved = sqlx::query(
         "UPDATE penfii.favorites f SET folder_id=NULL, position=base.top + r.rn*$4
          FROM (SELECT kind,target_id,row_number() OVER (ORDER BY position,created_at,target_id) AS rn
                FROM penfii.favorites WHERE user_id=$1 AND folder_id=$2) r,
-              (SELECT coalesce(max(position),0) AS top FROM penfii.favorites WHERE user_id=$1 AND workspace_id=$3 AND folder_id IS NULL) base
+              (SELECT coalesce(max(position),0) AS top FROM penfii.favorites WHERE user_id=$1 AND workspace_id=$3) base
          WHERE f.user_id=$1 AND f.kind=r.kind AND f.target_id=r.target_id AND f.folder_id=$2",
     )
     .bind(actor_id).bind(folder_id).bind(workspace).bind(POSITION_STEP)

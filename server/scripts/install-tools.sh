@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs the pinned cargo-deny and cargo-shear (`make tools`, and CI). On x86_64/aarch64 Linux it
+# Installs the pinned cargo-deny, cargo-shear and sqlx-cli. On x86_64/aarch64 Linux it
 # takes the release binary and checks its SHA-256; elsewhere it builds the same version with
 # `cargo install --locked`. Bump a version together with its checksums.
 set -euo pipefail
@@ -11,15 +11,15 @@ BIN="${CARGO_HOME:-$HOME/.cargo}/bin"
 
 has() { command -v "$1" >/dev/null && "$1" --version 2>/dev/null | grep -qwF "$2"; }
 
-fetch() { # name url sha256 path-in-archive
+fetch() ( # name url sha256 path-in-archive
   local tmp
   tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
   curl -fsSL --retry 3 -o "$tmp/a.tar.gz" "$2"
   echo "$3  $tmp/a.tar.gz" | sha256sum -c --quiet
   tar -xzf "$tmp/a.tar.gz" -C "$tmp" "$4"
   install -D -m 0755 "$tmp/$4" "$BIN/$1"
-  rm -rf "$tmp"
-}
+)
 
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64)
@@ -33,26 +33,49 @@ case "$(uname -s)-$(uname -m)" in
   *) arch="" ;;
 esac
 
-if ! has cargo-deny "$DENY_VERSION"; then
-  if [ -n "$arch" ]; then
-    name="cargo-deny-$DENY_VERSION-$arch-unknown-linux-musl"
-    fetch cargo-deny "https://github.com/EmbarkStudios/cargo-deny/releases/download/$DENY_VERSION/$name.tar.gz" "$deny_sha" "$name/cargo-deny"
-  else
-    cargo install --locked "cargo-deny@$DENY_VERSION"
+install_cargo_deny() {
+  if ! has cargo-deny "$DENY_VERSION"; then
+    if [ -n "$arch" ]; then
+      local name="cargo-deny-$DENY_VERSION-$arch-unknown-linux-musl"
+      fetch cargo-deny "https://github.com/EmbarkStudios/cargo-deny/releases/download/$DENY_VERSION/$name.tar.gz" "$deny_sha" "$name/cargo-deny"
+    else
+      cargo install --locked "cargo-deny@$DENY_VERSION"
+    fi
   fi
-fi
-if ! has cargo-shear "$SHEAR_VERSION"; then
-  if [ -n "$arch" ]; then
-    fetch cargo-shear "https://github.com/Boshen/cargo-shear/releases/download/v$SHEAR_VERSION/cargo-shear-$arch-unknown-linux-musl.tar.gz" "$shear_sha" cargo-shear
-  else
-    cargo install --locked "cargo-shear@$SHEAR_VERSION"
+  cargo-deny --version
+}
+
+install_cargo_shear() {
+  if ! has cargo-shear "$SHEAR_VERSION"; then
+    if [ -n "$arch" ]; then
+      fetch cargo-shear "https://github.com/Boshen/cargo-shear/releases/download/v$SHEAR_VERSION/cargo-shear-$arch-unknown-linux-musl.tar.gz" "$shear_sha" cargo-shear
+    else
+      cargo install --locked "cargo-shear@$SHEAR_VERSION"
+    fi
   fi
-fi
-# sqlx-cli is the same 0.8 line as the sqlx crate. --locked builds the published lockfile.
-# There is no upstream release binary with a checksum; the version pin is the contract.
-if ! has sqlx "$SQLX_VERSION"; then
-  cargo install --locked sqlx-cli --version "$SQLX_VERSION" --no-default-features --features postgres,rustls
-fi
-cargo-deny --version
-cargo-shear --version
-sqlx --version
+  cargo-shear --version
+}
+
+install_sqlx() {
+  # sqlx-cli is the same 0.8 line as the sqlx crate. --locked builds the published lockfile.
+  # There is no upstream release binary with a checksum; the version pin is the contract.
+  if ! has sqlx "$SQLX_VERSION"; then
+    cargo install --locked sqlx-cli --version "$SQLX_VERSION" --no-default-features --features postgres,rustls
+  fi
+  sqlx --version
+}
+
+if (($# == 0)); then set -- cargo-deny cargo-shear sqlx; fi
+for tool in "$@"; do
+  case "$tool" in
+    cargo-deny|cargo-shear|sqlx) ;;
+    *) echo "unknown tool: $tool (expected cargo-deny, cargo-shear or sqlx)" >&2; exit 2 ;;
+  esac
+done
+for tool in "$@"; do
+  case "$tool" in
+    cargo-deny) install_cargo_deny ;;
+    cargo-shear) install_cargo_shear ;;
+    sqlx) install_sqlx ;;
+  esac
+done

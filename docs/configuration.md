@@ -229,3 +229,19 @@ Initial values for a self-hosted install; none of them is a product limit. A val
 | `PENFII_DOC_COLLAB_AUTH_TTL_SECONDS` | `5` | The longest a connection goes without being checked against PostgreSQL |
 | `PENFII_DOC_MAX_CONTENT_BYTES` | `4194304` | The stored content of one page |
 | `PENFII_DOC_FILE_ORPHAN_GRACE_SECONDS` | `3600` | How long an attached file that no node uses stays attached |
+
+## Local test settings
+
+The [development guide](development.md) explains how to run the checks that use these settings.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `E2E_RUNNER` | `host` | Run Playwright on the host, or use `docker` to share the disposable web container's network |
+| `E2E_BROWSERS` | `chromium` | Comma-separated Playwright projects to run |
+| `E2E_MULTI_USER` | unset | Set to `1` to run the five-person scenario from the Chromium project |
+| `E2E_MU_ENGINES` | unset | Override browser assignments for the five-person scenario |
+| `E2E_KEEP_STACK` | `0` | Set to `1` to keep the disposable stack for inspection |
+| `E2E_BASE_URL`, `E2E_MAILPIT` | Assigned by the launcher | App and Mailpit HTTP(S) origins. External runs require an explicit loopback app origin. External Mailpit is optional and uses loopback too |
+| `E2E_EXTERNAL`, `COMPOSE`, `E2E_WORKSPACE_ID` | unset | Set `E2E_EXTERNAL=1` and pass the disposable stack's Compose command to seed it manually. Supply the Workspace ID when adding accounts to an existing Workspace |
+| `INTEGRATION_SHARD_COUNT`, `INTEGRATION_SHARD_INDEX` | `1`, `1` | Run the whole server suite by default. For sharded runs, use a count of `2` or `4` and a one-based index |
+| `INTEGRATION_SHARD_PROOF` | unset | When sharding, save the full list and observed test names in this directory after the shard passes |

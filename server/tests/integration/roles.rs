@@ -86,7 +86,7 @@ async fn a_non_superuser_owner_applies_every_migration_and_the_runtime_role_cann
             .fetch_one(&owner_pool)
             .await
             .unwrap();
-    assert_eq!(applied, 4);
+    assert_eq!(applied, 5);
     // Again: nothing to do.
     apply_migrations(&owner_pool).await.unwrap();
 

@@ -1,4 +1,5 @@
 import { expect, test as base, type Page } from '@playwright/test'
+import { isSignInSessionCheck } from './browserProblems'
 
 type Watch = {
   /** Starts watching another page (one made with `browser.newContext()`); the test's own `page` is watched already. */
@@ -45,11 +46,10 @@ export const test = base.extend<Watch>({
           if (frame === target.mainFrame()) lastMainNavigationAt = Date.now()
         })
         // Only `/v1/me`, only answered 401, only while the sign-in page is open: any other failure there still counts.
-        const isSignInSessionCheck = (url: string) => new URL(url).pathname === '/v1/me' && new URL(target.url()).pathname === '/login'
         target.on('console', (message) => {
           if (message.type() !== 'error' && message.type() !== 'warning') return
           const where = message.location().url
-          const sessionCheck = message.type() === 'error' && /status of 401/.test(message.text()) && Boolean(where) && isSignInSessionCheck(where)
+          const sessionCheck = message.type() === 'error' && /status of 401/.test(message.text()) && Boolean(where) && isSignInSessionCheck(target.url(), where)
           // WebKit also logs what a navigation cut off: a lazily loaded screen whose script request was cancelled, and a socket
           // still connecting; Firefox logs that socket as well, in its own words. The request itself is checked above (a
           // cancellation only right after a navigation; a real failure or an HTTP error still counts), so only these messages,
@@ -78,7 +78,7 @@ export const test = base.extend<Watch>({
         })
         target.on('response', (response) => {
           if (response.status() < 400) return
-          const sessionCheck = response.status() === 401 && isSignInSessionCheck(response.url())
+          const sessionCheck = response.status() === 401 && isSignInSessionCheck(target.url(), response.url())
           note(`${sessionCheck ? 'sign-in page session check: ' : ''}${response.status()} ${response.request().method()} ${response.url()}`)
         })
         target.on('websocket', (socket) => socket.on('socketerror', (error) => {

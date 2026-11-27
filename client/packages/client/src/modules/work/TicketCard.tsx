@@ -6,6 +6,7 @@ import { useIsMobile } from '../../design/useIsMobile'
 import { useI18n } from '../../i18n/I18nProvider'
 import { formatDue, isOverdue, isPriority } from './ticketModel'
 import { formatEstimate } from './planValues'
+import { FavoriteButton } from '../personal/SavedButtons'
 
 export const TICKET_DRAG_TYPE = 'application/x-penfii-ticket'
 
@@ -165,6 +166,7 @@ export function TicketCard({
           {moving ? <span role="status">{t('work.card.moving')}</span> : null}
         </span>
       </button>
+      <span className="card-tools">
       {mobile && moveChoices && onMoveTo && !moving ? (
         <>
           <button type="button" className="card-move" aria-haspopup="dialog" aria-label={t('work.card.moveTo', { key: ticket.key })} onClick={() => setMoveOpen(true)}>⇄</button>
@@ -180,6 +182,10 @@ export function TicketCard({
           ⤒
         </button>
       ) : null}
+      {/* Last, at the card's edge (where a starred card keeps it shown). Its own control: starring never opens,
+          drags, selects or moves the card. */}
+      <FavoriteButton workspaceId={ticket.workspaceId} kind="TICKET" targetId={ticket.id} label={ticket.key} className="card-favorite" />
+      </span>
     </article>
   )
 }

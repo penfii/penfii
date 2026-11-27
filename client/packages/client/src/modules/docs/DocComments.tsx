@@ -64,9 +64,10 @@ export function DocComments({
   const listRef = useRef<HTMLOListElement>(null)
   useEffect(() => {
     if (!autoFocus) return
-    if (editorRef.current?.focus()) return
+    // The title can take focus as soon as editing starts. A delayed Tiptap focus would steal it back.
+    if (editorRef.current?.focus({ immediate: true })) return
     // The editor draws a moment after this effect on the first draw.
-    const frame = window.requestAnimationFrame(() => editorRef.current?.focus())
+    const frame = window.requestAnimationFrame(() => editorRef.current?.focus({ immediate: true }))
     return () => window.cancelAnimationFrame(frame)
   }, [autoFocus, docId])
   // `@` lists the people of the Workspace by name; what is picked is stored as the person's id, and the server decides who is told.

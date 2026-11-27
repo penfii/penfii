@@ -7,6 +7,7 @@ import { formatDue, isOverdue, isPriority } from './ticketModel'
 import { formatEstimate } from './planValues'
 import { BlockedChip } from './WorkChips'
 import { TriCheck } from './TriCheck'
+import { FavoriteButton } from '../personal/SavedButtons'
 import type { Section, WorkTicket } from './viewModel'
 import type { TableColumn } from '@penfii/contracts'
 
@@ -172,6 +173,7 @@ export function ListLayout({
                       </span>
                     ) : null}
                   </span>
+                  {phoneSelect ? null : <FavoriteButton workspaceId={ticket.workspaceId} kind="TICKET" targetId={ticket.id} label={ticket.key} className="icon-button list-row-favorite" />}
                   {reorder && canEdit(ticket) && !phoneSelect ? (
                     <span className="list-row-order">
                       {reorder.canStep(ticket, section) ? (

@@ -229,7 +229,13 @@ test.describe('a Ticket kept, binned and brought back', () => {
     await expect(page.getByRole('heading', { name: 'Archived tickets' })).toBeVisible()
     await expect(page.getByRole('link', { name: new RegExp(ticket.key) }).or(page.getByText(ticket.key)).first()).toBeVisible()
 
+    // The live update from Unarchive also refreshes the related lists. Let that read finish before
+    // the next write, so the checks below exercise the panel closing on Trash.
+    const refreshedChildren = page.waitForResponse((response) =>
+      response.request().method() === 'GET' && new URL(response.url()).pathname === `/v1/tickets/${ticket.id}/children`,
+    )
     await page.getByRole('button', { name: 'Unarchive' }).click()
+    expect((await refreshedChildren).ok()).toBe(true)
     await expect(page.getByText('This ticket is archived.')).toHaveCount(0)
     await expect(page.getByRole('textbox', { name: 'Title' })).toBeEditable()
     await expect(page.getByRole('button', { name: 'Edit description' })).toBeVisible()

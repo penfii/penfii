@@ -285,7 +285,7 @@ Tool names are `<area>_<action>`. Ids come from the tool named in the descriptio
 | `favorite_folder_rename` | `personal:write` | write | Rename one of your favorite folders |
 | `favorite_list` | `personal:read` | read | List your favorites in a Workspace in your order, with folders |
 | `favorite_move` | `personal:write` | write | Put a favorite into one of your folders, or to the top level with folderId null |
-| `favorite_order` | `personal:write` | write | Set the order of your favorites: items lists every favorite (kind, targetId) in the new order |
+| `favorite_order` | `personal:write` | write | Set the order of your favorites: items lists favorites (kind, targetId) in the new order; with every favorite listed it sets the whole order, and scope LISTED reorders only the listed ones among their own places |
 | `favorite_remove` | `personal:write` | write | Remove one thing from your favorites |
 | `inbox_list` | `personal:read` | read | List your Inbox (or the archive) in a Workspace, newest first, with unreadCount |
 | `inbox_read_all` | `personal:write` | write | Mark all your unread Inbox items in a Workspace read (optionally only one notification group) |

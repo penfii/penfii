@@ -11,16 +11,18 @@ const column = (page: Page, name: string) => page.getByRole('region', { name, ex
 test.describe('FEA-088: a person never sees another person\'s data', () => {
   test('an expired session, then another person signing in on the same tab', async ({ browser, watchPage, allowProblem }) => {
     allowProblem(/status of 401/)
-    // The expired session is the point of this test: the inbox requests made after the cookie is cleared are refused.
-    allowProblem(/^401 GET .*\/inbox\?/)
+    // Queries already scheduled by the shell and the protected page can race to notice the expired session.
+    allowProblem(/^401 GET .*\/v1\/(?:me$|workspaces(?:$|\/[^/]+\/(?:space$|work\?|docs\/tree$|inbox\?)))/)
     const { context, page } = await signedInContext(browser, accountA.email, watchPage)
     await expect(page.getByRole('button', { name: accountA.name })).toBeVisible()
     // Something the first person left on this device that belongs to them (a draft, say).
     await page.evaluate(() => localStorage.setItem('penfii.e2e.canary', 'belongs to A'))
 
-    // The session ends on the server (an expired cookie); the next request the page makes is refused.
+    const inbox = await page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: 'Inbox' }).getAttribute('href')
+    expect(inbox).toMatch(/\/inbox$/)
+    // A background request may redirect first, so capture the protected route before clearing the cookie.
     await context.clearCookies()
-    await page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: 'Inbox' }).click()
+    await page.goto(inbox!)
     await expect(page).toHaveURL(/\/login/)
 
     await page.getByLabel('Email').fill(accountB.email)
@@ -54,16 +56,16 @@ test.describe('FEA-089: crossing 640px keeps what is on screen', () => {
     await logIn(page, accountA.email)
     await page.goto(`/w/${workspaceId}/docs?doc=${doc.id}`)
     await page.getByRole('button', { name: 'Edit' }).click()
-    const editor = page.locator('.ProseMirror[contenteditable="true"]').first()
+    const editor = page.locator('[data-doc-editor] .bn-editor[contenteditable="true"]')
     await editor.click()
     await page.keyboard.type(text)
     await expect(page.getByRole('status').filter({ hasText: 'Unsaved changes' })).toBeVisible()
 
     await page.setViewportSize({ width: 600, height: 900 })
-    await expect(page.locator('.ProseMirror[contenteditable="true"]').first()).toContainText(text)
+    await expect(editor).toContainText(text)
     await expect(page.getByRole('status').filter({ hasText: 'Unsaved changes' })).toBeVisible()
     await page.setViewportSize({ width: 1280, height: 800 })
-    await expect(page.locator('.ProseMirror[contenteditable="true"]').first()).toContainText(text)
+    await expect(editor).toContainText(text)
     await expect(page.getByRole('status').filter({ hasText: 'Unsaved changes' })).toBeVisible()
   })
 

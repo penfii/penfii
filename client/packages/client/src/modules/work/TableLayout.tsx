@@ -6,6 +6,7 @@ import { formatEstimate } from './planValues'
 import { formatDue, isOverdue, isPriority } from './ticketModel'
 import { BlockedChip } from './WorkChips'
 import { TriCheck } from './TriCheck'
+import { FavoriteButton } from '../personal/SavedButtons'
 import type { Section, WorkTicket } from './viewModel'
 
 const SORTABLE: Partial<Record<TableColumn, ViewSortField>> = { TITLE: 'TITLE', PRIORITY: 'PRIORITY', DUE_ON: 'DUE_ON', ESTIMATE: 'ESTIMATE' }
@@ -59,11 +60,14 @@ export function TableLayout({
         )
       case 'TITLE':
         return (
-          <button type="button" className="table-open" aria-current={ticket.id === selectedId ? 'true' : undefined} aria-label={t('work.board.openTicket', { key: ticket.key })} onClick={() => onOpen(ticket.id)}>
-            {ticket.parentId ? <span aria-hidden="true" className="table-nest">↳ </span> : null}
-            {ticket.title}
-            <BlockedChip ticket={ticket} />
-          </button>
+          <span className="table-title">
+            <button type="button" className="table-open" aria-current={ticket.id === selectedId ? 'true' : undefined} aria-label={t('work.board.openTicket', { key: ticket.key })} onClick={() => onOpen(ticket.id)}>
+              {ticket.parentId ? <span aria-hidden="true" className="table-nest">↳ </span> : null}
+              {ticket.title}
+              <BlockedChip ticket={ticket} />
+            </button>
+            <FavoriteButton workspaceId={ticket.workspaceId} kind="TICKET" targetId={ticket.id} label={ticket.key} className="icon-button table-favorite" />
+          </span>
         )
       case 'STATE':
         return <StateMenu ticket={ticket} known={states} disabled={!canEdit(ticket) || busy.has(ticket.id)} onPick={(id) => onState(ticket, id)} />

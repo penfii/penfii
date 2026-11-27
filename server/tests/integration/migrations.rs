@@ -56,7 +56,7 @@ async fn exists(pool: &PgPool, table: &str) -> bool {
 async fn the_real_history_is_recorded_once_and_applying_again_changes_nothing(pool: PgPool) {
     let _turn = crate::common::MIGRATING.acquire().await.unwrap();
     apply_migrations(&pool).await.expect("first run");
-    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4]);
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4, 5]);
     let tables: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM pg_tables WHERE schemaname = 'penfii' AND tablename <> '_sqlx_migrations'",
     )
@@ -71,7 +71,7 @@ async fn the_real_history_is_recorded_once_and_applying_again_changes_nothing(po
         .unwrap();
     apply_migrations(&pool).await.expect("second run");
     apply_migrations(&pool).await.expect("third run");
-    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4]);
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4, 5]);
     let kept: i64 =
         sqlx::query_scalar("SELECT count(*) FROM penfii.foundation_state WHERE key = 'kept'")
             .fetch_one(&pool)
@@ -100,7 +100,7 @@ async fn instances_that_start_together_apply_each_migration_once(pool: PgPool) {
     for run in runs {
         run.await.unwrap().expect("every instance succeeds");
     }
-    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4]);
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4, 5]);
 }
 
 #[sqlx::test(migrator = "crate::common::GUARD")]
@@ -391,7 +391,7 @@ async fn a_v0_1_0_database_upgrades_in_place_and_keeps_its_rows(pool: PgPool) {
 
     // What admin-cli migrate does on the upgrade: 0002 and the later files are applied, and the build accepts the result.
     apply_migrations(&pool).await.expect("0002 over v0.1.0");
-    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4]);
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4, 5]);
     penfii_core::require_current_schema(&pool)
         .await
         .expect("the history matches this build");
@@ -437,7 +437,7 @@ async fn a_v0_1_0_database_upgrades_in_place_and_keeps_its_rows(pool: PgPool) {
     assert!(duplicate.is_err());
     // Applying again changes nothing.
     apply_migrations(&pool).await.expect("second run");
-    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4]);
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4, 5]);
 }
 
 /// The migrations a development build between v0.3.1 and the consolidated 0003 recorded: 0001 and 0002
@@ -540,10 +540,11 @@ async fn the_split_0003_history_becomes_the_consolidated_0003(pool: PgPool) {
     assert!(run.consolidated_split_0003);
     let after = history(&pool).await;
     // The consolidated 0003 stands in for the five split files, and the build's own later
-    // migration (0004) is applied after it.
-    assert_eq!(after.len(), 4);
+    // migrations (0004, 0005) are applied after it.
+    assert_eq!(after.len(), 5);
     assert_eq!(after[3].0, 4);
     assert_eq!(after[3].1, "after v0 4 1");
+    assert_eq!(after[4].0, 5);
     assert_eq!(after[..2], before[..2], "0001 and 0002 are untouched");
     assert_eq!(after[2].0, 3);
     assert_eq!(after[2].1, "after v0 3 1");
@@ -587,7 +588,7 @@ async fn instances_that_start_together_consolidate_the_split_history_once(pool: 
         }
     }
     assert_eq!(rewrote, 1);
-    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4]);
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4, 5]);
 }
 
 /// A history with only some of the split files, one with a split file changed, and one whose tables
@@ -727,7 +728,9 @@ async fn the_split_0004_history_becomes_the_consolidated_0004_and_keeps_the_data
     assert!(run.consolidated_split_0004);
     assert!(!run.consolidated_split_0003);
     let after = history(&pool).await;
-    assert_eq!(after.len(), 4);
+    // The consolidated 0004 stands in for the two split files; the later 0005 is applied after it.
+    assert_eq!(after.len(), 5);
+    assert_eq!(after[4].0, 5);
     assert_eq!(after[..3], before[..3], "0001 to 0003 are untouched");
     assert_eq!(after[3].0, 4);
     assert_eq!(after[3].1, "after v0 4 1");
@@ -778,7 +781,7 @@ async fn instances_that_start_together_consolidate_the_split_0004_once(pool: PgP
         }
     }
     assert_eq!(rewrote, 1);
-    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4]);
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4, 5]);
 }
 
 /// Only one of the two split files, a split file with another checksum, and a missing column are refused and
@@ -835,7 +838,7 @@ async fn a_v0_4_1_database_upgrades_through_the_consolidated_0004(pool: PgPool) 
     run_migrator(&pool, &v0_4_1, "penfii").await.unwrap();
     let run = apply_migrations(&pool).await.expect("upgrade");
     assert!(!run.consolidated_split_0003 && !run.consolidated_split_0004);
-    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4]);
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4, 5]);
     penfii_core::require_current_schema(&pool).await.unwrap();
     // Existing pages and sessions behave as they did: off and ordinary.
     let columns: Vec<String> = sqlx::query_scalar(
@@ -856,5 +859,79 @@ async fn a_v0_4_1_database_upgrades_through_the_consolidated_0004(pool: PgPool) 
             "idle_seconds:YES:",
             "keep_signed_in:NO:false"
         ]
+    );
+}
+
+/// A v0.5.0 database (history 0001-0004) with Favorites upgrades in place: 0005 only widens the kinds a
+/// Favorite may have, so every row, folder and position stays, and DM and DOC are accepted afterwards.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_v0_5_0_database_keeps_its_favorites_and_takes_dm_and_doc(pool: PgPool) {
+    let _turn = crate::common::MIGRATING.acquire().await.unwrap();
+    let released = migrator(&[
+        (
+            1,
+            include_str!("../../../database/migrations/0001_initial.sql"),
+        ),
+        (
+            2,
+            include_str!("../../../database/migrations/0002_after_v0_1_0.sql"),
+        ),
+        (
+            3,
+            include_str!("../../../database/migrations/0003_after_v0_3_1.sql"),
+        ),
+        (
+            4,
+            include_str!("../../../database/migrations/0004_after_v0_4_1.sql"),
+        ),
+    ]);
+    run_migrator(&pool, &released, "penfii").await.unwrap();
+    let (user, ws, folder) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    sqlx::query("INSERT INTO penfii.users (id, email, email_key, display_name) VALUES ($1, 'f@x.test', 'f@x.test', 'F')")
+        .bind(user).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO penfii.workspaces (id, name, time_zone) VALUES ($1, 'W', 'Asia/Seoul')",
+    )
+    .bind(ws)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO penfii.favorite_folders (id, user_id, workspace_id, name, position) VALUES ($1, $2, $3, 'Keep', 1024)")
+        .bind(folder).bind(user).bind(ws).execute(&pool).await.unwrap();
+    for (n, kind) in ["PROJECT", "TEAM", "TICKET", "VIEW", "CHANNEL"]
+        .iter()
+        .enumerate()
+    {
+        sqlx::query("INSERT INTO penfii.favorites (user_id, workspace_id, kind, target_id, position, folder_id) VALUES ($1, $2, $3, $4, $5, $6)")
+            .bind(user).bind(ws).bind(kind).bind(Uuid::new_v4()).bind((n as i64 + 1) * 1024)
+            .bind((n % 2 == 0).then_some(folder))
+            .execute(&pool).await.unwrap();
+    }
+    let refused = sqlx::query("INSERT INTO penfii.favorites (user_id, workspace_id, kind, target_id, position) VALUES ($1, $2, 'DOC', $3, 1)")
+        .bind(user).bind(ws).bind(Uuid::new_v4()).execute(&pool).await;
+    assert!(refused.is_err(), "v0.5.0 had no DOC favorites");
+    let before: Vec<(String, i64, Option<Uuid>)> =
+        sqlx::query_as("SELECT kind, position, folder_id FROM penfii.favorites ORDER BY position")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+
+    apply_migrations(&pool).await.expect("upgrade");
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4, 5]);
+    let after: Vec<(String, i64, Option<Uuid>)> =
+        sqlx::query_as("SELECT kind, position, folder_id FROM penfii.favorites ORDER BY position")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(after, before);
+    for kind in ["DM", "DOC"] {
+        sqlx::query("INSERT INTO penfii.favorites (user_id, workspace_id, kind, target_id, position) VALUES ($1, $2, $3, $4, 9000)")
+            .bind(user).bind(ws).bind(kind).bind(Uuid::new_v4()).execute(&pool).await.unwrap();
+    }
+    let error = sqlx::query("INSERT INTO penfii.favorites (user_id, workspace_id, kind, target_id, position) VALUES ($1, $2, 'MESSAGE', $3, 1)")
+        .bind(user).bind(ws).bind(Uuid::new_v4()).execute(&pool).await.expect_err("unknown kind");
+    assert!(
+        error.to_string().contains("favorites_kind_check"),
+        "{error}"
     );
 }

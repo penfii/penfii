@@ -33,7 +33,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: server
-      - run: make tools
+      - run: make tools TOOLS="cargo-deny cargo-shear"
       - run: make quick
 
   # Advisories (RustSec), licences, banned and unknown sources, from server/deny.toml.
@@ -46,13 +46,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: make tools
+      - run: make tools TOOLS=cargo-deny
       - run: make deny
 
   # The whole server test suite, including the contract test against server/api/openapi.json, on
   # PostgreSQL 17 and OpenSearch with the nori plugin, in throwaway containers (the `integration`
   # target builds docker/opensearch and starts both). The migrations are database/migrations.
-  server-test:
+  server-test-shard:
+    strategy:
+      fail-fast: false
+      matrix:
+        index: [1, 2]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     defaults:
@@ -67,8 +71,48 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: server
-      - run: make tools
-      - run: make integration || { echo "make integration failed; retrying once"; make integration; }
+          save-if: ${{ matrix.index == 1 }}
+      - if: matrix.index == 1
+        run: make tools TOOLS=sqlx
+      - run: make integration
+        env:
+          INTEGRATION_SHARD_COUNT: "2"
+          INTEGRATION_SHARD_INDEX: ${{ matrix.index }}
+          RUST_TEST_THREADS: "4"
+          INTEGRATION_SHARD_PROOF: ${{ runner.temp }}/integration-proof
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-proof-${{ github.sha }}-${{ matrix.index }}
+          path: ${{ runner.temp }}/integration-proof/
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
+
+  server-test:
+    needs: server-test-shard
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every server test shard to pass
+        env:
+          SHARDS: ${{ needs.server-test-shard.result }}
+        run: test "$SHARDS" = success
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: integration-proof-${{ github.sha }}-*
+          path: ${{ runner.temp }}/integration-proofs/
+      - name: Require complete, nonoverlapping shards
+        env:
+          SHA: ${{ github.sha }}
+          LC_ALL: C
+        run: |
+          cd "$RUNNER_TEMP/integration-proofs"
+          first="integration-proof-$SHA-1"
+          second="integration-proof-$SHA-2"
+          cmp "$first/all.txt" "$second/all.txt"
+          test -s "$first/selected.txt"
+          test -s "$second/selected.txt"
+          cat "$first/selected.txt" "$second/selected.txt" | sort | diff -u "$first/all.txt" -
 
   # The Node version is the one the web image uses; the tests are known to behave differently on
   # other versions.
@@ -137,7 +181,11 @@ jobs:
       - name: Compose file
         run: docker compose --env-file docker/.env.example -f docker/compose.yaml config --quiet
       - name: Images
-        run: docker compose --env-file docker/.env.example -f docker/compose.yaml build
+        env:
+          SECURITY_REFRESH: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          docker compose --env-file docker/.env.example -f docker/compose.yaml -f docker/compose.ci.yaml \
+            build --pull --build-arg "PENFII_SECURITY_REFRESH=$SECURITY_REFRESH"
       # The release ZIP's compose.yaml (docker/install) is valid and equals docker/compose.yaml except for the images;
       # the ZIP builds, and builds to the same bytes twice. Nothing is published (.github/workflows/release.yml does that).
       - name: Install package
@@ -147,6 +195,18 @@ jobs:
           docker/release/package.sh 0.0.0 "$RUNNER_TEMP/zip1"
           docker/release/package.sh 0.0.0 "$RUNNER_TEMP/zip2"
           cmp "$RUNNER_TEMP/zip1/penfii-v0.0.0-docker.zip" "$RUNNER_TEMP/zip2/penfii-v0.0.0-docker.zip"
+      - name: Export images for supply-chain
+        env:
+          COMMIT: ${{ github.sha }}
+        run: docker/scripts/ci-images.sh save "$RUNNER_TEMP/ci-images"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-images-${{ github.sha }}
+          path: ${{ runner.temp }}/ci-images/
+          compression-level: 0
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 3
 
   # Secrets in the whole history of the branch.
   gitleaks:
@@ -164,17 +224,32 @@ jobs:
   # workflow does not run on: a tag push starts nothing, so a CI SBOM says `none`) and the image id and checked against the CycloneDX schema; then a container vulnerability report (Grype). The SBOM step
   # fails when an SBOM is missing, invalid or unstamped. The report only reports: findings never fail this job, and a
   # scanner that cannot fetch its database is written down as UNAVAILABLE. It does not deploy anything. It
-  # describes the images built here from this checkout, not images another pipeline
+  # describes the images built by the docker job in this workflow, not images another pipeline
   # builds for a deployment. Same commands locally: docker/scripts/supply-chain.sh.
   supply-chain:
+    needs: docker
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      IMAGE_CORE_API: penfii-ci-core-api:local
+      IMAGE_WEB: penfii-ci-web:local
     steps:
+      - name: Require a successful Docker build
+        env:
+          DOCKER_RESULT: ${{ needs.docker.result }}
+        run: test "$DOCKER_RESULT" = success
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Images
-        run: docker compose --env-file docker/.env.example -f docker/compose.yaml build core-api web
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ci-images-${{ github.sha }}
+          path: ${{ runner.temp }}/ci-images/
+      - name: Load and verify the built images
+        env:
+          COMMIT: ${{ github.sha }}
+        run: docker/scripts/ci-images.sh load "$RUNNER_TEMP/ci-images"
       - name: SBOM
         env:
           COMMIT: ${{ github.sha }}
@@ -185,7 +260,7 @@ jobs:
         env:
           COMMIT: ${{ github.sha }}
           TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-        run: docker/scripts/supply-chain.sh scan supply-chain
+        run: docker/scripts/supply-chain.sh scan supply-chain | tee supply-chain/vulnerability-summary.txt
       - name: Keep the SBOMs and the report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -164,7 +164,7 @@ fn schema_favorite_add() -> Value {
     object_schema(
         json!({
             "workspaceId": workspace_id_property(),
-            "kind": {"type": "string", "description": "What is favorited, as in favorite_list."},
+            "kind": {"type": "string", "enum": ["PROJECT", "TEAM", "TICKET", "VIEW", "CHANNEL", "DM", "DOC"], "description": "What is favorited: PROJECT, TEAM, TICKET, VIEW (a saved view), CHANNEL, DM (a direct-message conversation id) or DOC (a Doc page)."},
             "targetId": uuid_property("Id of the favorited thing.")
         }),
         &["workspaceId", "kind", "targetId"],
@@ -176,7 +176,9 @@ fn schema_favorite_order() -> Value {
         json!({"workspaceId": workspace_id_property(),
                "items": {"type": "array", "maxItems": 500, "items": object_schema(
                    json!({"kind": {"type": "string"}, "targetId": uuid_property("Target id.")}),
-                   &["kind", "targetId"])}}),
+                   &["kind", "targetId"])},
+               "scope": {"type": "string", "enum": ["ALL", "LISTED"],
+                   "description": "ALL (default): the listed favorites come first, the others keep their order after them. LISTED: only the listed favorites change places, among the places they already hold (one folder, for example)."}}),
         &["workspaceId", "items"],
     )
 }
@@ -445,7 +447,7 @@ pub static OPS: &[Operation] = &[
         "favorite.order",
         "favorite_order",
         "Reorder favorites",
-        "Set the order of your favorites: items lists every favorite (kind, targetId) in the new order. Returns the list.",
+        "Set the order of your favorites: items lists favorites (kind, targetId) in the new order; with every favorite listed it sets the whole order, and scope LISTED reorders only the listed ones among their own places. Returns the list.",
         W,
         RiskClass::Write,
         WS,
@@ -900,7 +902,9 @@ pub(super) async fn run(
                         .ok_or_else(|| Failure::invalid("each item needs kind"))?;
                     order.push((kind.to_string(), uuid_arg(item, "targetId")?));
                 }
-                personal::order_favorites(pool, user, workspace_id, order).await?;
+                let scope =
+                    personal::FavoriteOrderScope::parse(args.get("scope").and_then(Value::as_str))?;
+                personal::order_favorites(pool, user, workspace_id, order, scope).await?;
                 let items = personal::list_favorites(pool, user, workspace_id).await?;
                 Ok(done(capped(to_value(&items)?)))
             }

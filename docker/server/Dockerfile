@@ -11,6 +11,8 @@ RUN cargo build --release --locked -p core-api -p admin-cli
 
 FROM debian:trixie-slim
 # Security updates published after the base image was built (glibc, zlib, ...) are taken at build time.
+# CI passes a new value for every run attempt so cached package upgrades cannot go stale.
+ARG PENFII_SECURITY_REFRESH
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends ca-certificates \

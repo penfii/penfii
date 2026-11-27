@@ -57,7 +57,7 @@ test.describe('core flows', () => {
     await logIn(page, accountA.email)
     await page.goto(`/w/${workspaceId}/docs?doc=${doc.id}`)
     await page.getByRole('button', { name: 'Edit' }).click()
-    const editor = page.locator('.ProseMirror[contenteditable="true"]').first()
+    const editor = page.locator('[data-doc-editor] .bn-editor[contenteditable=true]')
     await editor.click()
     await page.keyboard.type(text)
     await page.getByRole('button', { name: 'Save' }).click()

@@ -102,7 +102,7 @@ make quick              # typecheck, lint, knip, tests and license check with yo
 make check              # what CI does, in a Node 22 container on a clean copy: npm ci, licenses, generated types, typecheck, lint, knip, tests, build, bundle budget, npm audit (needs Docker)
 npm run contract:check  # or: make contract (see "Changing the API")
 npm run budget          # or: make budget, after `npm run build`: first-load JavaScript size (see below)
-make e2e-seed e2e       # end-to-end tests against a running Compose stack (see "End-to-end tests")
+make e2e                # end-to-end tests in a disposable Compose stack
 ```
 
 There is no formatter. Strict `tsc` is the main check; ESLint (`client/eslint.config.js`) keeps a few bug-class rules (rules of hooks, floating or misused promises, TanStack Query) and Knip (`client/knip.jsonc`) fails on unused files, exports and dependencies, including code that only tests use. Tests run under jsdom and must not open real sockets or networks. A test whose mock leaves a query unanswered fails ("Query data cannot be undefined"): make the mock return what the API returns.
@@ -111,43 +111,36 @@ There is no formatter. Strict `tsc` is the main check; ESLint (`client/eslint.co
 
 ### End-to-end tests (`client/apps/e2e`)
 
-Playwright drives a real browser against a running Compose stack and its real server; it is the only place where login, sockets, drafts and layout changes are tested together. It is **not** part of `make check` or CI's `client-check`: it needs the whole stack (PostgreSQL, OpenSearch, MinIO, core-api, web) built from the same tree, which the Node-only clean-copy container does not have, and a run changes data in the stack. Run it before merging a change to sign-in, the shell, realtime sync, drafts or the board, and add a scenario there when one of those breaks. It is deliberately a separate step; moving it into a CI job needs a runner that can start the Compose stack, and the job must not gate `deploy` until it has proved stable there.
+Playwright drives a real browser against the server built from the working tree. It covers flows like login, sockets, drafts and layout changes together. Run it separately from `make check` and GitHub CI.
 
 ```sh
-cd docker && docker compose up -d --build        # the stack, http://127.0.0.1:8080
-cd ../client && npx playwright install chromium  # once: the browser
-E2E_WORKSPACE_ID=<id> make e2e-seed             # once: e2e-a@example.test and e2e-b@example.test as owners of that Workspace
-                                                  # (on an empty stack, omit it: the script bootstraps one named E2E)
-make e2e                                          # E2E_BASE_URL overrides the address
+cd client
+npm ci
+npx playwright install chromium
+make e2e                                                      # fresh stack, Chromium
+npm run e2e -- project-prefix.spec.ts fea193-198.spec.ts       # same isolation, selected tests
+E2E_RUNNER=docker E2E_MULTI_USER=1 make e2e                    # full Chromium suite and the three-engine scenario
 ```
 
-**Other browsers.** `E2E_BROWSERS=chromium,firefox,webkit make e2e` runs the same suite in more engines (`npx playwright install firefox webkit`). WebKit needs system libraries that `npx playwright install-deps webkit` installs (it needs root); without them run it in the official image:
+The launcher needs Bash, OpenSSL, `setsid`, and Docker on the local Unix socket, with Compose 2.24.4 or newer. Each run gets its own project, build tags, networks, volumes, PostgreSQL, OpenSearch, object storage and Mailpit. Docker assigns loopback ports for the app and Mailpit. The launcher loads the checked-in example settings with generated credentials and a test Web Push key. It seeds both owners, the security accounts and the multi-user roles. It passes these endpoints and fixtures to Playwright regardless of any development `.env` or account overrides in the terminal. See [test settings](configuration.md#local-test-settings) for defaults.
+
+**Browsers and fixtures.** `E2E_BROWSERS=chromium,firefox,webkit` adds the other browsers to the ordinary suite. Install them and their system libraries locally, or set `E2E_RUNNER=docker` to use the pinned Playwright image on the test web container's network. Use `E2E_MULTI_USER=1` for the five-person scenario, which launches Chromium, Firefox and WebKit itself. It runs once under the Chromium project and needs all three engines. `E2E_MU_ENGINES=owner=webkit,member=chromium,member2=firefox` changes assignments for diagnosis. The mail-backed invitation, password reset, e-mail change and rejoin tests use the local SMTP catcher. The Web Push test can still skip an engine without Push support.
+
+**Logs and cleanup.** Find the per-run directory under `client/apps/e2e/runs/`. It contains fixture counts, Playwright output, the multi-user journal if enabled, and traces and Compose logs on failure. Normally the launcher removes its containers, networks, volumes and image tags on exit, including on SIGINT or SIGTERM. Set `E2E_KEEP_STACK=1` to inspect the stack afterward. To clean a retained run, or one interrupted by a forced kill, use the project printed by the launcher:
 
 ```sh
-docker run --rm --user "$(id -u):$(id -g)" --network host --ipc=host -v "$PWD":/work -w /work \
-  -e E2E_BROWSERS=webkit -e E2E_BASE_URL=http://127.0.0.1:8080 -e HOME=/tmp mcr.microsoft.com/playwright:v1.65.0-noble npx playwright test -c apps/e2e
+apps/e2e/run.sh --clean penfii-e2e-<16 hex digits>
 ```
 
-**Several people at once.** `tests/multi-user.spec.ts` signs five people in at the same time, each in a browser context of their own and on different engines: a workspace owner who administers the Project (Chromium), a member in the private channel (Firefox), a member outside it (WebKit), a member outside the Project (WebKit) and a workspace admin outside the Project (Chromium). It checks what each of them sees, what is refused to them, and what happens when two of them act at the same moment (chat, ticket fields, title, description, a document, archive, channel membership, Project participation, sign-out). It is opt-in, needs its own accounts and all three engines, so run it in the official image:
+Cleanup requires the saved settings from that run. It does not prune the Docker build cache, affect other projects, or delete the run's logs.
 
-```sh
-E2E_WORKSPACE_ID=<id> apps/e2e/seed-multi-user.sh   # once: mu-owner, mu-admin, mu-member, mu-member2, mu-outsider @example.test
-docker run --rm --user "$(id -u):$(id -g)" --network host --ipc=host -v "$PWD":/work -w /work/apps/e2e -e HOME=/tmp \
-  -e E2E_MULTI_USER=1 -e E2E_BASE_URL=http://127.0.0.1:8080 mcr.microsoft.com/playwright:v1.65.0-noble \
-  npx playwright test tests/multi-user.spec.ts
-```
-
-Every action, console message, refused request and socket error is written with the person, the engine and the time to `apps/e2e/test-results/multi-user/*.jsonl` (`E2E_MU_LOG` names another file); match it against `docker compose logs core-api` by time. `E2E_MU_ENGINES=owner=webkit,member=chromium,member2=firefox` moves people to other engines, to tell an engine's problem from the application's. The findings MU-1 to MU-4 named in its comments are explained in [the v0.2.1 audit](https://github.com/penfii/penfii/blob/v0.2.1/docs/audits/v0.2.1-release-audit.md).
-
-**Mail, recovery and the phone layout.** `tests/release-flows.spec.ts` covers what the other specs leave out: an invitation and a password reset through the mailed link, recovering a private channel nobody manages, a Ticket's archive, trash, restore and purge, a channel's incoming webhook (with the sign-in check in between), the Web Push switch, the phone layout and a menu whose trigger leaves the window. The mail tests need an SMTP catcher the stack sends to: add a [Mailpit](https://mailpit.axllent.org/) service to the stack, point `PENFII_SMTP_HOST`/`PENFII_SMTP_PORT` at it with `PENFII_SMTP_SECURITY=none`, and give the tests its HTTP API as `E2E_MAILPIT=http://127.0.0.1:8025`; without it they are skipped. The Web Push test is skipped while the stack has no VAPID key. `E2E_EMAIL_MEMBER` (a plain MEMBER) runs the read-only Channel Settings check in `channel-ticket-ux.spec.ts`.
-
-**Two-step verification, e-mail change, removal and rejoin, password change.** `tests/security-flows.spec.ts` drives them as a person does, with a TOTP code computed from the key the setup screen shows: set up MFA with a wrong and then a right code, sign in with the password alone (refused, no session), with a wrong code, a right code and a recovery code (once only), turn it off; change the e-mail address through the mailed link (the old address keeps working until then, the link works once, the old address is told) and change it back; remove a member in the admin screen, see the person shut out at once and invited back through the mailed link without the old private channel; change the password and see the other devices end while this one stays, and sign a device out from the list. Seed its three accounts with `E2E_WORKSPACE_ID=<id> apps/e2e/seed-security.sh`; the mail parts need `E2E_MAILPIT` as above, and the mails are in the instance's default language. The server allows 5 e-mail change requests an hour per account and 3 an hour per target address, and one run makes two, so run that test at most twice an hour against the same stack (a 429 is the limit, not a failure of the feature).
-
-The accounts and their public password are test data (`apps/e2e/support/accounts.ts`, override with `E2E_EMAIL_A`, `E2E_EMAIL_B`, `E2E_PASSWORD`). Each test makes its own Project, channel or document, so runs can be repeated; a test fails on any console error, uncaught page error or 5xx answer it did not announce (`allowProblem`). Wait for a condition, never a fixed time.
+**External test stacks.** For an explicitly prepared disposable stack on loopback, run `E2E_BASE_URL=http://127.0.0.1:<port> make e2e-external`. Attach its local Mailpit API with `E2E_MAILPIT` and set account overrides only for that stack. To seed it, pass `E2E_EXTERNAL=1` and an explicit `COMPOSE` command for the test project. On an empty stack, `make e2e-seed` creates both owners and prints the Workspace ID. Pass that ID as `E2E_WORKSPACE_ID` to `apps/e2e/seed-security.sh` and `apps/e2e/seed-multi-user.sh`, or to `make e2e-seed` when seeding an existing Workspace. If a seed reports an existing account, check its membership, role and password before using it. These tests write data and can remove test members or change test passwords. Use the disposable launcher for normal development.
 
 ### Repository-level
 
 - The Compose file is validated with `docker compose --env-file docker/.env.example -f docker/compose.yaml config --quiet`, and CI also builds the three images.
+- `make -C server integration` runs the whole server suite. For local shard measurements, start two or four invocations with the same `INTEGRATION_SHARD_COUNT` and distinct one-based `INTEGRATION_SHARD_INDEX` values. Each invocation starts its own database and search service. Shard 1 also runs migrations, SQLx checking, and all tests outside the integration binary. Each shard checks its observed test names against its assignment. On GitHub, `server-test` requires both shard jobs and checks their combined lists for coverage.
+- GitHub's `docker` job builds all Compose images with `docker/compose.ci.yaml`, refreshes base images and runtime package upgrades, and verifies the install ZIP. It exports the core-api and web images once. The `supply-chain` job verifies the commit and loaded image IDs from that same run before making its SBOM and Grype report. The image bundle expires after three days. Rerun the Docker build as well if the bundle has expired. The reports are kept for 90 days.
 - Third-party notices are generated: `make notices` in `server/` and in `client/` regenerates `THIRD-PARTY-NOTICES.md` after `Cargo.lock` or `package-lock.json` changes. `make quick` in `server/` fails when the file is out of date.
 
 ## Changing the schema

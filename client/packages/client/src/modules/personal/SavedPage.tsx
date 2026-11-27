@@ -9,11 +9,13 @@ import { queryKeys } from '../../queryKeys'
 import { queries } from '../../queries'
 import { ReminderControl } from '../attention/ReminderControl'
 import { isApiError } from '@penfii/api-client'
-import type { FavoriteFolder, FavoriteItem, SavedKind } from '@penfii/contracts'
+import type { FavoriteFolder, FavoriteItem } from '@penfii/contracts'
 import { CloseIcon } from '../../design/icons'
 import { isArchivedTeam } from '../spaces/teamState'
+import { notify } from '../../design/notices'
+import { useFavorite } from './SavedButtons'
 
-/** Where a saved shortcut leads. */
+/** Where a saved shortcut leads. A kind this build does not know leads nowhere (no guessed link). */
 export function savedLink(workspaceId: string, ref: SavedRef): string | null {
   const base = `/w/${workspaceId}`
   switch (ref.kind) {
@@ -25,16 +27,27 @@ export function savedLink(workspaceId: string, ref: SavedRef): string | null {
       return ref.projectId ? `${base}/projects/${ref.projectId}/work?panel=ticket:${ref.targetId}` : null
     case 'CHANNEL':
       return ref.projectId ? `${base}/projects/${ref.projectId}/chat/${ref.targetId}` : `${base}/c/${ref.targetId}`
+    case 'DM':
+      return `${base}/c/${ref.targetId}`
+    case 'DOC':
+      return `${base}/docs?doc=${ref.targetId}`
     case 'MESSAGE':
     case 'FILE':
       if (!ref.conversationId) return null
       return ref.threadRootId ? `${base}/c/${ref.conversationId}/t/${ref.threadRootId}` : `${base}/c/${ref.conversationId}`
     case 'VIEW':
-    default:
       if (ref.viewTarget === 'TEAM' && ref.teamId) return `${base}/teams/${ref.teamId}?v=${ref.targetId}`
       if (ref.viewTarget === 'WORKSPACE') return `${base}/my-work?v=${ref.targetId}`
       return ref.projectId ? `${base}/projects/${ref.projectId}/work?v=${ref.targetId}` : null
+    default:
+      return null
   }
+}
+
+/** The name a saved shortcut is shown by. A DM with nobody else in it has no name of its own. */
+export function savedTitle(ref: SavedRef, dmFallback: string): string {
+  if (ref.kind === 'DM') return ref.title || dmFallback
+  return ref.title ?? ''
 }
 
 type Mode = 'favorites' | 'later'
@@ -76,8 +89,15 @@ export function Favorites({ workspaceId }: { workspaceId: string }) {
   const folders = useQuery(queries.favoriteFolders(workspaceId))
   const [name, setName] = useState('')
   const [notice, setNotice] = useState('')
-  if (favorites.isPending || folders.isPending) return <p className="hint" role="status">{t('loading')}</p>
-  if (favorites.isError || folders.isError) return <p className="board-error" role="alert">{t('saved.error')}</p>
+  if (favorites.isPending || folders.isPending) return <p className="hint" role="status">{t('saved.favorites.loading')}</p>
+  if (favorites.isError || folders.isError) {
+    return (
+      <div className="board-error" role="alert">
+        <p>{t('saved.favorites.loadError')}</p>
+        <Button type="button" variant="secondary" onClick={() => { void favorites.refetch(); void folders.refetch() }}>{t('saved.favorites.retry')}</Button>
+      </div>
+    )
+  }
   const items = favorites.data
   const folderList = folders.data
 
@@ -85,18 +105,24 @@ export function Favorites({ workspaceId }: { workspaceId: string }) {
     await queryClient.invalidateQueries({ queryKey: queryKeys.favorites(workspaceId) })
     await queryClient.invalidateQueries({ queryKey: queryKeys.favoriteFolders(workspaceId) })
   }
+  /** Something failed: say so where it cannot be missed, and show what the server has. */
+  async function failed(message: string) {
+    notify({ kind: 'error', message })
+    await refresh()
+  }
   async function move(index: number, step: -1 | 1, group: FavoriteItem[]) {
     const next = [...group]
     const [item] = next.splice(index, 1)
     if (!item) return
     next.splice(index + step, 0, item)
-    // The order is one list; the named ones come first in the order given.
-    await api.orderFavorites(workspaceId, next.map((entry) => ({ kind: entry.kind, targetId: entry.targetId })))
-    await refresh()
-  }
-  async function remove(item: SavedRef) {
-    await api.removeFavorite(workspaceId, item.kind as SavedKind, item.targetId)
-    await refresh()
+    // Only this group's shortcuts change places, among the places they hold: the other folders, the
+    // top level and the shortcuts that cannot be opened now keep theirs.
+    try {
+      const saved = await api.orderFavorites(workspaceId, next.map((entry) => ({ kind: entry.kind, targetId: entry.targetId })), 'LISTED')
+      queryClient.setQueryData(queryKeys.favorites(workspaceId), saved)
+    } catch {
+      await failed(t('saved.order.error'))
+    }
   }
   async function create() {
     setNotice('')
@@ -113,50 +139,46 @@ export function Favorites({ workspaceId }: { workspaceId: string }) {
   async function rename(folder: FavoriteFolder) {
     const next = window.prompt(t('saved.folders.name'), folder.name)
     if (!next || next.trim() === folder.name) return
+    setNotice('')
     try {
       await api.renameFavoriteFolder(folder.id, next)
-    } catch {
-      setNotice(t('saved.folders.taken'))
+    } catch (error) {
+      setNotice(isApiError(error) && error.code === 'folder_name_taken' ? t('saved.folders.taken') : t('saved.folders.badName'))
     }
     await refresh()
   }
   async function deleteFolder(folder: FavoriteFolder) {
-    const result = await api.deleteFavoriteFolder(folder.id)
-    setNotice(t('saved.folders.deleteDone', { count: String(result.movedToTopLevel) }))
-    await refresh()
+    try {
+      const result = await api.deleteFavoriteFolder(folder.id)
+      setNotice(t('saved.folders.deleteDone', { count: String(result.movedToTopLevel) }))
+      await refresh()
+    } catch {
+      await failed(t('saved.folders.deleteError'))
+    }
   }
   async function moveTo(item: FavoriteItem, folderId: string) {
-    await api.moveFavorite(workspaceId, item.kind, item.targetId, folderId === '' ? null : folderId)
-    await refresh()
+    try {
+      await api.moveFavorite(workspaceId, item.kind, item.targetId, folderId === '' ? null : folderId)
+      await refresh()
+    } catch {
+      await failed(t('saved.folders.moveError'))
+    }
   }
 
-  function Row({ item, index, group }: { item: FavoriteItem; index: number; group: FavoriteItem[] }) {
-    const link = savedLink(workspaceId, item)
-    return (
-      <li className="result-hit saved-row">
-        {link ? (
-          <Link to={link} className="saved-open">
-            <small className="where-chip">{t(`saved.kind.${item.kind}`)}</small> <strong>{item.title}</strong>
-            {item.kind === 'TEAM' && archivedTeamIds.has(item.targetId) ? <small className="hint"> · {t('teams.archivedTag')}</small> : null}
-            {item.subtitle ? <small className="hint"> · {item.subtitle}</small> : null}
-          </Link>
-        ) : (
-          <strong>{item.title}</strong>
-        )}
-        <span className="saved-actions">
-          <select aria-label={t('saved.folders.moveTo', { title: item.title ?? '' })} value={item.folderId ?? ''} onChange={(event) => void moveTo(item, event.target.value)}>
-            <option value="">{t('saved.folders.top')}</option>
-            {folderList.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
-          </select>
-          <button type="button" className="icon-button" aria-label={t('saved.moveUp', { title: item.title ?? '' })} disabled={index === 0} onClick={() => void move(index, -1, group)}>↑</button>
-          <button type="button" className="icon-button" aria-label={t('saved.moveDown', { title: item.title ?? '' })} disabled={index === group.length - 1} onClick={() => void move(index, 1, group)}>↓</button>
-          <button type="button" className="icon-button" aria-label={t('saved.favorite.removeTitle', { title: item.title ?? '' })} onClick={() => void remove(item)}><CloseIcon /></button>
-        </span>
-      </li>
-    )
-  }
-
-  const top = items.filter((item) => !item.folderId)
+  const row = (item: FavoriteItem, index: number, group: FavoriteItem[]) => (
+    <FavoriteRow
+      key={`${item.kind}:${item.targetId}`}
+      workspaceId={workspaceId}
+      item={item}
+      first={index === 0}
+      last={index === group.length - 1}
+      archived={item.kind === 'TEAM' && archivedTeamIds.has(item.targetId)}
+      folders={folderList}
+      onMove={(step) => void move(index, step, group)}
+      onFolder={(folderId) => void moveTo(item, folderId)}
+    />
+  )
+  const top = items.filter((item) => !item.folderId || !folderList.some((folder) => folder.id === item.folderId))
   return (
     <div className="favorites">
       <form className="folder-create" onSubmit={(event) => { event.preventDefault(); void create() }}>
@@ -178,17 +200,56 @@ export function Favorites({ workspaceId }: { workspaceId: string }) {
             </h3>
             {inside.length === 0 ? <p className="hint">{t('saved.folders.empty')}</p> : null}
             <ul className="result-list saved-list">
-              {inside.map((item, index) => <Row key={`${item.kind}:${item.targetId}`} item={item} index={index} group={inside} />)}
+              {inside.map((item, index) => row(item, index, inside))}
             </ul>
           </section>
         )
       })}
       {top.length > 0 ? (
         <ul className="result-list saved-list">
-          {top.map((item, index) => <Row key={`${item.kind}:${item.targetId}`} item={item} index={index} group={top} />)}
+          {top.map((item, index) => row(item, index, top))}
         </ul>
       ) : null}
     </div>
+  )
+}
+
+/** One shortcut on Saved. Removing it goes through the same change as every star (with Undo). */
+function FavoriteRow({ workspaceId, item, first, last, archived, folders, onMove, onFolder }: {
+  workspaceId: string
+  item: FavoriteItem
+  first: boolean
+  last: boolean
+  archived: boolean
+  folders: FavoriteFolder[]
+  onMove: (step: -1 | 1) => void
+  onFolder: (folderId: string) => void
+}) {
+  const { t } = useI18n()
+  const favorite = useFavorite(workspaceId, item.kind, item.targetId)
+  const link = savedLink(workspaceId, item)
+  const title = savedTitle(item, t('dm.short'))
+  return (
+    <li className="result-hit saved-row">
+      {link ? (
+        <Link to={link} className="saved-open">
+          <small className="where-chip">{t(`saved.kind.${item.kind}`)}</small> <strong>{title}</strong>
+          {archived ? <small className="hint"> · {t('teams.archivedTag')}</small> : null}
+          {item.subtitle ? <small className="hint"> · {item.subtitle}</small> : null}
+        </Link>
+      ) : (
+        <strong>{title}</strong>
+      )}
+      <span className="saved-actions">
+        <select aria-label={t('saved.folders.moveTo', { title })} value={item.folderId ?? ''} onChange={(event) => onFolder(event.target.value)}>
+          <option value="">{t('saved.folders.top')}</option>
+          {folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+        </select>
+        <button type="button" className="icon-button" aria-label={t('saved.moveUp', { title })} disabled={first} onClick={() => onMove(-1)}>↑</button>
+        <button type="button" className="icon-button" aria-label={t('saved.moveDown', { title })} disabled={last} onClick={() => onMove(1)}>↓</button>
+        <button type="button" className="icon-button" aria-label={t('saved.favorite.removeTitle', { title })} disabled={favorite.pending} onClick={() => favorite.toggle()}><CloseIcon /></button>
+      </span>
+    </li>
   )
 }
 

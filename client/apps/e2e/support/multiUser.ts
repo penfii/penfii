@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { PASSWORD } from './accounts'
+import { isSignInSessionCheck } from './browserProblems'
 import { chromium, expect, firefox, webkit, type APIResponse, type Browser, type BrowserContext, type BrowserType, type Page } from '@playwright/test'
 
 /**
@@ -78,10 +79,10 @@ export class Actor {
     return problems
   }
 
-  private note(kind: string, text: string) {
+  private note(kind: string, text: string, expected = false) {
     // Browsers log a refused request to the console as well; it is as expected as the response it reports.
     const logged = /Failed to load resource: the server responded with a status of (\d{3})/.exec(text)
-    const reviewed = this.allowed.some((pattern) => pattern.test(text) || (logged !== null && pattern.test(`${logged[1]} `)))
+    const reviewed = expected || this.allowed.some((pattern) => pattern.test(text) || (logged !== null && pattern.test(`${logged[1]} `)))
     this.journal.write(this.tag, reviewed ? `${kind} (expected)` : kind, text)
     if (!reviewed) this.problems.push(`${this.tag} ${kind}: ${text}`)
   }
@@ -91,7 +92,10 @@ export class Actor {
       if (request.isNavigationRequest() && request.frame() === page.mainFrame()) this.lastNavigation = Date.now()
     })
     page.on('console', (message) => {
-      if (message.type() === 'error' || message.type() === 'warning') this.note(`console.${message.type()}`, message.text())
+      if (message.type() !== 'error' && message.type() !== 'warning') return
+      const where = message.location().url
+      const sessionCheck = /status of 401/.test(message.text()) && Boolean(where) && isSignInSessionCheck(page.url(), where)
+      this.note(`console.${message.type()}`, message.text(), sessionCheck)
     })
     page.on('pageerror', (error) => {
       // WebKit reports a fetch that a navigation cut off as "... due to access control checks"; the app's query
@@ -113,8 +117,9 @@ export class Actor {
     })
     page.on('response', async (response) => {
       if (response.status() < 400) return
+      const sessionCheck = response.status() === 401 && isSignInSessionCheck(page.url(), response.url())
       const body = await response.text().catch(() => '')
-      this.note('http', `${response.status()} ${response.request().method()} ${response.url()} ${body.slice(0, 300)}`)
+      this.note('http', `${response.status()} ${response.request().method()} ${response.url()} ${body.slice(0, 300)}`, sessionCheck)
     })
     page.on('websocket', (socket) => {
       this.journal.write(this.tag, 'socket open', socket.url())
@@ -173,18 +178,21 @@ export class Actor {
 
 /** Opens the engines once and hands out one fresh context (own cookies, own storage) per person. */
 export class Stage {
-  private readonly browsers = new Map<EngineName, Browser>()
+  private readonly browsers = new Map<EngineName, Promise<Browser>>()
   readonly actors: Actor[] = []
 
   constructor(readonly journal: Journal, readonly baseURL: string) {}
 
   async enter(person: Person, engine: EngineName): Promise<Actor> {
-    let browser = this.browsers.get(engine)
-    if (!browser) {
-      browser = await engines[engine].launch()
-      this.journal.write('stage', 'browser', `${engine} ${browser.version()}`)
-      this.browsers.set(engine, browser)
+    let launch = this.browsers.get(engine)
+    if (!launch) {
+      launch = engines[engine].launch().then((browser) => {
+        this.journal.write('stage', 'browser', `${engine} ${browser.version()}`)
+        return browser
+      })
+      this.browsers.set(engine, launch)
     }
+    const browser = await launch
     const context = await browser.newContext({ locale: 'en-US', serviceWorkers: 'block', viewport: { width: 1360, height: 900 } })
     const page = await context.newPage()
     const actor = new Actor(person, engine, context, page, this.journal, this.baseURL)
@@ -199,7 +207,7 @@ export class Stage {
 
   async close() {
     for (const actor of this.actors) await actor.context.close().catch(() => undefined)
-    for (const browser of this.browsers.values()) await browser.close().catch(() => undefined)
+    for (const launch of this.browsers.values()) await launch.then((browser) => browser.close()).catch(() => undefined)
   }
 }
 

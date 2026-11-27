@@ -72,6 +72,9 @@ struct SavedTargetBody {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FavoriteOrderBody {
     items: Vec<FavoriteRef>,
+    /// `ALL` (default) or `LISTED`: see `personal::FavoriteOrderScope`.
+    #[serde(default)]
+    scope: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -121,6 +124,7 @@ async fn order_favorites(
     Actor(user_id): Actor,
     Body(body): Body<FavoriteOrderBody>,
 ) -> Result<Response, ApiError> {
+    let scope = personal::FavoriteOrderScope::parse(body.scope.as_deref())?;
     personal::order_favorites(
         &state.pool,
         user_id,
@@ -129,6 +133,7 @@ async fn order_favorites(
             .into_iter()
             .map(|i| (i.kind, i.target_id))
             .collect(),
+        scope,
     )
     .await?;
     Ok(Json(personal::list_favorites(&state.pool, user_id, workspace_id).await?).into_response())

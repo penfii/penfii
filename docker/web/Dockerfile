@@ -15,6 +15,8 @@ FROM caddy:2.11.9-alpine
 # capability in the container's set, and this one listens on 8080 as an unprivileged user, so remove it.
 # The base's own zlib and OpenSSL libraries lag the Alpine repository (a Critical zlib finding between base
 # releases), so those three are upgraded in place; the Caddy tag stays the explicit pin.
+# CI passes a new value for every run attempt so cached package upgrades cannot go stale.
+ARG PENFII_SECURITY_REFRESH
 RUN apk add --no-cache libcap-setcap && apk upgrade --no-cache zlib libcrypto3 libssl3 \
     && setcap -r /usr/bin/caddy && apk del libcap-setcap
 COPY docker/web/Caddyfile /etc/caddy/Caddyfile

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { MoreIcon } from '../../design/icons'
 import { useDismiss } from '../../design/ui'
-import { useFavorite, useLater, usePin } from '../personal/SavedButtons'
+import { useFavorite, useFavoriteLabel, useLater, usePin } from '../personal/SavedButtons'
 
 /**
  * The ticket panel's other object actions (Favorite, Later, Pin) behind one "More" button, for a
@@ -15,6 +15,7 @@ export function TicketActionsMenu({ workspaceId, ticketId, projectId }: { worksp
   const root = useRef<HTMLDivElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const favorite = useFavorite(workspaceId, 'TICKET', ticketId)
+  const favoriteText = useFavoriteLabel(favorite.status)
   const later = useLater(workspaceId, ticketId)
   const pin = usePin(projectId, ticketId)
   useDismiss(open, () => setOpen(false), root)
@@ -24,7 +25,7 @@ export function TicketActionsMenu({ workspaceId, ticketId, projectId }: { worksp
   }, [open])
 
   const items = [
-    { key: 'favorite', state: favorite, label: favorite.on ? t('saved.favorite.remove') : t('saved.favorite.add') },
+    { key: 'favorite', state: favorite, label: favoriteText },
     { key: 'later', state: later, label: later.on ? t('saved.later.remove') : t('saved.later.add') },
     ...(pin.allowed ? [{ key: 'pin', state: pin, label: pin.on ? t('saved.pin.remove') : t('saved.pin.add') }] : []),
   ]

@@ -6,9 +6,16 @@ const HEADERS = { 'x-penfii-client': '1' }
 
 type Json = Record<string, unknown>
 
+class ApiError extends Error {
+  constructor(readonly status: number, readonly code: string, message: string) { super(message) }
+}
+
 /** The API as a signed-in person, for preparing data and reading back what the screens should show. */
 export class Api {
-  constructor(readonly request: APIRequestContext) {}
+  constructor(
+    readonly request: APIRequestContext,
+    private readonly projectUuid: () => string = randomUUID,
+  ) {}
 
   private async call<T>(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, body?: unknown): Promise<T> {
     const response = await this.request.fetch(path, {
@@ -16,8 +23,12 @@ export class Api {
       headers: { ...HEADERS, 'idempotency-key': randomUUID() },
       data: body,
     })
-    expect(response.status(), `${method} ${path}: ${await response.text()}`).toBeLessThan(300)
     const text = await response.text()
+    if (!response.ok()) {
+      let code = ''
+      try { code = (JSON.parse(text) as { code?: string }).code ?? '' } catch { /* keep response text */ }
+      throw new ApiError(response.status(), code, `${method} ${path} -> ${response.status()}: ${text}`)
+    }
     return (text ? JSON.parse(text) : undefined) as T
   }
 
@@ -33,8 +44,16 @@ export class Api {
 
   /** A Project of its own, so a test never meets another test's tickets. */
   async createProject(workspaceId: string, name: string): Promise<{ id: string }> {
-    const prefix = Array.from({ length: 4 }, () => String.fromCharCode(65 + Math.floor(Math.random() * 26))).join('')
-    return this.call('POST', `/v1/workspaces/${workspaceId}/projects`, { name, teamIds: [], ticketPrefix: prefix })
+    for (let attempt = 0; attempt < 5; attempt++) {
+      // UUID hex is valid under the API's 2-10 character, leading-letter contract.
+      const prefix = `E${this.projectUuid().replaceAll('-', '').slice(0, 9).toUpperCase()}`
+      try {
+        return await this.call('POST', `/v1/workspaces/${workspaceId}/projects`, { name, teamIds: [], ticketPrefix: prefix })
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.status !== 409 || error.code !== 'ticket_prefix_taken' || attempt === 4) throw error
+      }
+    }
+    throw new Error('unreachable')
   }
 
   async createTicket(projectId: string, title: string, description?: unknown): Promise<{ id: string; key: string; revisionNo: number; statusId: string }> {

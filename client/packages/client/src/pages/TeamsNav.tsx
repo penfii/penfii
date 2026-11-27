@@ -2,7 +2,7 @@ import { NavLink } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useI18n } from '../i18n/I18nProvider'
 import { useSession } from '../modules/identity'
-import { activeTeams } from '../modules/spaces/teamState'
+import { activeTeams, isArchivedTeam } from '../modules/spaces/teamState'
 import { queries } from '../queries'
 
 /**
@@ -23,6 +23,10 @@ export function TeamsNav({ workspaceId }: { workspaceId: string }) {
   const mine = activeTeams(space.data?.teams ?? [])
     .filter((team) => mineIds.has(team.id))
     .sort((a, b) => a.name.localeCompare(b.name))
+  const favorites = useQuery({ ...queries.favorites(workspaceId), enabled: workspaceId.length > 0 })
+  // Starred Teams, in the person's Saved order; an archived one stays (it can still be read) and says so.
+  const teamsById = new Map((space.data?.teams ?? []).map((team) => [team.id, team]))
+  const starred = (favorites.data ?? []).filter((item) => item.kind === 'TEAM').map((item) => teamsById.get(item.targetId)).filter((team) => team !== undefined)
   const base = `/w/${workspaceId}/directory`
   return (
     <>
@@ -31,6 +35,22 @@ export function TeamsNav({ workspaceId }: { workspaceId: string }) {
         <li><NavLink end className="tree-link" to={`${base}/teams`}>{t('teams.all')}</NavLink></li>
         <li><NavLink className="tree-link" to={`${base}/members`}>{t('teams.members')}</NavLink></li>
       </ul>
+      {starred.length > 0 ? (
+        <section className="tree-block" aria-label={t('saved.tab.favorites')}>
+          <h3>{t('saved.tab.favorites')}</h3>
+          <ul>
+            {starred.map((team) => (
+              <li key={team.id}>
+                <NavLink className="tree-link" to={`${base}/teams/${team.id}`}>
+                  <span className="tree-star" aria-hidden="true">★</span>
+                  {team.name}
+                  {isArchivedTeam(team) ? <small className="tree-context"> · {t('teams.archivedTag')}</small> : null}
+                </NavLink>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       <section className="tree-block">
         <h3>{t('teams.mineTitle')} {mine.length > 0 ? <span className="list-count">{mine.length}</span> : null}</h3>
         {mine.length === 0 ? (

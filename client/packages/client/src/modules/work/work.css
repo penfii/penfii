@@ -300,6 +300,12 @@
 .view-tab:hover { background: var(--bg-muted); color: var(--text); }
 .view-tab.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); font-weight: 650; }
 .view-tab-mark { font-size: .66rem; color: var(--text-muted); font-weight: 500; }
+.view-tab-slot { display: inline-flex; align-items: center; }
+.view-tab-star { display: inline-grid; place-items: center; width: 1.5rem; height: 1.5rem; padding: 0; border: 0; border-radius: 999px; background: none; color: var(--text-muted); cursor: pointer; opacity: 0; }
+.view-tab-slot:hover .view-tab-star, .view-tab-slot:focus-within .view-tab-star, .view-tab-star.saved-on { opacity: 1; }
+.view-tab-star.saved-on { color: var(--accent-strong); }
+.view-tab-star:hover { background: var(--bg-muted); color: var(--text); }
+@media (hover: none) { .view-tab-star { opacity: 1; } }
 .view-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
 .view-inline-order { display: contents; }
 .view-search { width: 12rem; max-width: 100%; padding-block: .3rem; }
@@ -1051,3 +1057,19 @@ span.list-row-check { display: inline-block; }
 .project-switch-item span { font-weight: 500; }
 .calendar-view > .calendar-zone, .calendar-view > p.hint { max-width: none; }
 .calendar-legend { margin: var(--space-2) 0; }
+
+/* Favorite stars on Work rows. A card's tools sit together in its corner; the star shows on hover or
+   focus, and always once the Ticket is a Favorite. */
+.card-tools { position: absolute; top: .3rem; right: .3rem; z-index: 2; display: inline-flex; align-items: center; gap: .25rem; }
+.card-tools .card-top, .card-tools .card-move { position: static; }
+.card-favorite { width: 1.6rem; height: 1.6rem; display: inline-grid; place-items: center; padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius-sm, 6px); background: var(--bg-elevated); color: var(--text-secondary); cursor: pointer; opacity: 0; }
+.ticket-card:hover .card-favorite, .ticket-card:focus-within .card-favorite, .card-favorite:focus-visible, .card-favorite.saved-on { opacity: 1; }
+.card-favorite.saved-on { color: var(--accent-strong); border-color: transparent; background: transparent; }
+.ticket-card:has(.card-favorite.saved-on) .ticket-card-top { padding-right: 1.8rem; }
+@media (hover: none) { .card-favorite { opacity: 1; width: 2.2rem; height: 2.2rem; } }
+.list-row-favorite, .table-favorite { opacity: 0; flex: none; }
+.list-row:hover .list-row-favorite, .list-row:focus-within .list-row-favorite, .list-row-favorite.saved-on,
+.work-table tr:hover .table-favorite, .work-table tr:focus-within .table-favorite, .table-favorite.saved-on { opacity: 1; }
+@media (hover: none) { .list-row-favorite, .table-favorite { opacity: 1; } }
+.table-title { display: flex; align-items: center; gap: .25rem; }
+.table-title .table-open { flex: 1; min-width: 0; }

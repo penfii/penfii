@@ -1,4 +1,5 @@
 import { Link, useParams, useSearchParams } from 'react-router'
+import { FavoriteButton } from '../modules/personal/SavedButtons'
 import { useQuery } from '@tanstack/react-query'
 import type { Department, Team } from '@penfii/contracts'
 import { Badge, EmptyState } from '../design/ui'
@@ -127,6 +128,7 @@ export function AllTeams() {
               <li key={team.id} className="all-team-row">
                 <div>
                   <Link className="all-team-name" to={`/w/${workspaceId}/directory/teams/${team.id}`}>{team.name}</Link>
+                  <FavoriteButton workspaceId={workspaceId} kind="TEAM" targetId={team.id} label={team.name} />
                   {mine.has(team.id) ? <> <Badge tone="accent">{t('teams.mine')}</Badge></> : null}
                   {isArchivedTeam(team) ? <> <Badge>{t('teams.archivedTag')}</Badge></> : null}
                   <small className="hint all-team-path">{path.length > 0 ? path.join(' › ') : t('teams.unplacedTeam')}</small>

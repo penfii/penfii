@@ -93,7 +93,7 @@ describe('My projects and All projects (FEA-117)', () => {
     api.getFavorites.mockResolvedValue([star('p2', 1), star('p0', 2), star('missing', 3)])
     mount('/w/w/projects')
     const favorites = await screen.findByRole('region', { name: /Favorites|즐겨찾기/ })
-    expect(within(favorites).getAllByRole('link').map((link) => link.textContent)).toEqual(['★Gamma', '★Alpha'])
+    expect(within(favorites).getAllByRole('link').map((link) => link.textContent)).toEqual(['Gamma', 'Alpha'])
     expect(screen.getAllByRole('link', { name: /Gamma/ })).toHaveLength(1)
     expect(screen.getByRole('link', { name: /Beta/ })).toBeTruthy()
   })

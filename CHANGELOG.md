@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased
+
+Favorites for every place people work. One database migration (a wider check only) and no new setting.
+
+### Upgrading from 0.5.0
+
+- `db-setup` applies one migration, `0005_after_v0_5_0.sql`, in one transaction: the check on `favorites.kind` also allows `DM` and `DOC`. No row is changed, and existing Favorites keep their folders and order. There is no down migration, and the upgraded database does not go back to 0.5.0: its `db-setup` stops on the newer migration history, and its Favorites list cannot read a DM or Doc Favorite. Going back means restoring the backup.
+- REST and MCP stay compatible: `PUT /v1/workspaces/{id}/favorites` and `favorite_add` take the new kinds `DM` (a direct-message conversation id) and `DOC` (a Doc page id); `PUT .../favorites/order` and `favorite_order` take an optional `scope` (`ALL`, the default and the old meaning, or `LISTED`).
+
+### Added
+
+- **Favorites of channels, DMs, Docs, Teams and saved Views where they live** (FEA-199, FEA-201..FEA-205): a star in the channel and DM header, in each conversation's menu in Chat and on a Project's channel rows; on a Doc page and its tree row; on a Team's page, card and row in *All teams*; beside each saved View tab. Chat lists the starred channels and DMs under *Favorites*, the Docs tree (and a Project's own Docs) shows its starred pages on top, Teams shows the starred Teams on top, and starred Views come first in the views bar, all in the order set in *Saved*. A conversation, page or Team stays in its own group too. Starring needs only the right to read and changes nothing else: no channel is joined, no Doc is shared or edited, no notification is set.
+- **Stars on lists** (FEA-206, FEA-207): on Project cards, in *All projects* (Projects the person takes part in; the others can be found there but not starred, as before) and in the Project switcher; on Ticket cards, table rows and list rows; on search results that are Tickets, Docs, Views, channels, Teams or Projects. A star never opens, drags or selects its row.
+- **Home links to *Saved*** (FEA-207) with *Open Saved*.
+
+### Changed
+
+- **One Favorite state everywhere** (FEA-200): every star, menu row and *Saved* row of one thing shows the same state and shares one change in progress, the star is filled while the thing is a Favorite, and a Favorite list that could not be read says so instead of showing empty stars. *Undo* after a removal puts the Favorite back into its folder and its place.
+- ***Saved* moves a Favorite up or down only within its folder (or the top level)** (FEA-208); the other folders, and Favorites that cannot be opened now, keep their places. A failed move, folder change or folder deletion is shown and the saved state is shown again.
+
+### Fixed
+
+- **Saving a Favorite again answers with the folder it is in** instead of none (FEA-208).
+- **Reordering Favorites no longer gives two of them the same position** (FEA-208): Favorites not named in the request could share a position with a named one, so the order could come out mixed. Every Favorite now gets its own position; two changes at once are made one after the other. A deleted folder's Favorites go after every other Favorite, not only after the top-level ones.
+- **A saved Team or Workspace View of someone else can no longer be starred** (it was not listed to them anyway).
+- **Editing an untitled Doc keeps keyboard focus on the title** when the comment editor has also requested focus.
+
+### Development
+
+- **End-to-end tests run in a disposable Compose stack** (FEA-210, FEA-211). Each run seeds its own accounts and gets its own data stores and mail catcher. Project fixtures retry a confirmed ticket-prefix collision.
+- **GitHub CI splits the server integration suite and builds each Compose image once** (FEA-212–215). The server check verifies every shard's results. The supply-chain check scans the images from the Docker build. Server jobs install only the tools they need and report readiness or test failures without rerunning the suite.
+
 ## 0.5.0
 
 Sign-in and Docs release: *Keep me signed in* and other sign-in conveniences, Doc full width and live Doc pages, the rich text editor for comments, Markdown input through MCP, and Docs and Chat that use the room they have. One database migration (added columns only) and no required new setting.

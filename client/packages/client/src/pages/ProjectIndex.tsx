@@ -8,6 +8,7 @@ import { useCreate } from '../shell/create'
 import { isWorkspaceManager } from '../modules/spaces/capabilities'
 import { useWorkspaceRole } from '../modules/spaces/useWorkspaceRole'
 import { QueryError } from '../ui/QueryError'
+import { FavoriteButton } from '../modules/personal/SavedButtons'
 import { browseProjects, joinFilter, myProjects, takesPart, type JoinFilter } from './projectsModel'
 
 /**
@@ -30,17 +31,15 @@ export function ProjectIndex({ workspaceId }: { workspaceId: string }) {
   )
 }
 
-function ProjectCard({ workspaceId, project, starred }: { workspaceId: string; project: Project; starred: boolean }) {
-  const { t } = useI18n()
+/** A Project card; its star (beside the link, not in it) adds or removes the Favorite without opening the Project. */
+function ProjectCard({ workspaceId, project }: { workspaceId: string; project: Project }) {
   return (
-    <li>
+    <li className="project-card-slot">
       <Link className="project-card" to={`/w/${workspaceId}/projects/${project.id}`}>
-        <strong>
-          {starred ? <span className="project-card-star" role="img" aria-label={t('projects.favorite')}>★</span> : null}
-          {project.name}
-        </strong>
+        <strong>{project.name}</strong>
         {project.ticketPrefix ? <small>{project.ticketPrefix}</small> : null}
       </Link>
+      <FavoriteButton workspaceId={workspaceId} kind="PROJECT" targetId={project.id} label={project.name} className="icon-button project-card-favorite" />
     </li>
   )
 }
@@ -74,7 +73,7 @@ function MyProjects({ workspaceId, projects, favorites }: { workspaceId: string;
             <section aria-labelledby="mine-favorites">
               <h2 id="mine-favorites" className="project-group-title">{t('projects.favorites')} <span className="list-count">{mine.favorites.length}</span></h2>
               <ul className="project-grid">
-                {mine.favorites.map((project) => <ProjectCard key={project.id} workspaceId={workspaceId} project={project} starred />)}
+                {mine.favorites.map((project) => <ProjectCard key={project.id} workspaceId={workspaceId} project={project} />)}
               </ul>
             </section>
           ) : null}
@@ -82,7 +81,7 @@ function MyProjects({ workspaceId, projects, favorites }: { workspaceId: string;
             <section aria-labelledby="mine-others">
               <h2 id="mine-others" className="project-group-title">{mine.favorites.length > 0 ? t('projects.otherMine') : t('projects.participatingList')} <span className="list-count">{mine.others.length}</span></h2>
               <ul className="project-grid">
-                {mine.others.map((project) => <ProjectCard key={project.id} workspaceId={workspaceId} project={project} starred={false} />)}
+                {mine.others.map((project) => <ProjectCard key={project.id} workspaceId={workspaceId} project={project} />)}
               </ul>
             </section>
           ) : null}
@@ -152,7 +151,7 @@ function AllProjects({ workspaceId, projects }: { workspaceId: string; projects:
       ) : (
         <ul className="result-list project-rows">
           {shown.map((project) => (
-            <li key={project.id}>
+            <li key={project.id} className="project-row-slot">
               <Link className="result-hit" to={`/w/${workspaceId}/projects/${project.id}`}>
                 <strong>{project.name}</strong>
                 <small>
@@ -160,6 +159,8 @@ function AllProjects({ workspaceId, projects }: { workspaceId: string; projects:
                   {takesPart(project) ? t('projects.participating') : t('projects.joinNeeded')}
                 </small>
               </Link>
+              {/* A Project's inside, and so a shortcut to it, is for its participants. */}
+              {takesPart(project) ? <FavoriteButton workspaceId={workspaceId} kind="PROJECT" targetId={project.id} label={project.name} className="icon-button project-row-favorite" /> : null}
             </li>
           ))}
         </ul>

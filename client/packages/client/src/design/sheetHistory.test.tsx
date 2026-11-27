@@ -57,8 +57,7 @@ describe('Sheet and the Back button', () => {
     fireEvent.click(screen.getByText('opener'))
     expect(sheetMarks()).toBeTruthy()
     fireEvent.click(screen.getByText('Close', { selector: '.m-sheet-close' }))
-    await settle()
-    expect(sheetMarks()).toBeUndefined()
+    await waitFor(() => expect(sheetMarks()).toBeUndefined())
   })
 
   it('does not undo a move that closes it', async () => {

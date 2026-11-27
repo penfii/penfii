@@ -215,6 +215,7 @@ function ProjectWork({ target, view, message, setMessage }: { target: Extract<Wo
   return (
     <>
       <ViewBar
+        workspaceId={workspaceId}
         target="PROJECT"
         layout={layout}
         density={view.density}
@@ -436,6 +437,7 @@ function WideWork({
   return (
     <>
       <ViewBar
+        workspaceId={target.workspaceId}
         target={target.kind}
         layout={layout}
         density={view.density}

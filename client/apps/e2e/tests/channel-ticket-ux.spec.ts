@@ -44,7 +44,10 @@ test.describe('FEA-104–107 channel and ticket editing', () => {
     await page.setViewportSize({ width: 1120, height: 640 })
     await expect.poll(() => menu.evaluate((element) => element.getBoundingClientRect().bottom <= window.innerHeight)).toBe(true)
 
+    // The Favorite row (FEA-201) is the menu's last item; the last group is just above it.
     await page.keyboard.press('End')
+    await expect(page.locator('[role="menuitemcheckbox"]:focus')).toContainText(/Favorites/)
+    await page.keyboard.press('ArrowUp')
     await expect(page.locator('[role="menuitem"]:focus')).toContainText('Section 17')
     await page.keyboard.press('Escape')
     await expect(menu).toHaveCount(0)

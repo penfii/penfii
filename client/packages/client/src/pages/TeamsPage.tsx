@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { FavoriteButton } from '../modules/personal/SavedButtons'
 import { Link, useLocation, useParams, useSearchParams } from 'react-router'
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Department, Team, WorkspacePerson } from '@penfii/contracts'
@@ -283,6 +284,7 @@ function TeamCards({
             <button type="button" className="team-card-name" aria-pressed={selectedId === team.id} aria-label={t('org.preview', { name: team.name })} onClick={() => onSelect(selectedId === team.id ? null : team.id)}>
               <strong>{team.name}</strong>
             </button>
+            <FavoriteButton workspaceId={workspaceId} kind="TEAM" targetId={team.id} label={team.name} className="icon-button team-card-favorite" />
             {focusId === team.id ? <Badge tone="accent">{t('org.focus.tag')}</Badge> : null}
             {archived ? <Badge>{t('teams.archivedTag')}</Badge> : null}
             {mine.has(team.id) ? <span className="hint">{t('teams.mine')}</span> : null}
@@ -455,6 +457,7 @@ function TeamDetail({ teamId }: { teamId: string }) {
       <header className="page-intro">
         <h1>
           {team?.name ?? t('loading')}
+          {team ? <> <FavoriteButton workspaceId={workspaceId} kind="TEAM" targetId={team.id} label={team.name} /></> : null}
           {archived ? <> <Badge>{t('teams.archivedTag')}</Badge></> : null}
           {manages ? <> <Badge tone="accent">{t('teamPage.iManage')}</Badge></> : null}
         </h1>

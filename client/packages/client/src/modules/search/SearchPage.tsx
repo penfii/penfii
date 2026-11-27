@@ -9,7 +9,8 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { queryKeys } from '../../queryKeys'
 import { queries } from '../../queries'
 import { PersonRow, useStartDm } from '../../search/DirectoryResults'
-import { resultHref, SEARCH_TABS } from './resultHref'
+import { favoriteTarget, resultHref, SEARCH_TABS } from './resultHref'
+import { FavoriteButton } from '../personal/SavedButtons'
 import { hasToken, replaceToken, setKey, toggleToken, valueOf } from './searchQuery'
 
 const STATUS = ['NOT_STARTED', 'IN_PROGRESS', 'DONE', 'CANCELED'] as const
@@ -226,9 +227,12 @@ export function SearchPage() {
               <Snippet result={result} />
             </>
           )
+          const star = favoriteTarget(result, (id) => space.data?.projects.some((project) => project.id === id && project.participating !== false) ?? false)
           return (
-            <li key={`${result.kind}:${result.id}`} className="result-hit">
+            <li key={`${result.kind}:${result.id}`} className="result-hit search-hit">
               {href ? <Link to={href} className="saved-open" onClick={(event) => { event.preventDefault(); void navigate(href) }}>{body}</Link> : body}
+              {/* Beside the link: starring a result does not open it. */}
+              {star ? <FavoriteButton workspaceId={workspaceId} kind={star.kind} targetId={star.targetId} label={result.title} className="icon-button search-favorite" /> : null}
             </li>
           )
         })}

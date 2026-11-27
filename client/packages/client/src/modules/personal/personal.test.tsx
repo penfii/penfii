@@ -68,7 +68,8 @@ describe('Saved page', () => {
     const link = await screen.findByRole('link', { name: /PFI-001 Fix/ })
     expect(link.getAttribute('href')).toBe('/w/w/projects/p/work?panel=ticket:t1')
     fireEvent.click(screen.getByRole('button', { name: 'Move PFI-001 Fix up' }))
-    await waitFor(() => expect(api.orderFavorites).toHaveBeenCalledWith('w', [{ kind: 'TICKET', targetId: 't1' }, { kind: 'PROJECT', targetId: 'p' }]))
+    // Only this group's shortcuts change places, among the places they hold (FEA-208).
+    await waitFor(() => expect(api.orderFavorites).toHaveBeenCalledWith('w', [{ kind: 'TICKET', targetId: 't1' }, { kind: 'PROJECT', targetId: 'p' }], 'LISTED'))
   })
 
   it('finishes a Later card without anything about the Ticket changing, and hides what can no longer be opened', async () => {

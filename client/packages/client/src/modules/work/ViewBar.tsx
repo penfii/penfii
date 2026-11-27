@@ -1,6 +1,10 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import type { Channel, ProjectMember, ProjectPlanning, ProjectView, ScopeProject, TableColumn, TicketLabel, TicketType, ViewDefinition, ViewLayout, ViewTargetKind } from '@penfii/contracts'
+import { useQuery } from '@tanstack/react-query'
+import type { FavoriteItem } from '@penfii/contracts'
 import { Button } from '../../design/ui'
+import { queries } from '../../queries'
+import { FavoriteButton } from '../personal/SavedButtons'
 import { useI18n } from '../../i18n/I18nProvider'
 import { FilterPanel } from './FilterPanel'
 import { Popover } from './Popover'
@@ -9,11 +13,19 @@ import { SORT_FIELDS, TABLE_COLUMNS, DEFAULT_TABLE_COLUMNS, filterCount, groupsF
 
 export type ViewSaveError = 'nameTaken' | 'conflict' | 'forbidden' | 'generic' | null
 
+/** The saved Views with the starred ones first (in Favorites order) and the rest after, in the order given. */
+export function favoriteViewsFirst(views: ProjectView[], favorites: FavoriteItem[]): ProjectView[] {
+  const starred = favorites.filter((item) => item.kind === 'VIEW').map((item) => item.targetId)
+  const first = starred.map((id) => views.find((view) => view.id === id)).filter((view): view is ProjectView => view !== undefined)
+  return [...first, ...views.filter((view) => !starred.includes(view.id))]
+}
+
 /**
  * The View controls above the Board: pick a saved View, then narrow, group and sort it. Changes
  * stay a draft in the URL until they are saved, so a shared View is never altered by browsing.
  */
 export function ViewBar({
+  workspaceId,
   target,
   layout,
   isAdmin,
@@ -40,6 +52,8 @@ export function ViewBar({
   onDelete,
   actions,
 }: {
+  /** For each saved View's Favorite star. */
+  workspaceId: string
   /** Where the person is looking from. A Project offers a Board; a Team or the Workspace do not. */
   target: ViewTargetKind
   layout: ViewLayout
@@ -75,6 +89,9 @@ export function ViewBar({
   const { t } = useI18n()
   const mobile = useIsMobile()
   const active = views.find((view) => view.id === activeId)
+  const favorites = useQuery(queries.favorites(workspaceId))
+  // The starred saved Views come first, in the person's Saved order; the others keep their own order.
+  const ordered = favoriteViewsFirst(views, favorites.data ?? [])
   const count = filterCount(definition.filter)
   const groups = groupsFor(target, layout)
   const [error, setError] = useState<ViewSaveError>(null)
@@ -94,11 +111,15 @@ export function ViewBar({
         <button type="button" className={activeId === null ? 'view-tab on' : 'view-tab'} aria-pressed={activeId === null} onClick={() => onSelect(null)}>
           {t('view.default')}
         </button>
-        {views.map((view) => (
-          <button key={view.id} type="button" className={view.id === activeId ? 'view-tab on' : 'view-tab'} aria-pressed={view.id === activeId} onClick={() => onSelect(view.id)} title={view.scope === 'PROJECT' ? t('view.shared') : undefined}>
-            {view.name}
-            {view.scope === 'PROJECT' ? <small className="view-tab-mark">{t('view.shared')}</small> : null}
-          </button>
+        {ordered.map((view) => (
+          <span key={view.id} className="view-tab-slot">
+            <button type="button" className={view.id === activeId ? 'view-tab on' : 'view-tab'} aria-pressed={view.id === activeId} onClick={() => onSelect(view.id)} title={view.scope === 'PROJECT' ? t('view.shared') : undefined}>
+              {view.name}
+              {view.scope === 'PROJECT' ? <small className="view-tab-mark">{t('view.shared')}</small> : null}
+            </button>
+            {/* Beside the tab, never inside it: starring a View neither opens nor saves it. */}
+            <FavoriteButton workspaceId={workspaceId} kind="VIEW" targetId={view.id} label={view.name} className="view-tab-star" />
+          </span>
         ))}
         {active?.canEdit ? (
           <Popover label="⋯" wide>

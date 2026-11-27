@@ -36,6 +36,10 @@ export function HomePage() {
       <header className="page-intro">
         <h1>{workspaceName ?? t('nav.home')}</h1>
         <p className="hint">{t('home.hello', { name: session.data?.displayName ?? '' })}</p>
+        {/* Saved (Favorites and Later) is also in the side list; here it is one step from the start. */}
+        <p>
+          <Link className="btn btn-secondary" to={`/w/${workspaceId}/saved`} title={t('saved.homeLead')}>{t('saved.openSaved')}</Link>
+        </p>
       </header>
       <div className="home-columns">
         <HomeSection title={t('home.todo')} count={todo.length} more={{ to: `/w/${workspaceId}/my-work`, label: t('home.todoAll') }}>

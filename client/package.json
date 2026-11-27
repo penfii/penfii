@@ -20,7 +20,7 @@
     "budget": "node scripts/check-bundle-size.mjs",
     "contract:types": "node scripts/generate-types.mjs",
     "contract:types:check": "node scripts/generate-types.mjs --check",
-    "e2e": "npm test -w @penfii/e2e"
+    "e2e": "apps/e2e/run.sh"
   },
   "overrides": {
     "@tiptap/core": "3.31.3",

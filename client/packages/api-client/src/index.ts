@@ -1501,8 +1501,9 @@ export function createPenfiiClient() {
     removeFavorite(workspaceId: string, kind: SavedKind, targetId: string): Promise<void> {
       return request(`/v1/workspaces/${workspaceId}/favorites/${kind}/${targetId}`, { method: 'DELETE' }).then(() => undefined)
     },
-    orderFavorites(workspaceId: string, items: Array<{ kind: SavedKind; targetId: string }>): Promise<FavoriteItem[]> {
-      return request(`/v1/workspaces/${workspaceId}/favorites/order`, { method: 'PUT', body: { items } }) as Promise<FavoriteItem[]>
+    /** `LISTED` reorders only the given Favorites among the places they hold (one folder); the default sets them first. */
+    orderFavorites(workspaceId: string, items: Array<{ kind: SavedKind; targetId: string }>, scope?: 'ALL' | 'LISTED'): Promise<FavoriteItem[]> {
+      return request(`/v1/workspaces/${workspaceId}/favorites/order`, { method: 'PUT', body: scope ? { items, scope } : { items } }) as Promise<FavoriteItem[]>
     },
     getLater(workspaceId: string, state: LaterState = 'ACTIVE'): Promise<LaterItem[]> {
       return request(`/v1/workspaces/${workspaceId}/later`, { query: { state } }) as Promise<LaterItem[]>

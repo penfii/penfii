@@ -19,6 +19,7 @@ mod channel_members;
 mod db_errors;
 mod email_change;
 mod external_login;
+mod favorites;
 mod invitations;
 mod login_policy;
 mod long_sessions;

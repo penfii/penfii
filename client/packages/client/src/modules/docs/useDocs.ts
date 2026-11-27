@@ -12,7 +12,11 @@ export function useDocTree(workspaceId: string, projectId?: string | null) {
 /** Commands that change the tree; each one refreshes every tree on screen. */
 export function useDocTreeCommands(workspaceId: string) {
   const queryClient = useQueryClient()
-  const refresh = () => queryClient.invalidateQueries({ queryKey: queryKeys.all.docTree(workspaceId) })
+  // A starred page is named in Saved too: its title and place come from the same server read.
+  const refresh = () => Promise.all([
+    queryClient.invalidateQueries({ queryKey: queryKeys.all.docTree(workspaceId) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.favorites(workspaceId) }),
+  ])
   return {
     create: useMutation({
       mutationFn: (input: { title: string; parentId?: string | null; projectId?: string | null; visibility?: DocVisibility; scopeProjectId?: string | null; scopeTeamId?: string | null; templateId?: string }) =>

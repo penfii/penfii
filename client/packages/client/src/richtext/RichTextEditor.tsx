@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import type { RichTextDoc } from '@penfii/contracts'
 import { EditorContent, useEditor } from '@tiptap/react'
+import { Selection } from '@tiptap/pm/state'
 import { useI18n } from '../i18n/I18nProvider'
 import { editorToRichText, richTextToEditor, sameRichText } from './adapter'
 import { editorExtensions, mentionSuggestionKey, type MentionCandidate } from './editorExtensions'
@@ -42,7 +43,7 @@ function markdownLike(text: string): boolean {
 export type RichTextEditorHandle = {
   insertText: (text: string) => void
   /** Puts the caret in the editor. Used when a writing surface becomes the active one. False when the view is not ready. */
-  focus: () => boolean
+  focus: (options?: { immediate?: boolean }) => boolean
 }
 
 export const RichTextEditor = forwardRef<RichTextEditorHandle, {
@@ -269,10 +270,17 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, {
     insertText(text: string) {
       editor?.chain().focus().insertContent(text).run()
     },
-    focus() {
+    focus(options) {
       // `commands` reads the view, and that throws until EditorContent has mounted it.
       if (!editor || editor.isDestroyed || !editor.view) return false
-      editor.commands.focus('end')
+      if (options?.immediate) {
+        const { state, view } = editor
+        const end = Selection.atEnd(state.doc)
+        if (!state.selection.eq(end)) view.dispatch(state.tr.setSelection(end))
+        view.focus()
+      } else {
+        editor.commands.focus('end')
+      }
       return true
     },
   }), [editor])

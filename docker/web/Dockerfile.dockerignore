@@ -10,3 +10,4 @@ coverage
 *.pem
 *.key
 **/target
+client/apps/e2e

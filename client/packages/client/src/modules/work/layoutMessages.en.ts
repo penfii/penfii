@@ -93,7 +93,7 @@ export const layoutEn: Record<keyof typeof layoutKo, string> = {
   'saved.favorite.remove': 'Remove from Favorites',
   'saved.favorite.removeTitle': 'Remove {title} from Favorites',
   'saved.favorites.empty': 'No Favorites',
-  'saved.favorites.emptyBody': 'Use the star on a project, team or ticket to make a shortcut. It does not subscribe you to anything.',
+  'saved.favorites.emptyBody': 'Use the star on a project, ticket, channel, DM, doc, team or saved view to make a shortcut. It does not subscribe you to anything.',
   'saved.kind.PROJECT': 'Project',
   'saved.kind.TEAM': 'Team',
   'saved.kind.TICKET': 'Ticket',

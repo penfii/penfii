@@ -416,6 +416,9 @@ describe('Doc page', () => {
     fireEvent.click(screen.getByRole('button', { name: '편집' }))
     const title = await screen.findByLabelText('문서 제목')
     expect(document.activeElement).toBe(title)
+    // A focus already scheduled by the comment editor must not reclaim the next frame.
+    await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+    expect(document.activeElement).toBe(title)
   })
 
   it('Create Version freezes the saved page with its revision; an unchanged page is refused and disabled', async () => {

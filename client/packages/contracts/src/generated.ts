@@ -11298,8 +11298,11 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @enum {string} */
-                    kind: "PROJECT" | "TEAM" | "TICKET" | "VIEW" | "CHANNEL";
+                    /**
+                     * @description DM is a direct-message conversation id; DOC is a Doc page id
+                     * @enum {string}
+                     */
+                    kind: "PROJECT" | "TEAM" | "TICKET" | "VIEW" | "CHANNEL" | "DM" | "DOC";
                     /** Format: uuid */
                     targetId: string;
                 };
@@ -11359,6 +11362,11 @@ export interface operations {
                         /** Format: uuid */
                         targetId?: string;
                     }[];
+                    /**
+                     * @description ALL (default): the listed Favorites come first in the order given and the others keep their relative order after them. LISTED: only the listed Favorites change places, among the places they already hold; every other Favorite (another folder, one the caller cannot open now) keeps its place.
+                     * @enum {string}
+                     */
+                    scope?: "ALL" | "LISTED";
                 };
             };
         };

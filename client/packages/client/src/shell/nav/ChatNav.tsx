@@ -22,6 +22,10 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { canCreateChannel, canManageChannelSettings } from '../../modules/spaces/capabilities'
 import { useWorkspaceRole } from '../../modules/spaces/useWorkspaceRole'
 import { useCreate } from '../create'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { queryKeys } from '../../queryKeys'
+import { queries } from '../../queries'
+import { FavoriteMenuItem } from '../../modules/personal/SavedButtons'
 import { floatingMenuPosition } from './floatingMenuPosition'
 
 function historyDms(space: Space | undefined): Dm[] {
@@ -238,7 +242,7 @@ function ChatNavBody({ workspaceId, space }: { workspaceId: string; space: Space
         </form>
       ) : null}
       <Fold id={`${workspaceId}:favorites`} title={t('shell.chat.favorites')}>
-        <p className="tree-empty">{t('shell.empty.favorites')}</p>
+        <FavoriteConversations workspaceId={workspaceId} space={space} sections={layout.sections} projectName={projectName} />
       </Fold>
       {layout.sections.map((section) => {
         const rows = section.conversationIds.map((id) => entry(id)).filter((item): item is NonNullable<typeof item> => item != null)
@@ -290,7 +294,7 @@ function ChatNavBody({ workspaceId, space }: { workspaceId: string; space: Space
                     ) : (
                       <DmLink workspaceId={workspaceId} dm={row.dm} locale={locale} fallback={t('dm.short')} />
                     )}
-                    <MoveMenu sections={layout.sections} current={section.id} onMove={(target) => place(id, target)} />
+                    <MoveMenu workspaceId={workspaceId} favorite={row.kind === 'channel' ? { kind: 'CHANNEL', targetId: row.channel.id } : { kind: 'DM', targetId: row.dm.conversationId }} sections={layout.sections} current={section.id} onMove={(target) => place(id, target)} />
                   </ConversationSlot>
                 )
               })}
@@ -307,7 +311,7 @@ function ChatNavBody({ workspaceId, space }: { workspaceId: string; space: Space
           render={(channel) => (
             <ConversationSlot key={channel.id} conversationId={channel.conversationId} onDrop={() => { if (drag.current?.kind === 'conversation') place(drag.current.id, null) }}>
               <ChannelLink workspaceId={workspaceId} channel={channel} canManageSettings={canManageChannelSettings(channel, workspaceRole, space?.projects.find((item) => item.id === channel.projectId))} />
-              <MoveMenu sections={layout.sections} current={null} onMove={(target) => place(channel.conversationId, target)} />
+              <MoveMenu workspaceId={workspaceId} favorite={{ kind: 'CHANNEL', targetId: channel.id }} sections={layout.sections} current={null} onMove={(target) => place(channel.conversationId, target)} />
             </ConversationSlot>
           )}
         />
@@ -321,7 +325,7 @@ function ChatNavBody({ workspaceId, space }: { workspaceId: string; space: Space
             render={(channel) => (
               <ConversationSlot key={channel.id} conversationId={channel.conversationId} onDrop={() => { if (drag.current?.kind === 'conversation') place(drag.current.id, null) }}>
                 <ChannelLink workspaceId={workspaceId} channel={channel} context={projectName(channel.projectId)} canManageSettings={canManageChannelSettings(channel, workspaceRole, space?.projects.find((item) => item.id === channel.projectId))} />
-                <MoveMenu sections={layout.sections} current={null} onMove={(target) => place(channel.conversationId, target)} />
+                <MoveMenu workspaceId={workspaceId} favorite={{ kind: 'CHANNEL', targetId: channel.id }} sections={layout.sections} current={null} onMove={(target) => place(channel.conversationId, target)} />
               </ConversationSlot>
             )}
           />
@@ -333,7 +337,7 @@ function ChatNavBody({ workspaceId, space }: { workspaceId: string; space: Space
           {freeDms.map((dm) => (
             <ConversationSlot key={dm.id} conversationId={dm.conversationId} onDrop={() => { if (drag.current?.kind === 'conversation') place(drag.current.id, null) }}>
               <DmLink workspaceId={workspaceId} dm={dm} locale={locale} fallback={t('dm.short')} />
-              <MoveMenu sections={layout.sections} current={null} onMove={(target) => place(dm.conversationId, target)} />
+              <MoveMenu workspaceId={workspaceId} favorite={{ kind: 'DM', targetId: dm.conversationId }} sections={layout.sections} current={null} onMove={(target) => place(dm.conversationId, target)} />
             </ConversationSlot>
           ))}
         </ul>
@@ -425,7 +429,85 @@ function ChannelList({
   )
 }
 
-function MoveMenu({ sections, current, onMove }: { sections: ChatSection[]; current: string | null; onMove: (sectionId: string | null) => void }) {
+const MENU_ITEMS = '[role="menuitem"]:not(:disabled), [role="menuitemcheckbox"]:not(:disabled)'
+
+type FavoriteTarget = { kind: 'CHANNEL' | 'DM'; targetId: string }
+
+/**
+ * The chat's Favorites: shortcuts to the channels and DMs the person starred, in their Saved order
+ * (folders do not show here). They are extra ways in: each conversation stays in its own group too.
+ * A shortcut opens the conversation in Chat and shows the same unread count as its row elsewhere; the
+ * group itself adds no count, so nothing is counted twice.
+ */
+function FavoriteConversations({ workspaceId, space, sections, projectName }: { workspaceId: string; space: Space | undefined; sections: ChatSection[]; projectName: (id: string | null) => string }) {
+  const { t, locale } = useI18n()
+  const workspaceRole = useWorkspaceRole(workspaceId)
+  const queryClient = useQueryClient()
+  const favorites = useQuery({ ...queries.favorites(workspaceId), enabled: workspaceId.length > 0 })
+  const conversations = (favorites.data ?? []).filter((item): item is typeof item & FavoriteTarget => item.kind === 'CHANNEL' || item.kind === 'DM')
+  // The side list holds every conversation the person can read. Once it is loaded, a shortcut missing from it was
+  // left or lost: it is not shown, and the Favorites list is asked for again (once per change).
+  const listed = (item: FavoriteTarget) => !space || (item.kind === 'CHANNEL' ? space.channels.some((entry) => entry.id === item.targetId) : space.dms.some((entry) => entry.conversationId === item.targetId))
+  const missing = conversations.filter((item) => !listed(item)).map((item) => item.targetId).join(',')
+  const count = conversations.length
+  // The list, or its empty line: whichever is shown, it sits in the group whose heading takes the focus.
+  const anchor = useRef<HTMLUListElement & HTMLParagraphElement>(null)
+  const removing = useRef(false)
+  // A shortcut removed from its own menu takes its row (and the focused menu button) with it: focus goes to
+  // the group's heading instead of being lost.
+  useEffect(() => {
+    if (!removing.current) return
+    removing.current = false
+    const lost = document.activeElement === null || document.activeElement === document.body
+    if (lost) anchor.current?.closest('section')?.querySelector<HTMLElement>('.tree-fold')?.focus()
+  }, [count])
+  useEffect(() => {
+    if (missing) void queryClient.invalidateQueries({ queryKey: queryKeys.favorites(workspaceId) })
+  }, [missing, queryClient, workspaceId])
+  if (!favorites.data) {
+    if (favorites.isError) {
+      return (
+        <p className="tree-empty" role="alert">
+          {t('saved.favorites.loadError')}{' '}
+          <button type="button" className="tree-more" onClick={() => void favorites.refetch()}>{t('saved.favorites.retry')}</button>
+        </p>
+      )
+    }
+    return <p className="tree-empty" role="status">{t('saved.favorites.loading')}</p>
+  }
+  const rows = conversations.filter(listed)
+  if (rows.length === 0) return <p ref={anchor} className="tree-empty">{t('shell.empty.favorites')}</p>
+  return (
+    <ul ref={anchor} className="conv-list favorite-conversations">
+      {rows.map((item) => {
+        const target: FavoriteTarget = { kind: item.kind, targetId: item.targetId }
+        const channel = item.kind === 'CHANNEL' ? space?.channels.find((entry) => entry.id === item.targetId) : undefined
+        const dm = item.kind === 'DM' ? space?.dms.find((entry) => entry.conversationId === item.targetId) : undefined
+        return (
+          <li key={`${item.kind}:${item.targetId}`} className="conv-slot">
+            {channel ? (
+              <ChannelLink workspaceId={workspaceId} channel={channel} context={channel.projectId ? projectName(channel.projectId) : undefined} canManageSettings={canManageChannelSettings(channel, workspaceRole, space?.projects.find((entry) => entry.id === channel.projectId))} />
+            ) : dm ? (
+              <DmLink workspaceId={workspaceId} dm={dm} locale={locale} fallback={t('dm.short')} />
+            ) : (
+              // The side list is not loaded yet: the server says it can be read, so it opens.
+              <NavLink className="tree-link" to={`/w/${workspaceId}/c/${item.targetId}`}>
+                {item.kind === 'CHANNEL' ? <span className="hash">#</span> : null} {item.title || t('dm.short')}
+              </NavLink>
+            )}
+            <MoveMenu workspaceId={workspaceId} favorite={target} sections={sections} current={undefined} onFavoriteDone={() => { removing.current = true }} />
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
+/**
+ * A conversation row's menu: the chat group to move it to, then Favorite. A shortcut in Favorites has
+ * no `onMove` (it is not placed in a group; its own row is).
+ */
+function MoveMenu({ workspaceId, favorite, sections, current, onMove, onFavoriteDone }: { workspaceId: string; favorite: FavoriteTarget; sections: ChatSection[]; current: string | null | undefined; onMove?: (sectionId: string | null) => void; onFavoriteDone?: () => void }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -473,9 +555,9 @@ function MoveMenu({ sections, current, onMove }: { sections: ChatSection[]; curr
   }, [open, sections.length])
   // The first render is visibility:hidden until its fixed position is measured. Browsers refuse to
   // focus a hidden menu item, so wait for the measured/visible render before moving focus.
-  useEffect(() => { if (open && positioned) menu.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus() }, [open, positioned])
+  useEffect(() => { if (open && positioned) menu.current?.querySelector<HTMLElement>(MENU_ITEMS)?.focus() }, [open, positioned])
   function navigateItems(event: ReactKeyboardEvent<HTMLDivElement>) {
-    const items = [...(menu.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? [])]
+    const items = [...(menu.current?.querySelectorAll<HTMLElement>(MENU_ITEMS) ?? [])]
     if (!items.length) return
     const currentIndex = items.indexOf(document.activeElement as HTMLElement)
     let next: number | null = null
@@ -490,11 +572,17 @@ function MoveMenu({ sections, current, onMove }: { sections: ChatSection[]; curr
       <button ref={trigger} type="button" className="icon-add" aria-label={t('shell.chat.rowMenu')} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen((value) => !value)}>⋯</button>
       {open ? createPortal(
         <div ref={menu} className="menu-panel floating-nav-menu" style={position ? { top: position.top, left: position.left, maxHeight: position.maxHeight, maxWidth: position.maxWidth, minWidth: 0, visibility: 'visible' } : { visibility: 'hidden' }} role="menu" onKeyDown={navigateItems}>
-          <p className="menu-label">{t('shell.chat.moveTo')}</p>
-          <button type="button" role="menuitem" disabled={current == null} onClick={() => { setOpen(false); trigger.current?.focus(); onMove(null) }}>{t('shell.chat.defaultSection')}</button>
-          {sections.map((section) => (
-            <button key={section.id} type="button" role="menuitem" disabled={section.id === current} onClick={() => { setOpen(false); trigger.current?.focus(); onMove(section.id) }}>{section.name}</button>
-          ))}
+          {onMove ? (
+            <>
+              <p className="menu-label">{t('shell.chat.moveTo')}</p>
+              <button type="button" role="menuitem" disabled={current == null} onClick={() => { setOpen(false); trigger.current?.focus(); onMove(null) }}>{t('shell.chat.defaultSection')}</button>
+              {sections.map((section) => (
+                <button key={section.id} type="button" role="menuitem" disabled={section.id === current} onClick={() => { setOpen(false); trigger.current?.focus(); onMove(section.id) }}>{section.name}</button>
+              ))}
+              <hr className="menu-separator" />
+            </>
+          ) : null}
+          <FavoriteMenuItem workspaceId={workspaceId} kind={favorite.kind} targetId={favorite.targetId} onDone={() => { setOpen(false); trigger.current?.focus(); onFavoriteDone?.() }} />
         </div>, document.body,
       ) : null}
     </div>

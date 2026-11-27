@@ -847,7 +847,7 @@ button.tree-link { border: 0; background: transparent; }
 .project-card:hover { background: var(--bg-muted); }
 .project-card:focus-visible { box-shadow: var(--focus); }
 .project-card small { color: var(--text-muted); }
-.project-card-star, .tree-star { color: var(--accent-text, var(--accent)); margin-inline-end: 0.3rem; }
+.tree-star { color: var(--accent-text, var(--accent)); margin-inline-end: 0.3rem; }
 .project-browse-tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin: var(--space-3) 0 var(--space-2); }
 .project-browse-tools .view-search { flex: 1 1 14rem; max-width: 24rem; }
 .project-rows { list-style: none; padding: 0; }
@@ -877,3 +877,25 @@ button.tree-link { border: 0; background: transparent; }
 @media (max-width: 640px) { .project-group-title, .project-grid, .project-browse-tools, .project-rows { margin-inline: var(--space-3); } }
 h1 > .pop { display: inline-block; max-width: 100%; }
 .project-switch-trigger { white-space: normal; text-align: start; }
+
+/* A Favorite star in a navigation row: shown on hover or focus, and always while the row is a Favorite. */
+.favorite-star.saved-on { color: var(--accent-strong); }
+.tree-favorite { visibility: hidden; display: inline-grid; place-items: center; padding: 0 .3rem; font-size: inherit; }
+.tree-favorite.saved-on, li:hover > .tree-favorite, li:focus-within > .tree-favorite, .tree-favorite:focus-visible { visibility: visible; }
+@media (hover: none) { .tree-favorite { visibility: visible; } }
+.favorite-conversations .row-menu { margin-inline-start: auto; }
+.menu-panel [role="menuitemcheckbox"] { display: flex; align-items: center; gap: .4rem; }
+.project-card-slot, .project-row-slot { position: relative; }
+.project-card-slot .project-card { padding-right: 2.4rem; }
+.project-card-favorite, .project-row-favorite { position: absolute; top: .45rem; right: .45rem; }
+.project-row-slot .result-hit { padding-right: 2.6rem; }
+.project-row-favorite { top: 50%; transform: translateY(-50%); }
+.project-switch-list li { display: flex; align-items: center; gap: 2px; }
+.project-switch-list li .project-switch-item { flex: 1; min-width: 0; }
+.project-switch-favorite { flex: none; }
+.project-card-favorite:not(.saved-on), .project-row-favorite:not(.saved-on), .project-switch-favorite:not(.saved-on) { color: var(--text-muted); }
+.team-card-favorite { justify-self: end; }
+.search-hit { display: flex; align-items: flex-start; gap: var(--space-2); }
+.search-hit > .saved-open { flex: 1; min-width: 0; }
+.search-favorite { flex: none; }
+.floating-nav-menu .menu-separator { border: 0; height: 1px; margin: var(--space-1) 0; background: var(--border); }

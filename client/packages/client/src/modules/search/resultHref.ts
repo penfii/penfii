@@ -1,4 +1,4 @@
-import type { SearchResult, SearchTab } from '@penfii/contracts'
+import type { SavedKind, SearchResult, SearchTab } from '@penfii/contracts'
 
 /** The kinds a search can be narrowed to, in the order the Search sidebar lists them. */
 export const SEARCH_TABS: SearchTab[] = ['all', 'message', 'ticket', 'doc', 'file', 'space', 'view', 'person']
@@ -43,6 +43,33 @@ export function resultHref(workspaceId: string, result: SearchResult): string | 
     }
     case 'person':
     default:
+      return null
+  }
+}
+
+/**
+ * What a result can be starred as: a kind Favorites supports and an id the result really carries.
+ * Messages, files and people are not Favorites; a Project is one only for its participants (`participates`),
+ * since its inside, and a shortcut to it, is theirs.
+ */
+export function favoriteTarget(result: SearchResult, participates: (projectId: string) => boolean): { kind: SavedKind; targetId: string } | null {
+  switch (result.kind) {
+    case 'ticket':
+      return { kind: 'TICKET', targetId: result.id }
+    case 'doc':
+      return { kind: 'DOC', targetId: result.id }
+    case 'view':
+      return { kind: 'VIEW', targetId: result.id }
+    case 'space': {
+      const kind = result.fields.spaceKind
+      if (kind === 'PROJECT') return participates(result.id) ? { kind: 'PROJECT', targetId: result.id } : null
+      if (kind === 'TEAM') return { kind: 'TEAM', targetId: result.id }
+      if (kind === 'CHANNEL') return { kind: 'CHANNEL', targetId: result.id }
+      return null
+    }
+    case 'message':
+    case 'file':
+    case 'person':
       return null
   }
 }

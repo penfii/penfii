@@ -699,3 +699,138 @@ async fn scopes_policy_and_the_web_only_boundary(pool: PgPool) {
     .unwrap();
     assert!(logged >= 1);
 }
+
+/// FEA-202/203/208 through MCP: a DM and a Doc are favorites like the other kinds, and `scope: LISTED`
+/// reorders only the listed ones among their own places.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn favorites_take_dms_and_docs_and_a_listed_order(pool: PgPool) {
+    let env = setup(pool).await;
+    let owner = token_for(&env, &env.owner_cookie, SCOPES).await;
+    let ws = env.workspace_id;
+    let member_cookie = add_member(&env, "fav-member@penfii.test", "MEMBER").await;
+    let member = token_for(&env, &member_cookie, SCOPES).await;
+    let member_id = user_of(&env, "fav-member@penfii.test").await;
+    let owner_id = user_of(&env, crate::common::OWNER_EMAIL).await;
+    let dm = rest(
+        &env,
+        "POST",
+        &format!("/v1/workspaces/{ws}/dms"),
+        &env.owner_cookie,
+        None,
+        Some(json!({"userIds": [owner_id, member_id]})),
+    )
+    .await;
+    assert!(dm.status.is_success(), "{:?}", dm.body);
+    let dm_id = dm.body["id"].as_str().unwrap().to_string();
+    let page = json!({"schema":"penfii.doc","version":1,"blocks":[
+        {"id":Uuid::new_v4().to_string(),"type":"paragraph","props":{},"content":[{"type":"text","text":"x","styles":{}}],"children":[]}]});
+    let open = rest(
+        &env,
+        "POST",
+        &format!("/v1/workspaces/{ws}/docs"),
+        &env.owner_cookie,
+        None,
+        Some(json!({"title": "Open page", "visibility": "WORKSPACE", "content": page})),
+    )
+    .await;
+    assert!(open.status.is_success(), "{:?}", open.body);
+    let open_id = open.body["id"].as_str().unwrap().to_string();
+    let closed = rest(
+        &env,
+        "POST",
+        &format!("/v1/workspaces/{ws}/docs"),
+        &env.owner_cookie,
+        None,
+        Some(json!({"title": "Closed page", "visibility": "RESTRICTED", "content": page})),
+    )
+    .await;
+    let closed_id = closed.body["id"].as_str().unwrap().to_string();
+    let ticket_id = ticket(&env, &owner).await;
+
+    let added = call(
+        &env,
+        &owner,
+        "favorite_add",
+        json!({"workspaceId": ws, "kind": "DM", "targetId": dm_id}),
+    )
+    .await;
+    assert_eq!(ok(&added)["title"], "fav-member");
+    assert_eq!(ok(&added)["conversationId"], dm_id.as_str());
+    let added = call(
+        &env,
+        &owner,
+        "favorite_add",
+        json!({"workspaceId": ws, "kind": "DOC", "targetId": open_id}),
+    )
+    .await;
+    assert_eq!(ok(&added)["title"], "Open page");
+    ok(&call(
+        &env,
+        &owner,
+        "favorite_add",
+        json!({"workspaceId": ws, "kind": "TICKET", "targetId": ticket_id}),
+    )
+    .await);
+    let refused = call(
+        &env,
+        &member,
+        "favorite_add",
+        json!({"workspaceId": ws, "kind": "DOC", "targetId": closed_id}),
+    )
+    .await;
+    assert_eq!(error_code(&refused), "not_found");
+    let refused = call(
+        &env,
+        &member,
+        "favorite_add",
+        json!({"workspaceId": ws, "kind": "CHANNEL", "targetId": dm_id}),
+    )
+    .await;
+    assert_eq!(error_code(&refused), "not_found");
+    let refused = call(
+        &env,
+        &owner,
+        "favorite_add",
+        json!({"workspaceId": ws, "kind": "MESSAGE", "targetId": ticket_id}),
+    )
+    .await;
+    assert_eq!(
+        refused.body["result"]["isError"], true,
+        "{:?}",
+        refused.body
+    );
+
+    // DM, DOC, TICKET. A LISTED order of TICKET then DM leaves DOC in the middle.
+    let ordered = call(
+        &env,
+        &owner,
+        "favorite_order",
+        json!({"workspaceId": ws, "scope": "LISTED", "items": [
+            {"kind": "TICKET", "targetId": ticket_id}, {"kind": "DM", "targetId": dm_id}]}),
+    )
+    .await;
+    let kinds: Vec<&str> = ok(&ordered)["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["TICKET", "DOC", "DM"]);
+    let bad = call(
+        &env,
+        &owner,
+        "favorite_order",
+        json!({"workspaceId": ws, "scope": "SOME", "items": []}),
+    )
+    .await;
+    assert_eq!(bad.body["result"]["isError"], true, "{:?}", bad.body);
+    ok(&call(
+        &env,
+        &owner,
+        "favorite_remove",
+        json!({"workspaceId": ws, "kind": "DM", "targetId": dm_id}),
+    )
+    .await);
+    let left = call(&env, &owner, "favorite_list", json!({"workspaceId": ws})).await;
+    assert_eq!(ok(&left)["items"].as_array().unwrap().len(), 2);
+}

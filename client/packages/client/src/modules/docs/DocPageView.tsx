@@ -21,6 +21,7 @@ import { useScopeLabel } from './useScopeLabel'
 import type { EditorController } from './DocEditor'
 import { useOpenReference } from './docContext'
 import { useDocLive } from './docLive'
+import { FavoriteButton } from '../personal/SavedButtons'
 
 // BlockNote is large: it loads only when a page is opened.
 const DocEditor = lazy(() => import('./DocEditor'))
@@ -310,6 +311,7 @@ export function DocPageView({
           </>
         ) : (
           <span className="doc-actions">
+            <FavoriteButton workspaceId={workspaceId} kind="DOC" targetId={data.id} />
             <Button variant="secondary" onClick={() => setAccessOpen(true)}>{t('docs.access.open')}</Button>
             <Button variant="secondary" onClick={() => setHistoryOpen(true)}>{t('docs.history')}</Button>
             {canEdit ? (
