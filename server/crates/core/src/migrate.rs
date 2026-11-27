@@ -84,13 +84,15 @@ pub async fn require_current_schema(pool: &PgPool) -> Result<(), String> {
         .iter()
         .map(|(version, checksum, success)| (*version, hex::encode(checksum), *success))
         .collect();
-    if holds_split_0003(&split) {
-        return Err(
-            "the migration history holds the pre-release split migrations 0003-0007, which this build \
-             has as one 0003. Run `admin-cli migrate` with PENFII_MIGRATION_DATABASE_URL set (it \
-             rewrites that history when it is complete and unchanged), then start again"
-                .to_string(),
-        );
+    for set in SPLITS {
+        if holds_split(set, &split) {
+            return Err(format!(
+                "the migration history holds the pre-release split migrations {}, which this build \
+                 has as one {}. Run `admin-cli migrate` with PENFII_MIGRATION_DATABASE_URL set (it \
+                 rewrites that history when it is complete and unchanged), then start again",
+                set.range, set.consolidated
+            ));
+        }
     }
     for migration in MIGRATOR
         .iter()
@@ -189,8 +191,9 @@ static MIGRATOR: Migrator = sqlx::migrate!("../../../database/migrations");
 /// file as one script, so a failed script still rolls back, while a crash after the script and
 /// before its history row does not), and never runs a version twice.
 ///
-/// Before that, a history recorded by a development build with the split 0003-0007 files is turned
-/// into the one `0003` of this build ([`consolidate_split_0003`]); the result says whether it was.
+/// Before that, a history recorded by a development build with files that this build has merged into
+/// one (the split 0003-0007, the split 0004-0005) is turned into the one file's row
+/// ([`consolidate_split`]); the result says which were.
 pub async fn apply_migrations(pool: &PgPool) -> Result<MigrationRun, sqlx::Error> {
     run(pool, &MIGRATOR, SCHEMA, true).await
 }
@@ -201,6 +204,9 @@ pub struct MigrationRun {
     /// The history held the five split files 0003-0007, applied and unchanged, and now holds the
     /// consolidated `0003` instead (nothing was applied again).
     pub consolidated_split_0003: bool,
+    /// The history held the two split files 0004 (long sessions) and 0005 (doc full width), applied
+    /// and unchanged, and now holds the consolidated `0004` instead (nothing was applied again).
+    pub consolidated_split_0004: bool,
 }
 
 /// [`apply_migrations`] for any migrator and schema; the tests use it with their own. It never
@@ -273,7 +279,7 @@ async fn guarded_run(
              (see docs/development.md, \"Resetting a development database\")."
         )));
     }
-    let mut consolidated_split_0003 = false;
+    let (mut consolidated_split_0003, mut consolidated_split_0004) = (false, false);
     if consolidate && history {
         // Under the migrator's own advisory lock (PostgreSQL advisory locks nest within a session, so
         // `run_direct` below takes it again and releases it once; the second release is ours). A second
@@ -282,7 +288,8 @@ async fn guarded_run(
         conn.lock()
             .await
             .map_err(|error| sqlx::Error::Migrate(Box::new(error)))?;
-        consolidated_split_0003 = consolidate_split_0003(conn, migrator, schema).await?;
+        consolidated_split_0003 = consolidate_split(conn, migrator, schema, &SPLIT_0003).await?;
+        consolidated_split_0004 = consolidate_split(conn, migrator, schema, &SPLIT_0004).await?;
     }
     // `run_direct` is what `run` calls once it has a connection; `run` itself cannot be spawned onto
     // another task because of how `Acquire` is declared.
@@ -297,81 +304,139 @@ async fn guarded_run(
     }
     Ok(MigrationRun {
         consolidated_split_0003,
+        consolidated_split_0004,
     })
 }
 
-/// The five files a development build between v0.3.1 and the next release had in place of
-/// `0003_after_v0_3_1.sql` (never released): version, description and the SHA-384 checksum sqlx
-/// recorded for each. Together they made exactly the schema of the consolidated `0003`, and their
-/// data clean-ups (0004, 0007) are the one in it. The entry can go once no such database is left.
-const SPLIT_0003: [(i64, &str, &str); 5] = [
-    (
-        3,
-        "email change",
-        "d1bf16453967b4e72224570456c91f27bd8dfe98de9284131c025631bae0a6b7faed06a48b57ff3a5ea00c40394f8aa0",
-    ),
-    (
-        4,
-        "removed member access",
-        "5d5e9fc0ed4ece384378d3b4a8026216ecaf6a6d53582fcc4618cd9bc976b7c44f0592cba1b6c4e15760540ca6b217c7",
-    ),
-    (
-        5,
-        "auth attempt browser",
-        "80950a04f727d822824cdffd468fd3c607a2cf6ea88000af8f082a16ce89b9e48caa5cdf192aaf475ae1dd29dd56c2fe",
-    ),
-    (
-        6,
-        "mfa totp",
-        "1f2948871460745f4853df52afb23f68610d8a21be58df18dabf70cbe19a18ad64ad745e2b63c5e3727c9bb4a2bf8960",
-    ),
-    (
-        7,
-        "removed member access followup",
-        "84a73e836c0525331351d8b9607a91986f03543c6a6d493c8f36aadb39b228848f153aca829de97310bcd777497489da",
-    ),
-];
+/// A set of development migration files that a later build merged into one file, and what is needed to
+/// recognise the history they left and to rewrite it.
+struct Split {
+    /// The versions of the files, as the text of a message ("0003-0007").
+    range: &'static str,
+    /// The file that replaced them, as the text of a message ("0003").
+    consolidated: &'static str,
+    /// The version of the merged file. It is also the version of the first split file, whose row is
+    /// kept (and rewritten); the rows of the others go.
+    version: i64,
+    /// Version, description and the SHA-384 checksum sqlx recorded for each split file.
+    files: &'static [(i64, &'static str, &'static str)],
+    /// Every version a history of such a build holds, in order: this build's own files before the
+    /// split ones, then the split ones.
+    versions: &'static [i64],
+    /// `SELECT` of one boolean, with the schema as `$1`: the objects the split files made are there.
+    objects: &'static str,
+}
 
-/// The objects the split files made, checked before their history is rewritten.
-const SPLIT_0003_OBJECTS: &str = "SELECT to_regclass($1 || '.email_change_requests') IS NOT NULL
+/// The files a development build had between v0.3.1 and the next release (never released): the five
+/// that made up what is now `0003_after_v0_3_1.sql`. Together they made exactly the schema of the
+/// consolidated `0003`, and their data clean-ups (0004, 0007) are the one in it. The entry can go once
+/// no such database is left.
+const SPLIT_0003: Split = Split {
+    range: "0003-0007",
+    consolidated: "0003",
+    version: 3,
+    files: &[
+        (
+            3,
+            "email change",
+            "d1bf16453967b4e72224570456c91f27bd8dfe98de9284131c025631bae0a6b7faed06a48b57ff3a5ea00c40394f8aa0",
+        ),
+        (
+            4,
+            "removed member access",
+            "5d5e9fc0ed4ece384378d3b4a8026216ecaf6a6d53582fcc4618cd9bc976b7c44f0592cba1b6c4e15760540ca6b217c7",
+        ),
+        (
+            5,
+            "auth attempt browser",
+            "80950a04f727d822824cdffd468fd3c607a2cf6ea88000af8f082a16ce89b9e48caa5cdf192aaf475ae1dd29dd56c2fe",
+        ),
+        (
+            6,
+            "mfa totp",
+            "1f2948871460745f4853df52afb23f68610d8a21be58df18dabf70cbe19a18ad64ad745e2b63c5e3727c9bb4a2bf8960",
+        ),
+        (
+            7,
+            "removed member access followup",
+            "84a73e836c0525331351d8b9607a91986f03543c6a6d493c8f36aadb39b228848f153aca829de97310bcd777497489da",
+        ),
+    ],
+    versions: &[1, 2, 3, 4, 5, 6, 7],
+    // The tables and the column the split files made.
+    objects: "SELECT to_regclass($1 || '.email_change_requests') IS NOT NULL
         AND to_regclass($1 || '.mfa_instance_key') IS NOT NULL
         AND to_regclass($1 || '.mfa_totp') IS NOT NULL
         AND to_regclass($1 || '.mfa_recovery_codes') IS NOT NULL
         AND EXISTS (SELECT 1 FROM information_schema.columns
-                    WHERE table_schema = $1 AND table_name = 'auth_attempts' AND column_name = 'browser_hash')";
+                    WHERE table_schema = $1 AND table_name = 'auth_attempts' AND column_name = 'browser_hash')",
+};
 
-/// Whether a recorded history is the split one, judged by checksums (never by version numbers alone:
+/// The two files a development build had after v0.4.1 (never released): `0004_long_sessions.sql` and
+/// `0005_doc_full_width.sql`, now `0004_after_v0_4_1.sql`. Same schema and no data change; the entry
+/// can go once no such database is left.
+const SPLIT_0004: Split = Split {
+    range: "0004-0005",
+    consolidated: "0004",
+    version: 4,
+    files: &[
+        (
+            4,
+            "long sessions",
+            "4e00073cdf579c517d6f01b6b881d82bef2c70f0b5aad44efa989dcc08d3b5cfcf73ce1e0235c200214daff4ccc50581",
+        ),
+        (
+            5,
+            "doc full width",
+            "bff8c7397ce65c3b067d5867a3cadc77de595eff2572a022881d2c737502adcafac91ae57d4542a9b16a634a5bf768b1",
+        ),
+    ],
+    versions: &[1, 2, 3, 4, 5],
+    // The columns the two files added.
+    objects: "SELECT (SELECT count(*) FROM information_schema.columns
+                    WHERE table_schema = $1
+                      AND (table_name, column_name) IN (('sessions', 'absolute_expires_at'),
+                                                        ('sessions', 'idle_seconds'),
+                                                        ('auth_attempts', 'keep_signed_in'),
+                                                        ('doc_pages', 'full_width'))) = 4",
+};
+
+const SPLITS: &[&Split] = &[&SPLIT_0003, &SPLIT_0004];
+
+/// Whether a recorded history is that split one, judged by checksums (never by version numbers alone:
 /// a later release may have its own 0004).
-fn holds_split_0003(rows: &[(i64, String, bool)]) -> bool {
+fn holds_split(set: &Split, rows: &[(i64, String, bool)]) -> bool {
     rows.iter().any(|(version, checksum, _)| {
-        SPLIT_0003
+        set.files
             .iter()
             .any(|(v, _, c)| v == version && c == checksum)
     })
 }
 
-/// Replaces the history rows of the split files 0003-0007 with the one row of the consolidated
-/// `0003`, when the history is exactly what such a build left: versions 1 to 7, all applied, 1 and 2
-/// with this build's checksums, 3 to 7 with the checksums of the split files, and the tables and the
-/// column they made present. Nothing runs again and no data changes; the rows are rewritten in one
-/// transaction. A history that holds only some of the split files, or anything else alongside them,
-/// is refused with a message and left as it is. Returns whether it rewrote the history.
-async fn consolidate_split_0003(
+/// Replaces the history rows of the split files with the one row of the consolidated file, when the
+/// history is exactly what such a build left: the versions of `set.versions`, all applied, this build's
+/// own files with this build's checksums, the split ones with the checksums of the split files, and the
+/// objects they made present. Nothing runs again and no data changes; the rows are rewritten in one
+/// transaction. A history that holds only some of the split files, or anything else alongside them, is
+/// refused with a message and left as it is. Returns whether it rewrote the history.
+async fn consolidate_split(
     conn: &mut sqlx::PgConnection,
     migrator: &Migrator,
     schema: &str,
+    set: &Split,
 ) -> Result<bool, sqlx::Error> {
     let rows: Vec<(i64, String, bool)> = sqlx::query_as(&format!(
         "SELECT version, encode(checksum, 'hex'), success FROM {schema}._sqlx_migrations ORDER BY version"
     ))
     .fetch_all(&mut *conn)
     .await?;
-    if !holds_split_0003(&rows) {
+    if !holds_split(set, &rows) {
         return Ok(false);
     }
+    let (range, consolidated) = (set.range, set.consolidated);
     let refuse = |why: String| {
         sqlx::Error::Protocol(format!(
-            "the migration history holds the pre-release split migrations 0003-0007, but {why}. It was \
+            "the migration history holds the pre-release split migrations {range}, but {why}. It was \
              left unchanged. Restore the database from the backup taken before that build, or recreate \
              it (docs/development.md, \"Resetting a development database\")."
         ))
@@ -381,22 +446,24 @@ async fn consolidate_split_0003(
             .iter()
             .find(|m| m.version == version && !m.migration_type.is_down_migration())
     };
-    let target = own(3).ok_or_else(|| refuse("this build has no migration 0003".into()))?;
+    let target = own(set.version)
+        .ok_or_else(|| refuse(format!("this build has no migration {consolidated}")))?;
     let target_checksum = hex::encode(&target.checksum);
-    if SPLIT_0003.iter().any(|(_, _, c)| *c == target_checksum) {
+    if set.files.iter().any(|(_, _, c)| *c == target_checksum) {
         return Err(refuse("this build still has the split files".into()));
     }
     let versions: Vec<i64> = rows.iter().map(|(v, _, _)| *v).collect();
-    if versions != [1, 2, 3, 4, 5, 6, 7] {
+    if versions != set.versions {
         return Err(refuse(format!(
-            "the recorded versions are {versions:?}, not 1 to 7"
+            "the recorded versions are {versions:?}, not {:?}",
+            set.versions
         )));
     }
     for (version, checksum, success) in &rows {
         if !success {
             return Err(refuse(format!("migration {version} is recorded as failed")));
         }
-        let expected = match SPLIT_0003.iter().find(|(v, _, _)| v == version) {
+        let expected = match set.files.iter().find(|(v, _, _)| v == version) {
             Some((_, _, split)) => (*split).to_string(),
             None => own(*version)
                 .map(|m| hex::encode(&m.checksum))
@@ -408,13 +475,13 @@ async fn consolidate_split_0003(
             )));
         }
     }
-    let present: bool = sqlx::query_scalar(SPLIT_0003_OBJECTS)
+    let present: bool = sqlx::query_scalar(set.objects)
         .bind(schema)
         .fetch_one(&mut *conn)
         .await?;
     if !present {
         return Err(refuse(
-            "the tables or the column those files made are missing".into(),
+            "the tables or the columns those files made are missing".into(),
         ));
     }
 
@@ -424,8 +491,9 @@ async fn consolidate_split_0003(
     ))
     .execute(&mut *tx)
     .await?;
+    let others = set.files.len() as u64 - 1;
     let mut removed = 0;
-    for (version, _, checksum) in SPLIT_0003.iter().filter(|(v, _, _)| *v != 3) {
+    for (version, _, checksum) in set.files.iter().filter(|(v, _, _)| *v != set.version) {
         removed += sqlx::query(&format!(
             "DELETE FROM {schema}._sqlx_migrations
              WHERE version = $1 AND checksum = decode($2, 'hex') AND success"
@@ -439,18 +507,19 @@ async fn consolidate_split_0003(
     let updated = sqlx::query(&format!(
         "UPDATE {schema}._sqlx_migrations
             SET description = $1, checksum = $2
-          WHERE version = 3 AND checksum = decode($3, 'hex') AND success"
+          WHERE version = $4 AND checksum = decode($3, 'hex') AND success"
     ))
     .bind(target.description.as_ref())
     .bind(target.checksum.as_ref())
-    .bind(SPLIT_0003[0].2)
+    .bind(set.files[0].2)
+    .bind(set.version)
     .execute(&mut *tx)
     .await?
     .rows_affected();
-    if removed != 4 || updated != 1 {
+    if removed != others || updated != 1 {
         tx.rollback().await?;
         return Err(refuse(format!(
-            "the rewrite matched {removed} of 4 rows to remove and {updated} of 1 to replace"
+            "the rewrite matched {removed} of {others} rows to remove and {updated} of 1 to replace"
         )));
     }
     tx.commit().await?;

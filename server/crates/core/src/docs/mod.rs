@@ -9,6 +9,7 @@
 pub mod collab;
 pub mod content;
 pub mod history;
+pub mod live;
 pub mod materialize;
 pub mod recovery;
 pub mod yjs;
@@ -78,6 +79,13 @@ async fn rights_of(
         .get(&page_id)
         .copied()
         .unwrap_or_default())
+}
+
+/// Whether the person can read the page now. A deleted page, or one they have lost, is not readable. Used by the live
+/// socket of an open page, which does not lock anything.
+pub async fn readable(pool: &PgPool, actor: Uuid, page_id: Uuid) -> Result<bool, CoreError> {
+    let mut conn = pool.acquire().await?;
+    Ok(rights_of(&mut conn, actor, page_id).await?.read)
 }
 
 /// Locks the page row and returns its Workspace. A page the person cannot read is not found.
@@ -206,12 +214,13 @@ struct PageRow {
     updated_by: Option<Uuid>,
     updated_at: DateTime<Utc>,
     created_by: Uuid,
+    full_width: bool,
 }
 
 async fn load_page(conn: &mut PgConnection, page_id: Uuid) -> Result<PageRow, CoreError> {
     let row = sqlx::query(
         "SELECT id,workspace_id,project_id,parent_id,title,visibility,scope_project_id,scope_team_id,position,content,revision_no,
-                materialized_at,updated_by,updated_at,created_by
+                materialized_at,updated_by,updated_at,created_by,full_width
          FROM penfii.doc_pages WHERE id=$1 AND deleted_at IS NULL",
     )
     .bind(page_id)
@@ -234,6 +243,7 @@ async fn load_page(conn: &mut PgConnection, page_id: Uuid) -> Result<PageRow, Co
         updated_by: row.try_get("updated_by")?,
         updated_at: row.try_get("updated_at")?,
         created_by: row.try_get("created_by")?,
+        full_width: row.try_get("full_width")?,
     })
 }
 
@@ -282,6 +292,7 @@ async fn page_json(
         "position": page.position,
         "content": page.content,
         "revisionNo": page.revision_no,
+        "fullWidth": page.full_width,
         "materializedAt": time(page.materialized_at),
         "updatedAt": time(page.updated_at),
         "updatedBy": page.updated_by,
@@ -577,12 +588,46 @@ pub async fn patch(
     page_id: Uuid,
     title: Option<String>,
     project_id: Option<Option<Uuid>>,
+    full_width: Option<bool>,
 ) -> Result<Value, CoreError> {
     let title = title.map(|t| clean_title(&t)).transpose()?;
     let mut tx = pool.begin().await?;
     let (workspace, rights) = lock_readable(&mut tx, actor, page_id).await?;
     if title.is_some() && !rights.edit {
         return Err(CoreError::forbidden("you cannot rename this page"));
+    }
+    if full_width.is_some() && !rights.edit {
+        return Err(CoreError::forbidden(
+            "you cannot change the layout of this page",
+        ));
+    }
+    // The layout is a setting of the page, not part of what is saved: it moves neither `revision_no`
+    // nor `updated_at` and writes no Version, so a draft that is being saved against the current
+    // revision is not turned into a conflict by it, and "last edited" stays true. Its event only
+    // tells open pages to read it again (`docs::live`); search ignores it.
+    if let Some(full_width) = full_width {
+        let changed = sqlx::query(
+            "UPDATE penfii.doc_pages SET full_width = $2 WHERE id = $1 AND full_width IS DISTINCT FROM $2",
+        )
+        .bind(page_id)
+        .bind(full_width)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if changed > 0 {
+            events::emit(
+                &mut tx,
+                emit_doc(
+                    workspace,
+                    page_id,
+                    None,
+                    "doc.layout_changed",
+                    actor,
+                    json!({"fullWidth": full_width}),
+                ),
+            )
+            .await?;
+        }
     }
     if project_id.is_some() && !rights.manage {
         return Err(CoreError::forbidden(

@@ -23,9 +23,16 @@ pub fn registry_with_push(
     registry
         .pg
         .push(std::sync::Arc::new(crate::notify::WatchConsumer));
-    registry
-        .pg
-        .push(crate::notify::InboxConsumer::with_push(changes, push));
+    registry.pg.push(crate::notify::InboxConsumer::with_push(
+        changes.clone(),
+        push,
+    ));
+    // Open pages of a Doc read it again when it changes; without a broadcast there is nobody to tell.
+    if let Some(sender) = changes.clone() {
+        registry.external.push(std::sync::Arc::new(
+            crate::docs::live::DocLiveConsumer::new(sender),
+        ));
+    }
     if let Some(engine) = search {
         registry.external.push(crate::search::consumer(engine));
     }

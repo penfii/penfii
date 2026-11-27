@@ -28,6 +28,10 @@ pub enum ChangeNotice {
     /// Many Tickets of a Project changed at once (a Sprint's finished work was archived): the board
     /// of that Project looks again. It carries nobody's data, so it is checked like a Project change.
     Project { project_id: Uuid },
+    /// A Doc page changed in a way a reader of it sees (its saved content or title, its width, who may read it, its
+    /// Versions, or that it was deleted). It carries nothing of the page: the socket of an open page tells the client
+    /// to read it again, and the read is the permission check.
+    Doc { page_id: Uuid },
     Ticket {
         project_id: Uuid,
         change_seq: i64,

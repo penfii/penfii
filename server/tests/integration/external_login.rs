@@ -136,6 +136,15 @@ async fn setup(pool: PgPool) -> Env {
 
 /// `google_signup` is the operator's PENFII_AUTH_GOOGLE_SIGNUP.
 async fn setup_with(pool: PgPool, google_signup: bool) -> Env {
+    setup_limits(pool, google_signup, limits()).await
+}
+
+/// `setup_with` on a server with the operator limits the test chooses.
+async fn setup_limits(
+    pool: PgPool,
+    google_signup: bool,
+    server_limits: penfii_core::Limits,
+) -> Env {
     common::setup(&pool).await;
     crate::common::migrate(&pool).await;
 
@@ -204,7 +213,7 @@ async fn setup_with(pool: PgPool, google_signup: bool) -> Env {
     identity::sync_providers(&pool, &providers).await.unwrap();
     let app = penfii_http_api::router_from(penfii_http_api::RouterConfig {
         providers,
-        ..penfii_http_api::RouterConfig::new(pool.clone(), limits(), false)
+        ..penfii_http_api::RouterConfig::new(pool.clone(), server_limits, false)
     });
     Env { pool, app, fake }
 }
@@ -1990,4 +1999,130 @@ async fn a_provider_sign_in_is_not_asked_for_the_password_code_and_cannot_turn_i
     )
     .await;
     assert_eq!(r.status, StatusCode::NO_CONTENT, "{}", r.body);
+}
+
+/// FEA-182: the "keep me signed in" choice of an OAuth/OIDC sign-in is stored with the attempt the
+/// browser started, and only a sign-in (never an invitation, link or reauth) turns it into a long
+/// session; the callback's query cannot add it.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_provider_sign_in_keeps_the_choice_made_when_it_started(pool: PgPool) {
+    let env = setup(pool).await;
+    let alice = new_user(&env, "alice@penfii.test").await;
+    sqlx::query("UPDATE penfii.sessions SET last_reauth_at = now()")
+        .execute(&env.pool)
+        .await
+        .unwrap();
+    let (state, nonce, _) = begin(
+        &env,
+        "google",
+        "link",
+        Some(&alice),
+        json!({"keepSignedIn": true}),
+    )
+    .await;
+    google_token(&env, "k0", &nonce, "g-alice", "alice@penfii.test", true);
+    assert_eq!(
+        finish(&env, "google", "k0", &state, Some(&alice))
+            .await
+            .location
+            .as_deref(),
+        Some("/?auth=linked")
+    );
+    // A link attempt cannot carry the choice at all.
+    assert_eq!(
+        count(
+            &env,
+            "SELECT count(*) FROM penfii.auth_attempts WHERE keep_signed_in"
+        )
+        .await,
+        0
+    );
+
+    let sessions = |env: &Env| {
+        let pool = env.pool.clone();
+        async move {
+            sqlx::query_as::<_, (bool, Option<i32>, f64, f64)>(
+                "SELECT absolute_expires_at IS NOT NULL, idle_seconds,
+                        EXTRACT(EPOCH FROM (expires_at - now()))::float8,
+                        COALESCE(EXTRACT(EPOCH FROM (absolute_expires_at - now()))::float8, 0)
+                 FROM penfii.sessions WHERE auth_method = 'google' ORDER BY created_at DESC LIMIT 1",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+
+    // Chosen: a long session, and the cookie lives as long as the absolute lifetime.
+    let (state, nonce, _) =
+        begin(&env, "google", "login", None, json!({"keepSignedIn": true})).await;
+    assert_eq!(
+        count(
+            &env,
+            "SELECT count(*) FROM penfii.auth_attempts WHERE keep_signed_in"
+        )
+        .await,
+        1
+    );
+    google_token(&env, "k1", &nonce, "g-alice", "alice@penfii.test", true);
+    // A query parameter on the callback is not read.
+    let r = call(
+        &env.app,
+        "GET",
+        &format!("/v1/auth/google/callback?code=k1&state={state}&keepSignedIn=false"),
+        binding_of(&state).as_deref(),
+        None,
+    )
+    .await;
+    assert_eq!(r.location.as_deref(), Some("/"));
+    let set_cookie = r.header("set-cookie").unwrap();
+    assert!(set_cookie.contains("Max-Age=2592000"), "{set_cookie}");
+    let (long, idle, left, absolute) = sessions(&env).await;
+    assert!(long && idle == Some(604_800));
+    assert!((left - 604_800.0).abs() < 60.0, "{left}");
+    assert!((absolute - 2_592_000.0).abs() < 60.0, "{absolute}");
+
+    // Not chosen, or chosen only in the query of the start's body as something else: ordinary.
+    let (state, nonce, _) = begin(&env, "google", "login", None, json!({})).await;
+    google_token(&env, "k2", &nonce, "g-alice", "alice@penfii.test", true);
+    let r = finish(&env, "google", "k2", &state, None).await;
+    assert!(r.header("set-cookie").unwrap().contains("Max-Age=3600"));
+    let (long, idle, left, _) = sessions(&env).await;
+    assert!(!long && idle.is_none());
+    assert!((left - 3600.0).abs() < 60.0, "{left}");
+
+    // Accepting an invitation by provider is always an ordinary session, whatever the start said.
+    let providers = call(&env.app, "GET", "/v1/auth/providers", None, None).await;
+    assert_eq!(providers.body["longSession"]["enabled"], true);
+    assert_eq!(providers.body["longSession"]["maxAgeSeconds"], 2_592_000);
+    assert_eq!(providers.body["longSession"]["idleSeconds"], 604_800);
+}
+
+/// With the feature off a remembered choice does nothing: the sign-in is an ordinary session.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_provider_sign_in_is_ordinary_when_long_sessions_are_off(pool: PgPool) {
+    let mut off = limits();
+    off.long_session.enabled = false;
+    let env = setup_limits(pool, false, off).await;
+    let alice = new_user(&env, "alice@penfii.test").await;
+    let (state, nonce, _) = begin(&env, "google", "link", Some(&alice), json!({})).await;
+    google_token(&env, "o0", &nonce, "g-alice", "alice@penfii.test", true);
+    finish(&env, "google", "o0", &state, Some(&alice)).await;
+    let (state, nonce, _) =
+        begin(&env, "google", "login", None, json!({"keepSignedIn": true})).await;
+    // The attempt does not even record the choice that the server does not offer... it does record
+    // the ask, and the callback ignores it.
+    google_token(&env, "o1", &nonce, "g-alice", "alice@penfii.test", true);
+    let r = finish(&env, "google", "o1", &state, None).await;
+    assert!(r.header("set-cookie").unwrap().contains("Max-Age=3600"));
+    assert_eq!(
+        count(
+            &env,
+            "SELECT count(*) FROM penfii.sessions WHERE absolute_expires_at IS NOT NULL"
+        )
+        .await,
+        0
+    );
+    let providers = call(&env.app, "GET", "/v1/auth/providers", None, None).await;
+    assert_eq!(providers.body["longSession"]["enabled"], false);
 }

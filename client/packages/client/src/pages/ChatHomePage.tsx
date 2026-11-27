@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router'
 import { EmptyState } from '../design/ui'
+import { QueryError } from '../ui/QueryError'
 import { useI18n } from '../i18n/I18nProvider'
 import { queries } from '../queries'
 import { OpenCreate } from '../shell/WorkspaceShell'
@@ -29,7 +30,8 @@ export function ChatHomePage() {
         <h1>{t('nav.chat')}</h1>
         <p>{t('chat.landingBody')}</p>
       </header>
-      {channels.length === 0 && projectChannels.length === 0 && dms.length === 0 ? (
+      {/* Until the Space has loaded the lists are unknown, not empty: no "nothing yet" invitation then. */}
+      {space.isError ? <QueryError query={space} /> : !space.data ? <p className="hint" role="status">{t('loading')}</p> : channels.length === 0 && projectChannels.length === 0 && dms.length === 0 ? (
         <EmptyState title={t('chat.emptyTitle')} body={t('chat.emptyBody')}>
           {canCreateChannel(role) ? <OpenCreate kind="channel" label={t('chat.createChannel')} /> : null}
           <OpenCreate kind="dm" label={t('chat.startDm')} />

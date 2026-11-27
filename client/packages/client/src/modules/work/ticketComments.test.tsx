@@ -15,6 +15,7 @@ vi.mock('../../api', () => ({ api }))
 
 import { CommentComposer, CommentList } from './CommentsTab'
 import { renderWithProviders } from '../../test/renderWithProviders'
+import { replaceTextIn } from '../../test/richEditor'
 
 function CommentsTab({ ticketId, workspaceId }: { ticketId: string; workspaceId: string }) {
   return (
@@ -70,7 +71,7 @@ describe('Ticket comment edit and delete', () => {
     api.getTicketComments.mockResolvedValue([comment('c1', 'after', { canEdit: true, canDelete: true, editedAt: '2026-10-29T01:00:00Z' })])
     view()
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
-    fireEvent.change(screen.getByLabelText('Edit'), { target: { value: 'after' } })
+    replaceTextIn(screen.getByRole('textbox', { name: 'Edit' }), 'after')
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(api.editTicketComment).toHaveBeenCalledWith('t1', 'c1', text('after')))
     expect(await screen.findByText('after')).toBeTruthy()
@@ -95,8 +96,11 @@ describe('Ticket comment edit and delete', () => {
     api.editTicketComment.mockRejectedValue(new Error('403'))
     view()
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+    replaceTextIn(screen.getByRole('textbox', { name: 'Edit' }), 'changed')
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     expect(await screen.findByRole('alert')).toBeTruthy()
+    // The box and what was typed in it stay for another try.
+    expect(screen.getByRole('textbox', { name: 'Edit' }).textContent).toBe('changed')
   })
 })
 

@@ -43,6 +43,57 @@ person's own permission are checked on every call, listed or not.
 | `personal:read` / `personal:write` | Inbox, Later, favorites, drafts, subscriptions, notification settings, own profile |
 | `admin:read` | Audit log, webhook list, trash/archive/recovery lists |
 
+## Writing text: `{format, value}`
+
+The tools that write text take it in the field named for its meaning: `description` (tickets),
+`body` (messages, thread replies, ticket and Doc comments) and `content` (Docs). The text can be given as
+an object with exactly two keys:
+
+```json
+{"description": {"format": "markdown", "value": "## Goal\n- first\n- **second**"}}
+{"body": {"format": "plain", "value": "# kept literally"}}
+{"content": {"format": "richtext", "value": {"schema": "penfii.doc", "version": 1, "blocks": []}}}
+```
+
+| `format` | `value` | Use |
+|---|---|---|
+| `markdown` | string | Anything with formatting. Converted to the stored shape; this is what an AI client should write by default |
+| `plain` | string | Text kept as written: symbols and `#`, `*` or `-` stay literal. A blank line starts a new paragraph, single line breaks stay. A ticket description given as `plain` is stored as before (chat-style paragraphs) |
+| `richtext` | the JSON the field already took | Exact structure: mentions, Doc tables and files, a read-modify-write of what `doc_get` returned |
+
+The object is an input form only: nothing is stored with `format`, and reads (`ticket_get`, `doc_get`,
+`message_list`, ...) return the same canonical JSON as before. `format` is lower case; `format` and
+`value` are both required and `value=null` is an error (different from leaving the field out); an object
+that also has `type`, `schema`, `markdown` or any other key is refused, and so is a `richtext` value that is
+itself a `{format, value}` object. Everything else is as before: a bare string is plain text (never read as
+Markdown), the old JSON documents are accepted unchanged, an omitted or `null` field means what it meant
+(no description on `ticket_create`, keep it on `ticket_update`, a file-only message), and
+an edit replaces the whole text. An invalid object is refused before anything is written, so no content,
+revision, notification or history entry changes; the refused call is still in the MCP call log.
+`markdown` is not an argument of these tools (a call that only passes it is refused, not ignored), with one
+exception: `doc_create` keeps its top-level `markdown` string for older clients, which must not be
+combined with `content` or `templateId`. Prefer `content` with `format: markdown`.
+
+What Markdown becomes depends on where the text is stored. A **ticket description** is stored as a Doc, because that is what the web editor saves (and converts older descriptions to when it opens them), so it follows the Doc column; messages and comments are chat-style rich text.
+
+| Markdown | Rich text (messages, comments) | Doc (Docs and ticket descriptions) |
+|---|---|---|
+| Paragraphs, `# `..`###### ` | paragraphs, headings 1-6 | paragraphs, headings (4-6 become level 3) |
+| `**bold**`, `*italic*`, `~~strike~~`, `` `code` `` | bold, italic, strike, code marks | the same styles |
+| Bullet, numbered (with a start number) lists, nested | `bulletList` / `orderedList`, nested | list blocks, nested as children |
+| `- [ ]` / `- [x]` tasks | the text `[ ] ` / `[x] ` in the item (no checkbox node) | check list items |
+| `> quote`, fenced code with language | `blockquote`, `codeBlock` | `quote`, `codeBlock` |
+| `---` | the text `---` | divider |
+| `[text](https://...)` | link mark; only http(s) without credentials | link; http, https, mailto or a `/path` |
+| Other links (`javascript:` ...), images, raw HTML, tables | kept as the Markdown source text; nothing is executed, downloaded, attached or mentioned | the same (tables stay as text) |
+
+Content in code is never interpreted, and an `@name` is never turned into a mention: use `richtext`
+with the mention node for that. The same Markdown always converts to the same blocks (block ids follow from the text), so a retry with the same `idempotencyKey` is the same request. The size limits are the old ones: 20,000 bytes for text fields and
+200,000 characters for a Doc, and the converted result is checked by the same rules as before.
+`doc_save` replaces the whole page: with `markdown` or `plain`, tables, files and mentions the page had
+are not kept, so for a precise edit read the page with `doc_get`, change its JSON and send it back (bare
+or as `richtext`). An empty `plain` or `markdown` value on `doc_save` or `doc_create` is an explicit empty page.
+
 ## Risk classes and the Workspace policy
 
 The risk class describes what an action does, not who may run it. **Read** changes nothing (reading a
@@ -147,7 +198,7 @@ Tool names are `<area>_<action>`. Ids come from the tool named in the descriptio
 | `conversation_read_state` | `conversation:read` | read | This person's read position in a conversation (generation, readThroughSeq, manualUnreadFromSeq) |
 | `dm_create` | `conversation:write` | write | Open (or return) the direct message between exactly the people in userIds, who must include the connected person |
 | `message_delete` | `conversation:write` | write | Delete a message (the author, or a channel manager) |
-| `message_edit` | `conversation:write` | write | Replace the body of the connected person's own message |
+| `message_edit` | `conversation:write` | write | Replace the whole body of the connected person's own message (body as {"format":"markdown","value":"..."} when it has formatting) |
 | `message_history` | `conversation:read` | read | Read the earlier versions of one of the connected person's own messages (or of any message when they audit the channel) |
 | `message_list` | `conversation:read` | read | List a conversation's top-level messages, newest first (thread replies are in thread_messages_list) |
 | `message_react` | `conversation:write` | write | Add an emoji reaction as the connected person |
@@ -159,9 +210,9 @@ Tool names are `<area>_<action>`. Ids come from the tool named in the descriptio
 | `thread_read_state` | `conversation:read` | read | This person's read position in one thread (generation, readThroughSeq) |
 ### doc
 | Tool | Scope | Risk | What it does |
-| `doc_comment_create` | `doc:write` | write | Add a comment (text or rich-text JSON) to a Doc the person can read |
+| `doc_comment_create` | `doc:write` | write | Add a comment to a Doc the person can read (body as {"format":"markdown","value":"..."} when it has formatting) |
 | `doc_comment_delete` | `doc:write` | destructive | Delete a comment (the person's own, or any as the page's manager, as the web app allows) |
-| `doc_comment_edit` | `doc:write` | write | Replace the body of a comment the person wrote (comment id from doc_comment_list) |
+| `doc_comment_edit` | `doc:write` | write | Replace the whole body of a comment the person wrote (comment id from doc_comment_list); body as {"format":"markdown","value":"..."} when it has formatting |
 | `doc_comment_list` | `doc:read` | read | List the comments of a Doc, oldest first, with cursor paging (limit 1 to 50) |
 | `doc_create` | `doc:write` | write | Create a Doc page in a Workspace |
 | `doc_delete` | `doc:delete` | destructive | Delete a Doc and, in the same step, the pages below it that the person may manage (restricted pages they were never given move up and are not revealed) |
@@ -171,7 +222,7 @@ Tool names are `<area>_<action>`. Ids come from the tool named in the descriptio
 | `doc_participants` | `doc:read` | read | List the people with an explicit role (MANAGER, EDITOR, VIEWER) on a Doc |
 | `doc_references` | `doc:read` | read | List the Docs that reference this Doc (only sources the person can read), with cursor paging |
 | `doc_resolve_references` | `doc:read ticket:read` | read | Resolve Ticket/Doc/person ids to titles and places for the ones the person may see (what a chip in a page shows) |
-| `doc_save` | `doc:write` | write | Replace the title and the whole content of a Doc with the given draft if expectedRevision is current (read it with doc_get; change the JSON it returned and send it back) |
+| `doc_save` | `doc:write` | write | Replace the title and the whole content of a Doc with the given content if expectedRevision is current |
 | `doc_set_participants` | `doc:write` | write | Replace the participant list of a Doc (the whole list; read doc_participants first) |
 | `doc_set_visibility` | `doc:write` | write | Set a Doc's visibility to WORKSPACE, PROJECT (with scopeProjectId, optionally scopeTeamId) or RESTRICTED (only participants, see doc_set_participants) |
 | `doc_template_create` | `doc:write` | write | Save a Doc the person can read as a template with a name |
@@ -327,7 +378,7 @@ Tool names are `<area>_<action>`. Ids come from the tool named in the descriptio
 | `ticket_children_list` | `ticket:read` | read | List the child Tickets (Tasks of an Epic, Subtasks of a Task) the person can see, as compact items |
 | `ticket_comment` | `ticket:write` | write | Add a comment to a Ticket the person can read |
 | `ticket_comment_delete` | `ticket:write` | destructive | Delete a comment (the author, a Project admin or a Channel manager may) |
-| `ticket_comment_edit` | `ticket:write` | write | Replace the text of a comment the person wrote (or may moderate) on a Ticket they can edit |
+| `ticket_comment_edit` | `ticket:write` | write | Replace the whole text of a comment the person wrote (or may moderate) on a Ticket they can edit; pass the body as {"format":"markdown","value":"..."} when it has formatting |
 | `ticket_comments_list` | `ticket:read` | read | Read the comments on one Ticket, oldest first |
 | `ticket_create` | `ticket:write` | write | Create a Ticket in a Project the person can edit, with the same fields as the web app (labels, type, estimate, schedule, parent, channel, already-uploaded files) |
 | `ticket_get` | `ticket:read` | read | Read one Ticket: title, description, status (statusId; names are in project_workflow), assignee, schedule, relations and the current revisionNo |

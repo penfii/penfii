@@ -36,6 +36,11 @@ if (typeof Range.prototype.getBoundingClientRect !== 'function') {
   Object.defineProperty(Range.prototype, 'getBoundingClientRect', { value: () => new DOMRect(0, 0, 0, 0), configurable: true })
 }
 
+// Nor does it know what is at a point on the screen: ProseMirror asks when it scrolls the caret into view.
+if (typeof document.elementFromPoint !== 'function') {
+  Object.defineProperty(document, 'elementFromPoint', { value: () => null, configurable: true })
+}
+
 // The tests were written for a Korean browser; the locale tests below set their own.
 Object.defineProperty(navigator, 'language', { value: 'ko-KR', configurable: true })
 Object.defineProperty(navigator, 'languages', { value: ['ko-KR', 'ko'], configurable: true })

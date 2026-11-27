@@ -37,6 +37,10 @@ pub struct SessionInfo {
     pub last_seen_at: Option<DateTime<Utc>>,
     pub last_reauth_at: Option<DateTime<Utc>>,
     pub expires_at: DateTime<Utc>,
+    /// A session the person chose to keep (see `LongSession`): `expires_at` is then the earlier of
+    /// the inactivity end and `absolute_expires_at`.
+    pub long_lived: bool,
+    pub absolute_expires_at: Option<DateTime<Utc>>,
 }
 
 /// `PENFII_REAUTH_WINDOW_SECONDS`, default 600.
@@ -48,8 +52,97 @@ pub fn reauth_window_seconds() -> i64 {
         .unwrap_or(DEFAULT_REAUTH_WINDOW_SECONDS)
 }
 
+/// Records activity on a session: `last_seen_at`, and for a long session its inactivity expiry,
+/// moved to `now + idle_seconds` but never past `absolute_expires_at`, which activity cannot move.
+/// An ordinary session keeps its fixed `expires_at`. Only a live session is touched, so an expired
+/// or revoked one is never brought back. Requests an authenticated person makes are activity; a
+/// socket's periodic check of its session is not (see `identity::session_is_live`).
+pub(crate) async fn touch_session(pool: &PgPool, session_id: Uuid) -> Result<(), CoreError> {
+    sqlx::query(
+        "UPDATE penfii.sessions
+         SET last_seen_at = now(),
+             expires_at = CASE WHEN absolute_expires_at IS NULL THEN expires_at
+                               ELSE LEAST(absolute_expires_at, now() + make_interval(secs => idle_seconds)) END
+         WHERE id = $1 AND revoked_at IS NULL AND expires_at > now()",
+    )
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Applies the operator's current long-session settings to the long sessions that are still live,
+/// once at start (the settings are environment variables, so they change only with a restart):
+///
+/// - the feature is off: every live long session becomes an ordinary one that ends at the ordinary
+///   lifetime counted from when it was issued (or earlier, as it was); nothing is signed out that
+///   an ordinary session would still hold, and nothing stays long;
+/// - a shorter absolute lifetime or inactivity window: the session is cut to the new bounds
+///   counted from when it was issued and last seen (a session already past them ends);
+/// - a longer one: nothing changes for the sessions that exist; they keep the end they were issued
+///   with (the absolute end is a promise made at sign-in), new sessions get the new values.
+///
+/// Settings can therefore only shorten or end a session that exists, never extend it. Returns how
+/// many sessions it changed.
+pub async fn apply_long_session_policy(
+    pool: &PgPool,
+    limits: &crate::Limits,
+) -> Result<u64, CoreError> {
+    let long = limits.long_session;
+    let changed = if !long.enabled {
+        let Some(ttl) = limits.session_ttl_seconds else {
+            return Ok(0);
+        };
+        sqlx::query(
+            "UPDATE penfii.sessions
+             SET expires_at = LEAST(expires_at, created_at + make_interval(secs => $1)),
+                 absolute_expires_at = NULL, idle_seconds = NULL
+             WHERE absolute_expires_at IS NOT NULL AND revoked_at IS NULL AND expires_at > now()",
+        )
+        .bind(ttl as f64)
+        .execute(pool)
+        .await?
+        .rows_affected()
+    } else {
+        sqlx::query(
+            "UPDATE penfii.sessions
+             SET absolute_expires_at = LEAST(absolute_expires_at, created_at + make_interval(secs => $1)),
+                 idle_seconds = LEAST(idle_seconds, $2::int),
+                 expires_at = LEAST(expires_at,
+                                    created_at + make_interval(secs => $1),
+                                    COALESCE(last_seen_at, created_at)
+                                        + make_interval(secs => LEAST(idle_seconds, $2::int)))
+             WHERE absolute_expires_at IS NOT NULL AND revoked_at IS NULL AND expires_at > now()
+               AND (absolute_expires_at > created_at + make_interval(secs => $1)
+                    OR idle_seconds > $2::int)",
+        )
+        .bind(long.max_age_seconds as f64)
+        .bind(long.effective_idle_seconds() as i32)
+        .execute(pool)
+        .await?
+        .rows_affected()
+    };
+    Ok(changed)
+}
+
 /// Resolves a session token. Also keeps `last_seen_at` roughly current (at most once a minute).
 pub async fn authenticate_session(pool: &PgPool, token: &str) -> Result<AuthSession, CoreError> {
+    authenticate_session_with(pool, token, true).await
+}
+
+/// [`authenticate_session`] for background traffic: nothing is recorded, so it cannot keep a long session alive.
+pub async fn authenticate_session_background(
+    pool: &PgPool,
+    token: &str,
+) -> Result<AuthSession, CoreError> {
+    authenticate_session_with(pool, token, false).await
+}
+
+async fn authenticate_session_with(
+    pool: &PgPool,
+    token: &str,
+    activity: bool,
+) -> Result<AuthSession, CoreError> {
     let row = sqlx::query(
         "SELECT s.id AS session_id, s.auth_method, s.authenticated_at, s.last_reauth_at,
                 EXTRACT(EPOCH FROM (now() - s.last_reauth_at))::float8 AS reauth_age_seconds,
@@ -71,13 +164,8 @@ pub async fn authenticate_session(pool: &PgPool, token: &str) -> Result<AuthSess
     .ok_or(CoreError::Unauthenticated)?;
     let id: Uuid = row.try_get("session_id")?;
     let seen_age: Option<f64> = row.try_get("seen_age_seconds")?;
-    if seen_age.is_none_or(|age| age > 60.0) {
-        sqlx::query!(
-            "UPDATE penfii.sessions SET last_seen_at = now() WHERE id = $1",
-            id
-        )
-        .execute(pool)
-        .await?;
+    if activity && seen_age.is_none_or(|age| age > 60.0) {
+        touch_session(pool, id).await?;
     }
     let user = user_from_row(UserRow {
         id: row.try_get("id")?,
@@ -225,7 +313,8 @@ pub async fn list_sessions(
     current: Uuid,
 ) -> Result<Vec<SessionInfo>, CoreError> {
     let rows = sqlx::query(
-        "SELECT id, auth_method, device_label, created_at, last_seen_at, last_reauth_at, expires_at
+        "SELECT id, auth_method, device_label, created_at, last_seen_at, last_reauth_at, expires_at,
+                absolute_expires_at
          FROM penfii.sessions
          WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now()
          ORDER BY created_at DESC, id",
@@ -245,6 +334,10 @@ pub async fn list_sessions(
                 last_seen_at: row.try_get("last_seen_at")?,
                 last_reauth_at: row.try_get("last_reauth_at")?,
                 expires_at: row.try_get("expires_at")?,
+                absolute_expires_at: row.try_get("absolute_expires_at")?,
+                long_lived: row
+                    .try_get::<Option<DateTime<Utc>>, _>("absolute_expires_at")?
+                    .is_some(),
             })
         })
         .collect::<Result<_, sqlx::Error>>()

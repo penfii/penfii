@@ -91,6 +91,8 @@
 
 /* Work toolbar: one row that scrolls sideways instead of five wrapped rows. */
 .mobile-shell .view-bar, .mobile-shell .view-bar > * { min-width: 0; max-width: 100%; }
+/* FEA-187 wraps tabs, layouts and controls of a wide screen in one scrolling row; a phone keeps its own stacked rows. */
+.mobile-shell .view-bar-row { display: contents; }
 .mobile-shell .view-bar { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2) var(--space-4); }
 .mobile-shell .view-tabs, .mobile-shell .view-controls { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; align-items: center; }
 .mobile-shell .view-tabs::-webkit-scrollbar, .mobile-shell .view-controls::-webkit-scrollbar { display: none; }
@@ -196,6 +198,8 @@ html.m-scroll-locked .mobile-main :is(.page-scroll, .work-scroll, .workspace-nav
 .mobile-shell .row-menu .menu-panel.left { left: auto; right: 0; max-width: calc(100vw - 2 * var(--space-4)); }
 /* The conversation's title is already in the top bar: its own header keeps what is not (where it lives, who is in it). */
 .mobile-shell .conversation-frame > .context-bar h1 { display: none; }
+/* A DM has only its name there, which the phone's top bar already shows: no empty band under it. */
+.mobile-shell .conversation-frame > .context-bar:not(:has(.context-actions, p)) { display: none; }
 .mobile-shell .conversation-frame > .context-bar { flex-wrap: wrap; gap: var(--space-2); padding-block: var(--space-2); }
 .mobile-shell .conversation-frame > .context-bar .context-actions { flex-wrap: wrap; }
 /* Touch targets: small controls that sit next to each other or in lists are at least ~40px to hit. */

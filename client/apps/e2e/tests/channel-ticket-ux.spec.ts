@@ -173,7 +173,8 @@ test.describe('FEA-104–107 channel and ticket editing', () => {
     await expect(read).toHaveAttribute('aria-expanded', 'false')
     await read.click()
     await expect(read).toHaveAttribute('aria-expanded', 'true')
-    await expect(panel.locator('[contenteditable="true"]')).toHaveCount(0)
+    // The description's editor; the comment box under the panel is an editor too.
+    await expect(panel.locator('.ticket-description-blocknote [contenteditable="true"]')).toHaveCount(0)
 
     await panel.getByRole('button', { name: 'Edit description' }).click()
     const editor = panel.locator('.ticket-description-blocknote [contenteditable="true"]').first()

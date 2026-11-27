@@ -208,7 +208,10 @@
   background: transparent;
 }
 .resize-handle:hover::after,
+.resize-handle:focus-visible::after,
 body.is-resizing .resize-handle::after { background: var(--accent); }
+.resize-handle:focus-visible { outline: none; }
+.resize-handle:focus-visible::after { width: 3px; box-shadow: 0 0 0 2px var(--accent-soft); }
 body.is-resizing, body.is-resizing * { cursor: col-resize; user-select: none; }
 
 .workspace-nav li { display: flex; align-items: center; gap: var(--space-1); }
@@ -520,11 +523,14 @@ button.tree-link { border: 0; background: transparent; }
   .crumbs { display: none; }
 }
 
-/* OpenPencil 9.1: a side pane that would push the main column under 720px puts the context nav over the page instead. */
+/*
+ * OpenPencil 9.1: a side pane that would push the main column under 720px puts the context nav over the page instead.
+ * Its "Show sidebar" tab keeps a strip of its own beside the rail, so the page (also scrolled sideways) never runs under it.
+ */
 @media (min-width: 961px) {
-  .product-shell.nav-collapsed { grid-template-columns: var(--rail) minmax(0, 1fr); }
-  .product-shell.nav-collapsed.has-detail { grid-template-columns: var(--rail) minmax(0, 1fr) 320px; }
-  .product-shell.nav-collapsed.has-detail.detail-ticket { grid-template-columns: var(--rail) minmax(0, 1fr) var(--ticket-width, 480px); }
+  .product-shell.nav-collapsed { grid-template-columns: var(--rail) var(--nav-edge) minmax(0, 1fr); }
+  .product-shell.nav-collapsed.has-detail { grid-template-columns: var(--rail) var(--nav-edge) minmax(0, 1fr) 320px; }
+  .product-shell.nav-collapsed.has-detail.detail-ticket { grid-template-columns: var(--rail) var(--nav-edge) minmax(0, 1fr) var(--ticket-width, 480px); }
   .product-shell.nav-collapsed .workspace-nav {
     position: fixed;
     z-index: 36;
@@ -539,14 +545,14 @@ button.tree-link { border: 0; background: transparent; }
   .product-shell.nav-collapsed.nav-revealed .workspace-nav { visibility: visible; pointer-events: auto; }
 }
 @media (min-width: 961px) and (max-width: 1180px) {
-  .product-shell.nav-collapsed.has-detail.detail-ticket { grid-template-columns: var(--rail) minmax(0, 1fr); }
+  .product-shell.nav-collapsed.has-detail.detail-ticket { grid-template-columns: var(--rail) var(--nav-edge) minmax(0, 1fr); }
 }
+/* In the strip the grid gives it (the nav itself is fixed over the page, so the tab takes the column after the rail). */
 .nav-edge {
-  position: fixed;
-  z-index: 34;
-  left: var(--rail);
-  top: 50%;
-  transform: translateY(-50%);
+  align-self: center;
+  justify-self: start;
+  box-sizing: border-box;
+  width: var(--nav-edge);
   writing-mode: vertical-rl;
   text-orientation: sideways;
   white-space: nowrap;
@@ -555,7 +561,7 @@ button.tree-link { border: 0; background: transparent; }
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   background: var(--bg-elevated);
   color: var(--text-secondary);
-  padding: var(--space-2) .15rem;
+  padding: var(--space-2) 0;
   cursor: pointer;
   font: inherit;
   font-size: .75rem;
@@ -676,6 +682,20 @@ button.tree-link { border: 0; background: transparent; }
 .project-page > .project-header { padding: 0; gap: 0; background: var(--bg-elevated); border-bottom: 1px solid var(--border); align-items: stretch; flex-direction: column; }
 .project-title-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); min-height: 72px; padding: 0 var(--space-6); flex-wrap: wrap; }
 .project-title-left, .project-title-right { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+/* FEA-185: the name is one line. It gets the room the actions leave and ends in an ellipsis only when there is none; the
+   title row never wraps, so the header keeps its height. A percentage max-width on a box inside a flex item sized by its
+   content (the old `h1 > .pop` rule) made the name wrap or cut early; the boxes shrink as flex items instead. */
+.project-title-row { flex-wrap: nowrap; }
+.project-title-left { flex: 0 1 auto; min-width: min(100%, 8rem); }
+.project-title-right { flex: none; }
+.project-title-left h1 { flex: 0 1 auto; min-width: 0; flex-wrap: nowrap; }
+.project-title-name { position: relative; display: flex; flex: 0 1 auto; min-width: 0; }
+.project-title-name > .pop { display: flex; flex: 0 1 auto; min-width: 0; max-width: none; }
+.project-title-name .pop-label { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-title-name .project-switch-trigger { display: inline-flex; align-items: center; min-width: 0; max-width: none; white-space: nowrap; overflow: hidden; text-align: start; }
+.project-title-name .project-switch-caret { flex: none; }
+.project-title-name[data-full]:is(:hover, :focus-within)::after { content: attr(data-full); position: absolute; top: calc(100% + 4px); left: 0; z-index: 40; width: max-content; max-width: min(32rem, 90vw); padding: var(--space-2) var(--space-3); border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--bg-elevated); box-shadow: var(--shadow-md); color: var(--text); font-size: 0.875rem; font-weight: 500; letter-spacing: 0; white-space: normal; overflow-wrap: anywhere; pointer-events: none; }
+.project-title-name:focus-visible { outline: none; box-shadow: var(--focus); border-radius: var(--radius-md); }
 .project-title-right { gap: 14px; }
 .project-header h1 { font-size: 1.5rem; }
 .project-header .project-tabs { margin: 0; padding: 0 var(--space-6); min-height: 50px; align-items: flex-end; }

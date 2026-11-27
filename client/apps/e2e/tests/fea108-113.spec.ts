@@ -146,7 +146,7 @@ test.describe('FEA-112: the document delete question', () => {
 })
 
 test.describe('FEA-113: chat reading width', () => {
-  test('on a 2560px window the messages and the composer share one centred block of at most 800px, and the typed text starts where the message text starts', async ({ page, request }) => {
+  test('on a 2560px window, with no thread open, the messages and the composer share one centred block that keeps 32px clear on each side with no fixed cap, and the typed text starts where the message text starts', async ({ page, request }) => {
     const api = await apiAs(request, accountA.email)
     const workspaceId = await api.workspaceId()
     const channel = await api.createChannel(workspaceId, `qa-wide-${randomUUID().slice(0, 5)}`)
@@ -169,15 +169,16 @@ test.describe('FEA-113: chat reading width', () => {
     const b = await box('.scroller > div')
     const k = await box('.composer')
     const geometry = {
-      columnMid: c.x + c.width / 2, blockMid: b.x + b.width / 2, blockWidth: b.width, composerLeft: k.x, composerRight: k.x + k.width, blockLeft: b.x, blockRight: b.x + b.width, composerWidth: k.width,
+      columnWidth: c.width, columnMid: c.x + c.width / 2, blockMid: b.x + b.width / 2, blockWidth: b.width, composerLeft: k.x, composerRight: k.x + k.width, blockLeft: b.x, blockRight: b.x + b.width, composerWidth: k.width,
       hscroll: await page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
     }
-    expect(geometry.blockWidth).toBeLessThanOrEqual(800)
+    // The block is the column less 32px on each side, with no fixed cap (it was at most 1120px).
+    expect(Math.abs(geometry.blockWidth - (geometry.columnWidth - 64))).toBeLessThan(2)
+    expect(geometry.blockWidth).toBeGreaterThan(2000)
     expect(Math.abs(geometry.blockMid - geometry.columnMid)).toBeLessThan(2)
     // The composer sits inside the block, never wider than it.
     expect(geometry.composerLeft).toBeGreaterThanOrEqual(geometry.blockLeft)
     expect(geometry.composerRight).toBeLessThanOrEqual(geometry.blockRight)
-    expect(geometry.composerWidth).toBeLessThanOrEqual(800)
     // The letters, not the boxes: the first character of the message and the first typed character share a left edge.
     await editor.click()
     await page.keyboard.type('X')
@@ -195,14 +196,56 @@ test.describe('FEA-113: chat reading width', () => {
     })
     expect(Math.abs(starts.body - starts.typed)).toBeLessThan(1)
     expect(geometry.hscroll).toBe(false)
-    // A narrower window changes nothing about the block: it fills the column as before.
+    // A narrower window keeps the same rule: the block is the column less 32px on each side.
     await page.setViewportSize({ width: 1024, height: 800 })
     const narrow = await page.evaluate(() => {
       const column = document.querySelector('.conversation > .column:not(.thread-column)') as HTMLElement
       const block = column.querySelector('.scroller > div') as HTMLElement
       return { column: column.getBoundingClientRect().width, block: block.getBoundingClientRect().width }
     })
-    expect(Math.abs(narrow.column - narrow.block)).toBeLessThan(2)
+    expect(Math.abs(narrow.column - 64 - narrow.block)).toBeLessThan(2)
+  })
+})
+
+test.describe('Chat width beside the thread', () => {
+  test('the block keeps 32px clear on each side of the main column whether a thread is open or not, with no fixed cap', async ({ page, request }) => {
+    const api = await apiAs(request, accountA.email)
+    const workspaceId = await api.workspaceId()
+    const channel = await api.createChannel(workspaceId, `qa-thread-width-${randomUUID().slice(0, 5)}`)
+    const body = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Width follows the thread. '.repeat(30) }] }] }
+    const sent = await request.post(`/v1/conversations/${channel.conversationId}/messages`, {
+      headers: { 'x-penfii-client': '1', 'idempotency-key': randomUUID() },
+      data: { bodySchemaVersion: 1, body, threadRootId: null, replyToId: null },
+    })
+    expect(sent.status()).toBe(201)
+    await page.setViewportSize({ width: 1920, height: 900 })
+    await logIn(page, accountA.email)
+    await page.goto(`/w/${workspaceId}/c/${channel.conversationId}`)
+    const block = () => page.evaluate(() => {
+      const column = document.querySelector('.conversation > .column:not(.thread-column)') as HTMLElement
+      const first = column.querySelector('.scroller > div') as HTMLElement
+      const composer = column.querySelector('.composer') as HTMLElement
+      const c = column.getBoundingClientRect()
+      const b = first.getBoundingClientRect()
+      const k = composer.getBoundingClientRect()
+      return { block: Math.round(b.width), column: Math.round(c.width), composerInside: k.left >= b.left - 1 && k.right <= b.right + 1, centred: Math.abs(b.left + b.width / 2 - (c.left + c.width / 2)) < 2, hscroll: document.documentElement.scrollWidth > innerWidth }
+    })
+    await expect(page.locator('.message').last()).toBeVisible()
+    const closed = await block()
+    expect(closed.block).toBe(closed.column - 64)
+    expect(closed.block).toBeGreaterThan(1120)
+    expect(closed.centred && closed.composerInside && !closed.hscroll).toBe(true)
+    await page.locator('.message').last().hover()
+    await page.locator('.message').last().getByRole('link', { name: 'Thread' }).click()
+    await expect(page.locator('.thread-column')).toBeVisible()
+    await expect.poll(async () => { const now = await block(); return now.column < closed.column && now.block === now.column - 64 }).toBe(true)
+    const open = await block()
+    // 1920 with the default 420px thread: the main column is 1176 and the block 1112 (it was 800).
+    expect(open.block).toBeGreaterThan(800)
+    expect(open.centred && open.composerInside && !open.hscroll).toBe(true)
+    await page.goto(`/w/${workspaceId}/c/${channel.conversationId}`)
+    await expect(page.locator('.message').last()).toBeVisible()
+    await expect.poll(async () => (await block()).block).toBe(closed.block)
   })
 })
 

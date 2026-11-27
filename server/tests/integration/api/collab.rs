@@ -1311,3 +1311,61 @@ async fn t43_a_file_in_a_doc_is_readable_by_that_docs_readers_and_only_while_it_
     );
     server.stop().await;
 }
+
+/// FEA-182: opening the co-editing socket, its session checks, the sync when it opens and cursor (awareness) messages
+/// are the editor's own traffic and do not keep a long session alive; a change to the document is the person working.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn only_a_change_to_the_document_is_activity_on_the_co_editing_socket(pool: PgPool) {
+    let world = &World::new(pool).await;
+    let ws = workspace(world, &format!("p63-collab-idle-{}", Uuid::new_v4())).await;
+    let (alice_id, alice) = member(world, ws, "alice").await;
+    let page = make_doc(world, &alice, ws, "Idle", json!({})).await;
+    let id = page["id"].as_str().unwrap().to_owned();
+    // A long ("keep me signed in") session last used 3 days ago, which ends in a day without activity.
+    let age = || async {
+        sqlx::query(
+            "UPDATE penfii.sessions SET absolute_expires_at = now() + interval '20 days', idle_seconds = 604800,
+                    last_seen_at = now() - interval '3 days', expires_at = now() + interval '1 day'
+             WHERE user_id = $1",
+        )
+        .bind(alice_id)
+        .execute(&world.pool)
+        .await
+        .unwrap();
+    };
+    let ends_in = || async {
+        sqlx::query_scalar::<_, f64>(
+            "SELECT EXTRACT(EPOCH FROM (max(expires_at) - now()))::float8 FROM penfii.sessions WHERE user_id = $1",
+        )
+        .bind(alice_id)
+        .fetch_one(&world.pool)
+        .await
+        .unwrap()
+    };
+    age().await;
+    let server = CollabServer::start(world, collab_config(), lock_key(), true).await;
+
+    // Opening it and the sync that follows (step 1 and 2), then cursors: nothing moves.
+    let mut a = Editor::open(&server, &alice, &id, None).await.unwrap();
+    a.send_bin(awareness_frame(vec![(4242, 1, json!({"cursor": 1}))]))
+        .await;
+    a.pump(300).await;
+    assert!(a.closed.is_none());
+    let left = ends_in().await;
+    assert!(
+        (left - 86_400.0).abs() < 120.0,
+        "the socket's own traffic is not activity: {left}"
+    );
+
+    // A change to the document is: the inactivity end moves to 7 days from now.
+    a.type_in(0, "typed by alice").await;
+    a.pump(300).await;
+    assert!(a.closed.is_none());
+    let left = ends_in().await;
+    assert!(
+        (left - 604_800.0).abs() < 120.0,
+        "an edit is activity: {left}"
+    );
+    drop(a);
+    server.stop().await;
+}

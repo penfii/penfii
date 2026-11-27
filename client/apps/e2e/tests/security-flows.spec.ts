@@ -65,7 +65,9 @@ test.describe('two-step verification (FEA-150)', () => {
     await page.goto('/account')
     await page.getByRole('button', { name: 'Set up' }).click()
     await confirmPasswordIfAsked(page)
-    if (await page.getByRole('button', { name: 'Set up' }).isVisible().catch(() => false)) await page.getByRole('button', { name: 'Set up' }).click()
+    // After the confirmation the setup may already have started (the button is gone then). A click that finds no
+    // button must not wait out the whole test: what counts is the QR code that is asserted below.
+    await page.getByRole('button', { name: 'Set up' }).click({ timeout: 3000 }).catch(() => undefined)
 
     // The QR code is drawn in the browser; the key is shown for typing too.
     await expect(page.getByRole('img', { name: 'QR code for your authenticator app' })).toBeVisible()

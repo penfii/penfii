@@ -2,7 +2,7 @@ import { Route, RouterProvider, Routes, createBrowserRouter } from 'react-router
 import { registerServiceWorker } from '../modules/push/registerServiceWorker'
 import { QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query'
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, type ComponentType, type ReactNode } from 'react'
-import { setUnauthorizedHandler } from '@penfii/api-client'
+import { setUnauthorizedHandler, watchUserInput } from '@penfii/api-client'
 import { useLocation, useNavigate } from 'react-router'
 import { I18nProvider, useI18n } from '../i18n/I18nProvider'
 import { LoginPage } from '../pages/LoginPage'
@@ -15,6 +15,7 @@ import { NoticeHost } from '../design/notices'
 import { RequireAuth } from './RequireAuth'
 import { rememberReturn } from './returnTo'
 import { adoptUser, endUserSession } from './userBoundary'
+import { confirmProviderLogin } from '../modules/identity/confirmLogin'
 import { queries } from '../queries'
 import { MediaViewerHost } from '../modules/files/mediaViewer'
 import { applyTheme, readTheme } from '../design/theme'
@@ -67,8 +68,12 @@ function AuthBridge() {
   // Read only: whoever the session probe says is signed in. A different person than before drops the earlier person's saved state.
   const me = useQuery({ ...queries.me(), enabled: false })
   const userId = me.data?.id
+  // Input on this page tells the API client when its requests are a person's and when they are the page's own (see `watchUserInput`).
+  useEffect(() => watchUserInput(window), [])
   useEffect(() => {
-    if (userId) adoptUser(userId)
+    if (!userId) return
+    adoptUser(userId)
+    void confirmProviderLogin()
   }, [userId])
   useEffect(() => {
     setUnauthorizedHandler(() => {

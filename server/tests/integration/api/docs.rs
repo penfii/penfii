@@ -1337,3 +1337,151 @@ async fn a_file_on_a_doc_comment_is_visible_to_the_readers_of_the_page_only(pool
         assert!(!visible(who).await.contains(&open_file));
     }
 }
+
+/// FEA-178: the page's layout (full width) is a setting of the page: off for old and new pages, the same for
+/// every reader, changeable only with the edit right, and apart from the content, the revision and the Versions.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_doc_can_be_shown_at_full_width_without_touching_its_content_or_revision(pool: PgPool) {
+    let world = &World::new(pool).await;
+    let ws = workspace(world, &format!("wiki-wide-{}", Uuid::new_v4())).await;
+    let owner = world.owner_cookie.clone();
+    let (viewer_id, viewer) = member(world, ws, "vera").await;
+    let (_, editor) = member(world, ws, "eddy").await;
+    let page = make_doc(
+        world,
+        &owner,
+        ws,
+        "Wide",
+        json!({"visibility": "RESTRICTED", "participants": [{"userId": viewer_id, "role": "VIEWER"}]}),
+    )
+    .await;
+    let id = page["id"].as_str().unwrap().to_owned();
+    let other = make_doc(world, &owner, ws, "Other", json!({})).await;
+    let other_id = other["id"].as_str().unwrap().to_owned();
+    // New pages start with it off.
+    assert_eq!(page["fullWidth"], false);
+    assert_eq!(other["fullWidth"], false);
+    let before = page["updatedAt"].clone();
+
+    // The manager turns it on; the answer and every later read say so, whoever reads.
+    let (s, v) = api(
+        world,
+        "PATCH",
+        &owner,
+        &format!("/v1/docs/{id}"),
+        Some(json!({"fullWidth": true})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["fullWidth"], true);
+    assert_eq!(
+        v["revisionNo"], page["revisionNo"],
+        "the layout is not part of the revision"
+    );
+    assert_eq!(v["content"], page["content"]);
+    assert_eq!(v["updatedAt"], before, "and not an edit of the page");
+    let (_, read) = api(world, "GET", &viewer, &format!("/v1/docs/{id}"), None).await;
+    assert_eq!(read["fullWidth"], true);
+    // Other pages are independent.
+    let (_, read) = api(world, "GET", &owner, &format!("/v1/docs/{other_id}"), None).await;
+    assert_eq!(read["fullWidth"], false);
+
+    // Nobody without the edit right can change it, directly or with another change; nothing moves.
+    for body in [
+        json!({"fullWidth": false}),
+        json!({"fullWidth": false, "title": "x"}),
+    ] {
+        let (s, v) = api(
+            world,
+            "PATCH",
+            &viewer,
+            &format!("/v1/docs/{id}"),
+            Some(body),
+        )
+        .await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    }
+    // Someone who cannot read the page learns nothing.
+    let (s, _) = api(
+        world,
+        "PATCH",
+        &editor,
+        &format!("/v1/docs/{id}"),
+        Some(json!({"fullWidth": false})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    // A value of the wrong type or another unknown field is refused.
+    for body in [
+        json!({"fullWidth": "yes"}),
+        json!({"fullWidth": true, "layout": 1}),
+    ] {
+        let (s, _) = api(
+            world,
+            "PATCH",
+            &owner,
+            &format!("/v1/docs/{id}"),
+            Some(body),
+        )
+        .await;
+        assert!(s.is_client_error(), "{s}");
+    }
+    let (_, read) = api(world, "GET", &owner, &format!("/v1/docs/{id}"), None).await;
+    assert_eq!(read["fullWidth"], true);
+
+    // A draft that started before the change still saves against the revision it started from; the save keeps the layout.
+    let (s, saved) = save_doc(world, &owner, &id, 1, "Wide", "draft text").await;
+    assert_eq!(s, StatusCode::OK, "{saved}");
+    assert_eq!(saved["fullWidth"], true);
+    assert_eq!(first_text(&saved["content"]), "draft text");
+    // Turning it off again changes no revision either, and the saved text is still there.
+    let (_, off) = api(
+        world,
+        "PATCH",
+        &owner,
+        &format!("/v1/docs/{id}"),
+        Some(json!({"fullWidth": false})),
+    )
+    .await;
+    assert_eq!(off["fullWidth"], false);
+    assert_eq!(off["revisionNo"], saved["revisionNo"]);
+
+    // Versions: neither creating nor restoring one changes the layout, and the layout makes no Version.
+    api(
+        world,
+        "PATCH",
+        &owner,
+        &format!("/v1/docs/{id}"),
+        Some(json!({"fullWidth": true})),
+    )
+    .await;
+    let (s, _) = api(
+        world,
+        "POST",
+        &owner,
+        &format!("/v1/docs/{id}/versions"),
+        Some(json!({"expectedRevisionNo": saved["revisionNo"]})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED);
+    let versions: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM penfii.doc_versions WHERE page_id=$1")
+            .bind(Uuid::parse_str(&id).unwrap())
+            .fetch_one(&world.pool)
+            .await
+            .unwrap();
+    assert_eq!(versions, 1);
+    let (_, read) = api(world, "GET", &owner, &format!("/v1/docs/{id}"), None).await;
+    assert_eq!(read["fullWidth"], true);
+    // An existing page from before the column is a page with it off: the column default is the old layout.
+    sqlx::query("ALTER TABLE penfii.doc_pages ALTER COLUMN full_width SET DEFAULT false")
+        .execute(&world.pool)
+        .await
+        .unwrap();
+    let default: bool = sqlx::query_scalar("SELECT full_width FROM penfii.doc_pages WHERE id=$1")
+        .bind(Uuid::parse_str(&other_id).unwrap())
+        .fetch_one(&world.pool)
+        .await
+        .unwrap();
+    assert!(!default);
+}

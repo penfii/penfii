@@ -10,6 +10,8 @@ import { useSession } from '../modules/identity'
 import { queryKeys } from '../queryKeys'
 import { queries } from '../queries'
 import { NotFoundState } from '../ui/NotFoundState'
+import { QueryError } from '../ui/QueryError'
+import { ConversationUnavailable } from '../modules/conversations/ConversationUnavailable'
 import { ConversationPane } from './ConversationPane'
 import { MemberStack } from '../modules/people/MemberStack'
 import { channelScopeLabel, visibilityLabel } from '../modules/spaces/visibilityLabel'
@@ -42,14 +44,39 @@ export function ConversationFrame() {
   const channelMembers = useQuery({ ...queries.channelMembers(privateChannelId ?? ''), enabled: Boolean(privateChannelId) })
   const members = privateChannelId ? channelMembers.data : projectMembers.data
 
-  if (!workspaceId || !conversationId || !session.data) return <NotFoundState />
+  // A conversation missing from the list is called unavailable only after the list was read again for it: a list read before
+  // the person was put into the channel (or before a conversation was made) must not decide.
+  const dmListed = space.data?.dms.some((item) => item.conversationId === conversationId)
+  const missing = space.isSuccess && !listed && !dmListed
+  const [confirmedMissing, setConfirmedMissing] = useState<string | null>(null)
+  useEffect(() => {
+    if (!missing || !workspaceId || !conversationId || confirmedMissing === conversationId) return
+    let cancelled = false
+    void queryClient
+      .fetchQuery({ ...queries.space(workspaceId), staleTime: 0 })
+      .then((fresh) => {
+        const there = fresh.channels.some((item) => item.conversationId === conversationId) || fresh.dms.some((item) => item.conversationId === conversationId)
+        if (!cancelled && !there) setConfirmedMissing(conversationId)
+      })
+      // A list that cannot be read is the list's own error (shown below, with a way to try again), not a missing conversation.
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [missing, workspaceId, conversationId, confirmedMissing, queryClient])
+
+  if (!workspaceId || !conversationId) return <NotFoundState />
+  // Who is signed in is not known yet (or could not be read): not a conversation that is missing.
+  if (!session.data) return session.isError ? <div className="page-scroll"><QueryError query={session} /></div> : <p className="hint" role="status">{t('loading')}</p>
   const channel = space.data?.channels.find((item) => item.conversationId === conversationId)
   const dm = space.data?.dms.find((item) => item.conversationId === conversationId)
   const team = space.data?.teams.find((item) => item.id === channel?.teamId)
   const project = space.data?.projects.find((item) => item.id === channel?.projectId)
   const peerName = dm?.peers.map((peer) => peer.displayName).join(', ')
-  // A conversation the person cannot read is not in their Space: say so instead of a page stuck on "loading".
-  if (space.isSuccess && !channel && !dm) return <NotFoundState />
+  // A conversation the person cannot read is not in their Space: say so, and where to go, instead of a page stuck on "loading".
+  if (!channel && !dm && space.isError) return <div className="page-scroll"><QueryError query={space} /></div>
+  if (missing && confirmedMissing === conversationId) return <ConversationUnavailable workspaceId={workspaceId} projectId={params.projectId} />
+  if (missing) return <p className="hint" role="status">{t('loading')}</p>
   const title = channel ? `# ${channel.name}` : peerName || (dm ? t('dm.short') : t('loading'))
   const scopeText = channel ? channelScopeLabel(t, channel.visibility, project?.name, team?.name) : null
   const namesProject = channel?.visibility === 'PUBLIC' && team && project
@@ -105,6 +132,7 @@ export function ConversationFrame() {
         showDmWarning={false}
         heading={title}
         threadBase={threadBase}
+        projectId={params.projectId}
       />
       {channel && searchParams.get('settings') === '1' ? createPortal(
         <ChannelSettingsPanel

@@ -145,7 +145,13 @@ export type SessionInfo = {
   lastSeenAt: string | null
   lastReauthAt: string | null
   expiresAt: string
+  /** A long session ("keep me signed in"): `expiresAt` is then the earlier of its inactivity end and `absoluteExpiresAt`. */
+  longLived?: boolean
+  absoluteExpiresAt?: string | null
 }
+/** Whether the instance offers "keep me signed in", and for how long a long session lasts. */
+export type LongSessionPolicy = { enabled: boolean; maxAgeSeconds: number; idleSeconds: number }
+export type AuthOptions = { providers: AuthProvider[]; longSession: LongSessionPolicy }
 export type MfaStatus = { enabled: boolean; enabledAt: string | null; recoveryCodesRemaining: number; setupPending: boolean }
 export type MfaSetup = { secret: string; otpauthUri: string }
 export type SessionsView = { items: SessionInfo[]; reauthMethods: string[]; reauthWindowSeconds: number }
@@ -300,6 +306,29 @@ type RequestOptions = {
   keepalive?: boolean
 }
 
+/**
+ * When a person last used this page (a pointer, key, touch or wheel). A request made after a long quiet spell is the page
+ * working by itself (the unread count's timer, a refresh after another person's change), not the person, and is marked as
+ * background: the server does not count it as activity, so an abandoned tab does not keep a long session alive.
+ */
+let lastUserInput = Date.now()
+/** How long without input before the page's requests are background traffic. */
+export const BACKGROUND_AFTER_MS = 5 * 60 * 1000
+
+export function noteUserInput(at: number = Date.now()): void {
+  lastUserInput = at
+}
+
+/** Starts noting input on `target` (the window); returns the function that stops it. */
+export function watchUserInput(target: Pick<EventTarget, 'addEventListener' | 'removeEventListener'>): () => void {
+  const note = () => noteUserInput()
+  const events = ['pointerdown', 'keydown', 'touchstart', 'wheel'] as const
+  for (const name of events) target.addEventListener(name, note, { capture: true, passive: true })
+  return () => {
+    for (const name of events) target.removeEventListener(name, note, { capture: true })
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -352,6 +381,7 @@ async function request(path: string, options: RequestOptions = {}): Promise<unkn
   else if (options.body !== undefined) headers.set('Content-Type', 'application/json')
   if (method !== 'GET') headers.set('X-Penfii-Client', '1')
   if (options.idempotencyKey) headers.set('Idempotency-Key', options.idempotencyKey)
+  if (Date.now() - lastUserInput > BACKGROUND_AFTER_MS) headers.set('X-Penfii-Background', '1')
 
   const epoch = authEpoch
   const controller = new AbortController()
@@ -861,13 +891,26 @@ function recoveryCodes(payload: unknown): string[] {
   return payload.recoveryCodes as string[]
 }
 
+function fetchAuthOptions(): Promise<AuthOptions> {
+  return request('/v1/auth/providers').then((payload) => {
+    const providers = isRecord(payload) && Array.isArray(payload.items) ? (payload.items as AuthProvider[]) : []
+    const long = isRecord(payload) && isRecord(payload.longSession) ? payload.longSession : null
+    const longSession: LongSessionPolicy = {
+      enabled: long?.enabled === true,
+      maxAgeSeconds: typeof long?.maxAgeSeconds === 'number' ? long.maxAgeSeconds : 0,
+      idleSeconds: typeof long?.idleSeconds === 'number' ? long.idleSeconds : 0,
+    }
+    return { providers, longSession }
+  })
+}
+
 export function createPenfiiClient() {
   return {
     serverInfo(): Promise<ServerInfo> {
       return request('/v1/server-info').then(normalizeServerInfo)
     },
     /** `code` (an authenticator or recovery code) is sent on the second step of an account with two-step verification: the first answer is 401 `mfa_required`. */
-    login(body: { email: string; password: string; code?: string }): Promise<void> {
+    login(body: { email: string; password: string; code?: string; keepSignedIn?: boolean }): Promise<void> {
       return request('/v1/session/login', { method: 'POST', body }).then(() => undefined)
     },
     /** Asks for a password reset mail. The answer is the same whether or not the address has an account; 404 when the server sends no e-mail. */
@@ -1031,11 +1074,15 @@ export function createPenfiiClient() {
       return request(`/v1/tickets/${ticketId}/commands/purge`, { method: 'POST', body: {} }).then(() => undefined)
     },
     authProviders(): Promise<AuthProvider[]> {
-      return request('/v1/auth/providers').then((payload) => (isRecord(payload) && Array.isArray(payload.items) ? (payload.items as AuthProvider[]) : []))
+      return fetchAuthOptions().then((options) => options.providers)
+    },
+    /** The providers on offer and the long-session policy (an older server that does not say offers none). */
+    authOptions(): Promise<AuthOptions> {
+      return fetchAuthOptions()
     },
     authStart(
       provider: string,
-      body: { intent: 'login' | 'invite' | 'link'; invitationToken?: string; returnTo?: string },
+      body: { intent: 'login' | 'invite' | 'link'; invitationToken?: string; returnTo?: string; keepSignedIn?: boolean },
     ): Promise<string> {
       return request(`/v1/auth/${encodeURIComponent(provider)}/start`, { method: 'POST', body }).then((payload) => {
         if (!isRecord(payload) || typeof payload.url !== 'string') throw new ApiError(500, 'invalid_response', 'Expected a provider URL')
@@ -1481,7 +1528,7 @@ export function createPenfiiClient() {
     getDoc(docId: string): Promise<DocPage> {
       return request(`/v1/docs/${docId}`) as Promise<DocPage>
     },
-    updateDoc(docId: string, body: { title?: string; projectId?: string | null }): Promise<DocPage> {
+    updateDoc(docId: string, body: { title?: string; projectId?: string | null; fullWidth?: boolean }): Promise<DocPage> {
       return request(`/v1/docs/${docId}`, { method: 'PATCH', body }) as Promise<DocPage>
     },
     saveDoc(docId: string, body: { expectedRevisionNo: number; title: string; content: DocContent }): Promise<DocPage> {

@@ -8,6 +8,63 @@ pub struct Limits {
     pub message_file_max_count: Option<i64>,
     pub message_file_max_bytes: Option<i64>,
     pub login_throttle: ThrottleLimits,
+    pub long_session: LongSession,
+}
+
+/// The "keep me signed in" web session (FEA-182). A person who chooses it gets a session that ends
+/// at the earlier of `max_age_seconds` after sign-in (never extended) and `idle_seconds` after the
+/// last activity. The ordinary session (`session_ttl_seconds`) is not touched by these settings.
+/// `PENFII_LONG_SESSION_ENABLED` (default on), `PENFII_LONG_SESSION_MAX_AGE_SECONDS` (default 30
+/// days) and `PENFII_LONG_SESSION_IDLE_SECONDS` (default 7 days).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LongSession {
+    pub enabled: bool,
+    pub max_age_seconds: i64,
+    pub idle_seconds: i64,
+}
+
+impl Default for LongSession {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_age_seconds: 30 * 24 * 3600,
+            idle_seconds: 7 * 24 * 3600,
+        }
+    }
+}
+
+/// Seconds of the longest value: the web cookie and the database columns hold these as 32-bit
+/// numbers (`idle_seconds` is an integer), and ten years is far beyond any sensible session.
+const LONG_SESSION_CEILING_SECONDS: i64 = 10 * 365 * 24 * 3600;
+
+impl LongSession {
+    pub fn from_lookup(lookup: crate::config::Lookup<'_>) -> Result<Self, String> {
+        use crate::config::{boolean, integer};
+        let defaults = Self::default();
+        let seconds = |name: &str, default: i64| -> Result<i64, String> {
+            match integer(lookup, name, 1)? {
+                Some(value) if value > LONG_SESSION_CEILING_SECONDS => Err(format!(
+                    "{name} must be at most {LONG_SESSION_CEILING_SECONDS} seconds, got {value}"
+                )),
+                Some(value) => Ok(value),
+                None => Ok(default),
+            }
+        };
+        Ok(Self {
+            enabled: boolean(lookup, "PENFII_LONG_SESSION_ENABLED")?.unwrap_or(defaults.enabled),
+            max_age_seconds: seconds(
+                "PENFII_LONG_SESSION_MAX_AGE_SECONDS",
+                defaults.max_age_seconds,
+            )?,
+            idle_seconds: seconds("PENFII_LONG_SESSION_IDLE_SECONDS", defaults.idle_seconds)?,
+        })
+    }
+
+    /// The inactivity window in effect: a window longer than the absolute lifetime could never be
+    /// reached, so it is the lifetime.
+    pub fn effective_idle_seconds(&self) -> i64 {
+        self.idle_seconds.min(self.max_age_seconds)
+    }
 }
 
 impl Limits {
@@ -30,6 +87,7 @@ impl Limits {
             message_file_max_count: positive("PENFII_MESSAGE_FILE_MAX_COUNT")?,
             message_file_max_bytes: positive("PENFII_MESSAGE_FILE_MAX_BYTES")?,
             login_throttle: ThrottleLimits::default(),
+            long_session: LongSession::from_lookup(lookup)?,
         })
     }
 }

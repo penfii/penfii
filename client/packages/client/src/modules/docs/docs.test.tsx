@@ -39,6 +39,7 @@ import { DocPageView } from './DocPageView'
 import { DraftDoc } from './DraftDoc'
 import { NoticeHost, dismissNotice } from '../../design/notices'
 import { renderWithProviders } from '../../test/renderWithProviders'
+import { typeInto } from '../../test/richEditor'
 
 const node = (id: string, parentId: string | null, title = id): DocNode => ({
   id, parentId, title, position: 1, visibility: 'WORKSPACE', projectId: null, updatedAt: '2026-10-23T00:00:00Z',
@@ -466,12 +467,10 @@ describe('Doc page', () => {
     api.searchDirectory.mockResolvedValue({ query: 'b', results: [{ type: 'person', id: 'u2', title: 'Bob Lee', subtitle: '', person: { id: 'u2', displayName: 'Bob Lee', username: null, email: '', organizationId: 'o', organizationName: 'Acme', affiliation: [] } }] })
     api.createDocComment.mockResolvedValue({})
     mount(<DocPageView workspaceId="w" docId="p1" />)
-    const box = await screen.findByPlaceholderText(/댓글을 입력하세요/)
-    fireEvent.change(box, { target: { value: '@Bo', selectionStart: 3 } })
-    ;(box as HTMLTextAreaElement).setSelectionRange(3, 3)
-    fireEvent.change(box, { target: { value: '@Bo' } })
-    fireEvent.click(await screen.findByRole('button', { name: 'Bob Lee' }))
-    fireEvent.change(box, { target: { value: '@Bob Lee 확인 부탁' } })
+    const box = await screen.findByRole('textbox', { name: /댓글을 입력하세요/ })
+    typeInto(box, '@Bo')
+    fireEvent.click(await screen.findByRole('option', { name: /Bob Lee/ }))
+    typeInto(box, '확인 부탁')
     fireEvent.click(screen.getByRole('button', { name: '댓글 달기' }))
     await waitFor(() => expect(api.createDocComment).toHaveBeenCalled())
     const body = api.createDocComment.mock.calls[0]![1] as { content: Array<{ content: Array<{ type: string; attrs?: { userId: string } }> }> }
@@ -512,6 +511,6 @@ describe('Doc page', () => {
     expect(screen.getByRole('button', { name: '기록' })).toBeTruthy()
     expect((await screen.findByTestId('editor')).dataset.editable).toBe('false')
     // Comments are not an edit right: the same person can comment.
-    expect(screen.getByPlaceholderText('댓글을 입력하세요 (@로 사람을 언급)')).toBeTruthy()
+    expect(screen.getByRole('textbox', { name: '댓글을 입력하세요 (@로 사람을 언급)' })).toBeTruthy()
   })
 })

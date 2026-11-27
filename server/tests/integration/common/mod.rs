@@ -136,6 +136,7 @@ pub async fn add_workspace(pool: &PgPool, owner: Uuid, name: &str) -> Uuid {
 pub fn limits() -> Limits {
     Limits {
         session_ttl_seconds: Some(3600),
+        long_session: penfii_core::LongSession::default(),
         message_body_max_bytes: Some(65536),
         invite_ttl_seconds: Some(604_800),
         file_max_bytes: Some(10 * 1024 * 1024),

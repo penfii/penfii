@@ -1487,6 +1487,10 @@
           "code": {
             "type": ["string", "null"],
             "description": "The authenticator or recovery code, for an account with two-step verification on."
+          },
+          "keepSignedIn": {
+            "type": "boolean",
+            "description": "Ask for a long session (\"keep me signed in\"): it ends at the latest PENFII_LONG_SESSION_MAX_AGE_SECONDS after sign-in and after PENFII_LONG_SESSION_IDLE_SECONDS without activity. Absent is false. A server that has the feature off issues an ordinary session."
           }
         }
       },
@@ -7747,6 +7751,28 @@
         }
       }
     },
+    "/v1/ws/docs/{id}": {
+      "get": {
+        "operationId": "docRealtime",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "503": { "$ref": "#/components/responses/DbUnavailable" },
+          "101": {
+            "description": "Doc page change WebSocket"
+          }
+        }
+      }
+    },
     "/v1/ws/projects/{id}": {
       "get": {
         "operationId": "projectRealtime",
@@ -13178,7 +13204,7 @@
       },
       "patch": {
         "operationId": "updateDoc",
-        "summary": "Rename (edit right, title must not be empty) or set the Project (manage right). No revision precondition.",
+        "summary": "Rename (edit right, title must not be empty), set the Project (manage right) or set fullWidth, the page's layout (edit right). No revision precondition; fullWidth is a setting of the page and changes neither revisionNo nor the content.",
         "parameters": [
           {
             "name": "id",
@@ -13230,6 +13256,10 @@
                       "null"
                     ],
                     "format": "uuid"
+                  },
+                  "fullWidth": {
+                    "type": "boolean",
+                    "description": "Show the page across the whole space between the panels (true) or in the reading column (false, the default). The same for every reader; edit right required."
                   }
                 },
                 "additionalProperties": false
@@ -15416,6 +15446,15 @@
                           "expiresAt": {
                             "type": "string",
                             "format": "date-time"
+                          },
+                          "longLived": {
+                            "type": "boolean",
+                            "description": "A long session (\"keep me signed in\"): expiresAt is the earlier of its inactivity end and absoluteExpiresAt."
+                          },
+                          "absoluteExpiresAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "nullable": true
                           }
                         }
                       }
@@ -15658,6 +15697,21 @@
                           }
                         }
                       }
+                    },
+                    "longSession": {
+                      "type": "object",
+                      "description": "Whether the instance offers a long session (\"keep me signed in\") and its limits.",
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "maxAgeSeconds": {
+                          "type": "integer"
+                        },
+                        "idleSeconds": {
+                          "type": "integer"
+                        }
+                      }
                     }
                   }
                 }
@@ -15702,6 +15756,10 @@
                   "returnTo": {
                     "type": "string",
                     "description": "relative path on this instance"
+                  },
+                  "keepSignedIn": {
+                    "type": "boolean",
+                    "description": "For intent login only: ask for a long session; the choice is kept with the attempt and applied when the callback signs in."
                   }
                 }
               }

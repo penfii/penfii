@@ -4,8 +4,8 @@ import { Avatar, Button, useDismiss } from '../design/ui'
 import { useI18n } from '../i18n/I18nProvider'
 import { LogoutButton, useSession } from '../modules/identity'
 import { ContextSidebar } from './ContextSidebar'
-import { DETAIL_WIDTH, OVERLAY_MAX_WIDTH, THREAD_DEFAULT, THREAD_MIN, THREAD_WIDTH_KEY, readStoredWidth, shouldCollapseNav } from './paneWidth'
-import { usePaneWidth } from './usePaneWidth'
+import { THREAD_DEFAULT, THREAD_MIN, THREAD_WIDTH_KEY, detailColumnWidth, readStoredWidth, shouldCollapseNav } from './paneWidth'
+import { useLiveWidth, usePaneWidth } from './usePaneWidth'
 import { useCreate, type CreateKind } from './create'
 import { HostSlot, type ShellSlots } from './stableSlots'
 import type { PaneControls } from './ResizeHandle'
@@ -44,8 +44,8 @@ export function WorkspaceShell({
   const threadOpen = location.pathname.includes('/t/')
   const navPane = usePaneWidth('nav', {
     threadOpen,
-    detailOpen: Boolean(panel),
-    detailWidth: ticketOpen ? ticketPane.width : undefined,
+    panel,
+    ticketWidth: ticketPane.width,
   })
   const [viewport, setViewport] = useState(() => (typeof window === 'undefined' ? 1440 : window.innerWidth))
   const [navRevealed, setNavRevealed] = useState(false)
@@ -54,11 +54,9 @@ export function WorkspaceShell({
     window.addEventListener('resize', apply)
     return () => window.removeEventListener('resize', apply)
   }, [])
-  const threadColumn = threadOpen ? readStoredWidth(THREAD_WIDTH_KEY, THREAD_DEFAULT, THREAD_MIN) : 0
-  // Below the overlay breakpoint a ticket panel floats, so it does not take a grid column.
-  const ticketColumn = ticketOpen && viewport > OVERLAY_MAX_WIDTH ? ticketPane.width : 0
-  const detailColumn = panel && !ticketOpen ? DETAIL_WIDTH : 0
-  const sideWidth = threadColumn + ticketColumn + detailColumn
+  const liveThread = useLiveWidth('thread')
+  const threadColumn = threadOpen ? liveThread ?? readStoredWidth(THREAD_WIDTH_KEY, THREAD_DEFAULT, THREAD_MIN) : 0
+  const sideWidth = threadColumn + detailColumnWidth(viewport, panel, ticketPane.width)
   const navCollapsed = shouldCollapseNav(viewport, navPane.width, sideWidth)
   useEffect(() => { if (!navCollapsed) setNavRevealed(false) }, [navCollapsed])
   const unread = useUnread(workspaceId)

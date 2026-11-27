@@ -14,11 +14,12 @@
 .doc-status { font-size: 0.85rem; color: var(--text-muted); }
 .doc-tree, .doc-tree ul { list-style: none; margin: 0; padding: 0; }
 .doc-tree ul { padding-left: 14px; }
-.doc-tree-row { display: flex; align-items: center; gap: 4px; padding: 2px 4px; border-radius: 6px; }
+.doc-tree-row { display: flex; align-items: center; gap: 4px; padding: 2px 4px; border-radius: 6px; min-width: 0; }
+.doc-tree li { min-width: 0; }
 .doc-tree-row.is-selected { background: var(--accent-soft); font-weight: 700; }
 .doc-tree-row.is-drop { outline: 2px dashed var(--accent); }
 .doc-tree-row button { background: transparent; border: 0; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
-.doc-tree-row .doc-tree-open { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-tree-row .doc-tree-open { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .doc-tree-actions { display: none; gap: 2px; }
 .doc-tree-row:hover .doc-tree-actions, .doc-tree-row:focus-within .doc-tree-actions { display: inline-flex; }
 .doc-page { display: grid; gap: 12px; max-width: 860px; margin: 0 auto; padding: 16px; }
@@ -29,10 +30,6 @@
 .doc-split { display: grid; grid-template-columns: minmax(180px, 260px) 1fr; gap: 16px; }
 .doc-split-tree { padding: 12px 8px; border-right: 1px solid var(--border-strong); }
 @media (max-width: 720px) { .doc-split { grid-template-columns: 1fr; } .doc-split-tree { border-right: 0; border-bottom: 1px solid var(--border-strong); } }
-.doc-mention-box { position: relative; }
-.doc-mention-list { position: absolute; z-index: 5; left: 0; right: 0; list-style: none; margin: 2px 0 0; padding: 4px; background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.12); }
-.doc-mention-list button { width: 100%; text-align: left; padding: 6px 8px; background: transparent; border: 0; cursor: pointer; border-radius: 4px; }
-.doc-mention-list button:hover { background: var(--bg-muted); }
 .doc-access { border: 0; padding: 0; display: grid; gap: 6px; min-width: min(460px, 90vw); }
 .doc-access-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
 .doc-access-list li { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
@@ -70,6 +67,9 @@
 .doc-history { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 4px; max-height: 50vh; overflow: auto; }
 .doc-history-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 4px; border-bottom: 1px solid var(--border-strong); }
 .doc-history-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.doc-history-row > div { min-width: 0; overflow-wrap: anywhere; }
+/* The badge wraps as a whole to the next line instead of breaking inside its pill. */
+.doc-history-row .doc-badge { display: inline-block; margin-left: 0.5rem; white-space: nowrap; }
 .doc-history-preview { max-height: 60vh; overflow: auto; }
 .doc-banner-actions { display: flex; gap: 8px; margin-top: 6px; }
 .doc-title-input { border-bottom: 2px solid var(--border-strong); }
@@ -114,7 +114,7 @@
 .doc-actions { display: flex; flex: none; align-items: center; gap: 8px; margin-left: auto; }
 @media (max-width: 720px) { .doc-actions { flex-wrap: wrap; } }
 
-/* Document page (frame 3.1): a bordered top bar with the path and the actions, then one 760px column. */
+/* Document page (frame 3.1): a bordered top bar with the path and the actions, then the page column (width rules below). */
 .doc-page { display: flex; flex-direction: column; gap: 0; max-width: none; margin: 0; padding: 0; min-height: 100%; background: var(--bg-elevated); }
 .doc-topbar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 10px; min-height: 60px; padding: 0 var(--space-6); background: var(--bg-elevated); border-bottom: 1px solid var(--border); }
 .doc-crumb { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; color: var(--text-muted); }
@@ -132,10 +132,10 @@
 .doc-comments h2 { display: flex; align-items: center; gap: var(--space-2); font-size: 0.95rem; font-weight: 700; }
 .count-pill { padding: 0 0.5rem; border-radius: 99px; background: var(--bg); color: var(--text-secondary); font-size: 0.7rem; font-weight: 700; line-height: 1.6; }
 .doc-comments .comment-form { border: 1px solid var(--border-strong); border-radius: 12px; padding: var(--space-3); background: var(--bg-elevated); }
-.doc-comments .comment-form textarea { border: 0; box-shadow: none; padding: 0; background: transparent; }
+.doc-comments .comment-form .rich-editor { border-color: transparent; background: var(--bg); }
 .doc-tree-search { height: 36px; border: 0; border-radius: 10px; background: var(--bg); box-shadow: none; padding: 0 var(--space-3); font-size: 0.8rem; }
 
-/* Frame 3.1: the outline and the page facts sit in a right column beside the 760px text. */
+/* Frame 3.1: the outline and the page facts sit in a right column beside the text. */
 .doc-body { display: flex; align-items: flex-start; flex: 1; }
 .doc-body > .doc-column { flex: 1; min-width: 0; }
 .doc-aside { position: sticky; top: 60px; flex: none; width: 280px; min-height: calc(100vh - 60px); display: grid; align-content: start; gap: var(--space-5); padding: var(--space-5); border-left: 1px solid var(--border); background: var(--bg-elevated); }
@@ -149,19 +149,42 @@
 .doc-facts dd { margin: 0; color: var(--text); }
 @media (max-width: 1100px) { .doc-aside { display: none; } }
 
-.doc-body > .doc-column { width: auto; margin: 0; padding-inline: max(var(--space-5), calc((100% - 760px) / 2)); }
+/* The page column is the room between the navigation panel and the outline. By default its content takes 88%
+   of that room, 6% clear on each side (at least 32px, 24px on a narrow window), with no fixed cap. Full width (FEA-178) keeps
+   only the 32px (24px). Title, meta, text, tables, comments and the comment box all sit on the middle track, so they share one
+   width and one left edge, and nothing is wider than the room, so the page never scrolls sideways. The side tracks are
+   percentages of the column itself, so the outline being shown or hidden (editing, narrow windows) needs no other rule. */
+.doc-body > .doc-column {
+  --doc-side: max(var(--space-6), 6%);
+  width: auto;
+  margin: 0;
+  padding-inline: 0;
+  column-gap: 0;
+  grid-template-columns: var(--doc-side) minmax(0, 1fr) var(--doc-side);
+}
+.doc-body > .doc-column > * { grid-column: 2; }
+.doc-page.is-wide .doc-body > .doc-column { --doc-side: var(--space-6); }
+@media (max-width: 720px) {
+  .doc-body > .doc-column { --doc-side: max(var(--space-5), 6%); }
+  .doc-page.is-wide .doc-body > .doc-column { --doc-side: var(--space-5); }
+}
+.doc-layout-toggle { display: flex; align-items: center; gap: 0.5rem; }
+.doc-layout-check { display: inline-block; width: 1rem; text-align: center; }
 
-/* New document (frame 3.2): a bordered top bar with the draft badge and the actions, then one 760px column with a large
+/* New document (frame 3.2): a bordered top bar with the draft badge and the actions, then one column with a large
    title field that has no box. */
 .doc-draft-bar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); min-height: 60px; padding: 0 var(--space-6); background: var(--bg-elevated); border-bottom: 1px solid var(--border); }
 .doc-draft-bar > div:first-child { display: flex; align-items: baseline; gap: var(--space-3); min-width: 0; }
 .doc-draft-bar strong { padding: 0.2rem 0.7rem; border-radius: 13px; background: var(--accent-soft); color: var(--accent-strong); font-size: 0.75rem; }
 .doc-draft-bar .hint { margin: 0; }
-.doc-page > label.field { width: min(760px, 100% - 2 * var(--space-5)); margin: 44px auto 0; }
+/* The new page follows the default width of a saved page (88%, at least 32px clear on each side; 24px on a narrow window). */
+.doc-page { --draft-width: min(88%, 100% - 2 * var(--space-6)); }
+@media (max-width: 720px) { .doc-page { --draft-width: min(88%, 100% - 2 * var(--space-5)); } }
+.doc-page > label.field { width: var(--draft-width); margin: 44px auto 0; }
 .doc-page > label.field > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .doc-page > label.field input { border: 0; box-shadow: none; background: transparent; padding: 0; font-size: 2.4rem; font-weight: 700; letter-spacing: -0.02em; height: auto; }
 .doc-page > label.field input::placeholder { color: var(--border-strong); }
-.doc-page > .doc-editor { width: min(760px, 100% - 2 * var(--space-5)); margin: var(--space-3) auto var(--space-6); }
+.doc-page > .doc-editor { width: var(--draft-width); margin: var(--space-3) auto var(--space-6); }
 
 /* Who can see this (frames 3.3, 3.4): each choice is a card, the chosen one amber. */
 .share-scope { border: 0; padding: 0; margin: 0; display: grid; gap: var(--space-2); }

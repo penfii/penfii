@@ -21,6 +21,9 @@ export const test = base.extend<Watch>({
         /^navigation cancellation:/,
         /^navigation WebSocket close:/,
         /scroll-linked positioning effect/,
+        // The sign-in page asks the server whether a session exists (to take a signed-in person on); for a person who is
+        // signed out the answer is 401, and the browser reports that as a failed request and a console error.
+        /^sign-in page session check:/,
       ]
       const problems: string[] = []
       let lastMainNavigationAt = 0
@@ -41,8 +44,22 @@ export const test = base.extend<Watch>({
         target.on('framenavigated', (frame) => {
           if (frame === target.mainFrame()) lastMainNavigationAt = Date.now()
         })
+        // Only `/v1/me`, only answered 401, only while the sign-in page is open: any other failure there still counts.
+        const isSignInSessionCheck = (url: string) => new URL(url).pathname === '/v1/me' && new URL(target.url()).pathname === '/login'
         target.on('console', (message) => {
-          if (message.type() === 'error' || message.type() === 'warning') note(`console.${message.type()}: ${message.text()}`)
+          if (message.type() !== 'error' && message.type() !== 'warning') return
+          const where = message.location().url
+          const sessionCheck = message.type() === 'error' && /status of 401/.test(message.text()) && Boolean(where) && isSignInSessionCheck(where)
+          // WebKit also logs what a navigation cut off: a lazily loaded screen whose script request was cancelled, and a socket
+          // still connecting; Firefox logs that socket as well, in its own words. The request itself is checked above (a
+          // cancellation only right after a navigation; a real failure or an HTTP error still counts), so only these messages,
+          // only right after a navigation, are that.
+          const recentNavigation = Date.now() - lastMainNavigationAt < 2_000
+          const cutOff = recentNavigation && (
+            /^(TypeError: Importing a module script failed\.|WebSocket connection to .* failed: WebSocket is closed before the connection is established\.)$/.test(message.text())
+            || /^\[JavaScript Error: "(The connection to ws:\/\/\S+ was interrupted while the page was loading\.|Firefox can.t establish a connection to the server at ws:\/\/\S+\.)"/.test(message.text())
+          )
+          note(`${sessionCheck ? 'sign-in page session check: ' : cutOff ? 'navigation cancellation: ' : ''}console.${message.type()}: ${message.text()}`)
         })
         target.on('pageerror', (error) => {
           // WebKit reports a fetch that a navigation cut off as "... due to access control checks"; the app's query
@@ -60,11 +77,13 @@ export const test = base.extend<Watch>({
           }
         })
         target.on('response', (response) => {
-          if (response.status() >= 400) note(`${response.status()} ${response.request().method()} ${response.url()}`)
+          if (response.status() < 400) return
+          const sessionCheck = response.status() === 401 && isSignInSessionCheck(response.url())
+          note(`${sessionCheck ? 'sign-in page session check: ' : ''}${response.status()} ${response.request().method()} ${response.url()}`)
         })
         target.on('websocket', (socket) => socket.on('socketerror', (error) => {
           const recentNavigation = Date.now() - lastMainNavigationAt < 2_000
-          if (recentNavigation && String(error).includes('CLOSE_ABNORMAL')) {
+          if (recentNavigation && /CLOSE_ABNORMAL|closed before the connection is established/.test(String(error))) {
             note(`navigation WebSocket close: ${socket.url()} (${error}) at ${target.url()}`)
           } else {
             note(`WebSocket error: ${socket.url()} (${error}) at ${target.url()}`)

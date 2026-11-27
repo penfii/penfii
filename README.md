@@ -85,7 +85,7 @@ You need Docker with Compose v2 (and Git for the source route). Plan for at leas
 
 4. Open <http://localhost:8080> and sign in. Try creating a project and a ticket, then search for the ticket by title. Add teammates by invitation under **Settings** > **Workspace** > **Invitations**. The [user guide](docs/user-guide.md) ([한국어](docs/user-guide.ko.md)) walks through chat, tickets, documents and search.
 
-Before opening the instance to others, follow the [network and TLS guide](docs/self-hosting.md#network-and-tls). Keep the bundled OpenSearch service internal because its security plugin is disabled. Back up both [PostgreSQL and the file store](docs/self-hosting.md#backup).
+Before opening the instance to others, follow the [network and TLS guide](docs/self-hosting.md#network-and-tls). Keep the bundled OpenSearch service internal because its image has no security plugin (no authentication). Back up both [PostgreSQL and the file store](docs/self-hosting.md#backup).
 
 ## Project status and upgrades
 

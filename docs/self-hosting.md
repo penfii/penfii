@@ -203,7 +203,7 @@ Compose's `db-setup` does not move ownership. For a volume created before the ow
 
 ## Network and TLS
 
-By default the web container is published on `127.0.0.1` only (`PENFII_HTTP_BIND`, `PENFII_HTTP_PORT`). PostgreSQL, MinIO, OpenSearch and core-api are not published at all; OpenSearch runs with its security plugin disabled, so it must stay unreachable from outside the Compose network.
+By default the web container is published on `127.0.0.1` only (`PENFII_HTTP_BIND`, `PENFII_HTTP_PORT`). PostgreSQL, MinIO, OpenSearch and core-api are not published at all; the OpenSearch image has no security plugin (no authentication or TLS), so it must stay unreachable from outside the Compose network.
 
 For anything beyond your own machine, put a TLS reverse proxy in front of the web container:
 

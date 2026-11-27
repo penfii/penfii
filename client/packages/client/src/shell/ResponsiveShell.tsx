@@ -50,7 +50,7 @@ export function ResponsiveShell({
   const bindDetailClose = useCallback((close: () => void) => {
     closeDetail.current = close
   }, [])
-  const ticketPane = usePaneWidth('ticket', { threadOpen: false, detailOpen: false, onTooNarrow: () => closeDetail.current() })
+  const ticketPane = usePaneWidth('ticket', { threadOpen: false, panel: null, onTooNarrow: () => closeDetail.current() })
 
   if (!workspaceId || notFound) return <NotFoundState escape />
 

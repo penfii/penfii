@@ -1,9 +1,14 @@
 import { LocaleToggle, useI18n } from '../i18n/I18nProvider'
 import { IconChat, IconDocs, IconProjects } from '../shell/icons'
 import { LoginForm } from '../modules/identity'
+import { useSignInGate } from '../modules/identity/useSignInGate'
+import { QueryError } from '../ui/QueryError'
 
 export function LoginPage() {
   const { t } = useI18n()
+  const gate = useSignInGate()
+  // Until the server has said whether a session exists, neither the form nor a redirect: no flash of a sign-in page for someone who is signed in.
+  if (gate.phase === 'checking' || gate.phase === 'redirecting') return <p className="center-note" role="status">{t('loading')}</p>
   return (
     <div className="gate">
       <section className="gate-story">
@@ -23,8 +28,8 @@ export function LoginPage() {
       </section>
       <section className="gate-panel">
         <div className="gate-locale"><LocaleToggle /></div>
-        <LoginForm />
-        <p className="hint">{t('login.lead')}</p>
+        {gate.phase === 'failed' ? <QueryError query={{ error: gate.error, refetch: gate.retry }} /> : <LoginForm onSigningIn={gate.setSigningIn} />}
+        {gate.phase === 'failed' ? null : <p className="hint">{t('login.lead')}</p>}
       </section>
     </div>
   )

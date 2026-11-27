@@ -105,6 +105,9 @@ export function CalendarView({ workspaceId, projectId, filters, state, onState }
       ) : (
         // A month to read, not a date to pick: a native table gives the weekdays as column headers and each day its place in them,
         // and every event inside stays its own button reached with Tab.
+        // It has a smallest width: narrower than that the month scrolls inside this box (header, grid and bars together), never the page
+        // or the detail panel beside it.
+        <div className="tlcalendar-scroll" data-pop-float>
         <table className="tlcalendar-table">
           <caption className="visually-hidden">{monthLabel}</caption>
           <thead>
@@ -120,6 +123,7 @@ export function CalendarView({ workspaceId, projectId, filters, state, onState }
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       <section className="timeline-unplanned" aria-label={t('calendar.unscheduled')}>
@@ -187,8 +191,10 @@ function Week({ week, entries, due, inMonth, plan, todayDay, onOpen }: { week: D
                 if (!piece) return <span key={lane} className="cal-lane empty" aria-hidden="true" />
                 const first = column === piece.from
                 const cls = ['cal-lane', 'cal-plan', `state-${piece.entry.category.toLowerCase()}`, piece.openLeft && first ? 'open-left' : '', column > piece.from ? 'joined-left' : '', column < piece.to ? 'joined-right' : '', piece.openRight && column === piece.to ? 'open-right' : ''].filter(Boolean).join(' ')
+                // A bar of several days is one box over its days: its name is cut at the bar's end, not at the first day's edge.
+                const span = piece.to - piece.from + 1
                 return first ? (
-                  <button key={lane} type="button" className={cls} data-cal-entry={piece.entry.id} aria-label={t('calendar.planEntry', { key: piece.entry.key, title: piece.entry.title, start: piece.entry.plan?.start ?? '', end: piece.entry.plan?.end ?? '' })} title={piece.entry.title} onClick={() => onOpen(piece.entry.id)}>
+                  <button key={lane} type="button" className={cls} style={span > 1 ? { width: `calc(${String(span)} * 100% + ${String(span - 2)}px)` } : undefined} data-cal-entry={piece.entry.id} aria-label={t('calendar.planEntry', { key: piece.entry.key, title: piece.entry.title, start: piece.entry.plan?.start ?? '', end: piece.entry.plan?.end ?? '' })} title={piece.entry.title} onClick={() => onOpen(piece.entry.id)}>
                     <span className="cal-kind">{t('calendar.plan')} · </span>
                     {piece.entry.key} {piece.entry.title}
                   </button>

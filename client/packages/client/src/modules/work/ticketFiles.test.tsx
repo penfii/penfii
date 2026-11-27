@@ -28,6 +28,7 @@ function CommentsTab({ ticketId, workspaceId }: { ticketId: string; workspaceId:
 }
 import { TicketAttachments } from './TicketAttachments'
 import { renderWithProviders } from '../../test/renderWithProviders'
+import { typeInto } from '../../test/richEditor'
 
 const attachment = (id: string, filename: string, extra: Partial<TicketAttachment> = {}): TicketAttachment => ({
   id,
@@ -131,8 +132,8 @@ describe('Ticket comments with files', () => {
     transfers.putFile.mockImplementationOnce(() => ({ done: new Promise((resolve) => { finish = resolve }), abort: vi.fn() }))
     view(<CommentsTab ticketId="t1" workspaceId="w1" />)
     await screen.findByText('No comments yet.')
-    const box = screen.getByLabelText('Write a comment')
-    fireEvent.paste(box, { clipboardData: { files: [pick('a.txt')], types: ['Files'] } })
+    const box = screen.getByRole('textbox', { name: 'Write a comment' })
+    fireEvent.paste(box, { clipboardData: { files: [pick('a.txt')], types: ['Files'], getData: () => '' } })
     const submit = screen.getByRole('button', { name: 'Comment' }) as HTMLButtonElement
     await waitFor(() => expect(api.createFile).toHaveBeenCalled())
     expect(submit.disabled).toBe(true)
@@ -150,14 +151,14 @@ describe('Ticket comments with files', () => {
     api.createTicketComment.mockRejectedValue(new Error('boom'))
     view(<CommentsTab ticketId="t1" workspaceId="w1" />)
     await screen.findByText('No comments yet.')
-    fireEvent.change(screen.getByLabelText('Write a comment'), { target: { value: 'hello' } })
-    fireEvent.drop(screen.getByLabelText('Write a comment'), { dataTransfer: { types: ['Files'], files: [pick('a.txt')] } })
+    typeInto(screen.getByRole('textbox', { name: 'Write a comment' }), 'hello')
+    fireEvent.drop(screen.getByRole('textbox', { name: 'Write a comment' }), { dataTransfer: { types: ['Files'], files: [pick('a.txt')] } })
     await waitFor(() => expect(screen.getByText('a.txt')).toBeTruthy())
     await waitFor(() => expect((screen.getByRole('button', { name: 'Comment' }) as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(screen.getByRole('button', { name: 'Comment' }))
     await screen.findByRole('alert')
     expect(screen.getByText('a.txt')).toBeTruthy()
-    expect((screen.getByLabelText('Write a comment') as HTMLTextAreaElement).value).toBe('hello')
+    expect(screen.getByRole('textbox', { name: 'Write a comment' }).textContent).toBe('hello')
     expect(api.deleteFile).not.toHaveBeenCalled()
   })
 })

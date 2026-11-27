@@ -616,6 +616,7 @@ impl ExternalConsumer for SearchConsumer {
                     | "doc.participants_changed"
                     | "doc.targets_changed"
                     | "doc.version_created"
+                    | "doc.layout_changed"
             );
         }
         [

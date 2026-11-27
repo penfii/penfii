@@ -9,7 +9,6 @@ import { formatStamp } from '../../format'
 import { useI18n } from '../../i18n/I18nProvider'
 import { queries } from '../../queries'
 import { ActivityTab } from './ActivityTab'
-import { CommentComposer, CommentList } from './CommentsTab'
 import { useTicketScroll } from './useTicketScroll'
 import { ConflictBanner } from './ConflictBanner'
 import { DependenciesSection } from './DependenciesSection'
@@ -39,6 +38,9 @@ import { TicketActionsMenu } from './TicketActionsMenu'
 const NARROW_PANEL = 600
 const TicketDescriptionEditor = lazy(() => import('./TicketDescriptionEditor').then((module) => ({ default: module.TicketDescriptionEditor })))
 const TicketDescriptionRead = lazy(() => import('./TicketDescriptionEditor').then((module) => ({ default: module.TicketDescriptionRead })))
+// The comment box and list use the rich text editor (tiptap), which stays out of the first load like the description editor.
+const CommentList = lazy(() => import('./CommentsTab').then((module) => ({ default: module.CommentList })))
+const CommentComposer = lazy(() => import('./CommentsTab').then((module) => ({ default: module.CommentComposer })))
 
 /** True while the element is narrower than `limit`; a DOM without ResizeObserver counts as wide. */
 function useNarrowWidth(ref: React.RefObject<HTMLElement | null>, limit: number): boolean {
@@ -412,7 +414,7 @@ function TicketBody({ ticket, ctx, onClose, onOpenTicket }: { ticket: Ticket; ct
               }}
             />
             <div className="tab-body" role="tabpanel">
-              {tab === 'comments' ? <CommentList ticketId={ticket.id} workspaceId={ticket.workspaceId} onView={onCommentView} /> : null}
+              {tab === 'comments' ? <Suspense fallback={<p className="hint" role="status">{t('loading')}</p>}><CommentList ticketId={ticket.id} workspaceId={ticket.workspaceId} onView={onCommentView} /></Suspense> : null}
               {tab === 'activity' ? <ActivityTab ticketId={ticket.id} /> : null}
               {tab === 'history' ? <HistoryTab ticket={ticket} canEdit={canEdit} /> : null}
             </div>
@@ -434,7 +436,7 @@ function TicketBody({ ticket, ctx, onClose, onOpenTicket }: { ticket: Ticket; ct
           {scroll.scrolled ? <button type="button" className="to-top" onClick={scroll.toTop}>↑ {t('work.panel.toTop')}</button> : null}
         </div>
       ) : null}
-      {tab === 'comments' && !ticket.archivedAt ? <CommentComposer ticketId={ticket.id} workspaceId={ticket.workspaceId} /> : null}
+      {tab === 'comments' && !ticket.archivedAt ? <Suspense fallback={null}><CommentComposer ticketId={ticket.id} workspaceId={ticket.workspaceId} /></Suspense> : null}
     </>
   )
 }

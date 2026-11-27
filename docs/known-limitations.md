@@ -63,8 +63,8 @@ For input methods the page was checked only with the events a browser reports wh
 
 - Only the Docker Compose stack in `docker/` is tested end to end. Pointing the server at your own PostgreSQL, S3 store or OpenSearch is possible through environment variables but is not packaged or tested.
 - Only MinIO has been used as the S3 store, and it must accept path-style requests.
-- OpenSearch runs with its security plugin disabled and is not published; do not expose it.
-- Live updates are per process: the notices that make open sockets look again (chat, ticket boards, Inbox, Space) travel in the memory of the core-api that handled the change. With more than one core-api instance, a person connected to another instance sees changes only when their client reloads or reconnects. Run one instance; see [Running more than one core-api](operations.md#running-more-than-one-core-api).
+- The bundled OpenSearch has no security plugin (no authentication, no TLS) and is not published; do not expose it. Another OpenSearch, with its own security, can be used through `PENFII_OPENSEARCH_URL`.
+- Live updates are per process: the notices that make open sockets look again (chat, ticket boards, Inbox, Space, an open Doc page) travel in the memory of the core-api that handled the change. With more than one core-api instance, a person connected to another instance sees changes only when their client reloads or reconnects. Run one instance; see [Running more than one core-api](operations.md#running-more-than-one-core-api).
 - The `/mcp` rate limit is per process.
 - MCP files: uploads and downloads through a tool call are limited to 256 KiB (base64 inside the call). Larger files and clients that cannot pass file bytes use the web app. Whether ChatGPT, Claude Code and Codex can pass or show file bytes was not verified against the real clients.
 - MCP has no push channel: an AI client polls `conversation_changes_list` for new messages.

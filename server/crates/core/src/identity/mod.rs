@@ -49,7 +49,8 @@ pub use reset::{
 };
 
 pub use session::{
-    AuthSession, SessionInfo, authenticate_session, check_address, list_sessions, reauth_methods,
+    AuthSession, SessionInfo, apply_long_session_policy, authenticate_session,
+    authenticate_session_background, check_address, list_sessions, reauth_methods,
     reauth_window_seconds, reauth_with_password, record_address_failure,
     require_recent_authentication, revoke_other_sessions, revoke_session,
 };
@@ -202,7 +203,7 @@ pub async fn login_from(
     address: Option<&str>,
     device: Option<&str>,
 ) -> Result<LoginResult, CoreError> {
-    login_with_code(pool, limits, email, password, None, address, device).await
+    login_with_code(pool, limits, email, password, None, false, address, device).await
 }
 
 /// Sign-in with the account's password and, when the account has two-step verification on, an
@@ -212,18 +213,22 @@ pub async fn login_from(
 /// it tells whoever holds the password that a code is needed, which is all that a password that works
 /// tells anyway. That attempt is taken back from the password counters (it was not a wrong password),
 /// but nothing is cleared until the code is right too; code attempts have a counter of their own.
+///
+/// `keep_signed_in` asks for a long session (see [`crate::LongSession`]); it is only an ask: the
+/// session is issued after the password and the code are right, and is an ordinary one when the
+/// operator has the feature off.
+#[allow(clippy::too_many_arguments)]
 pub async fn login_with_code(
     pool: &PgPool,
     limits: &Limits,
     email: &str,
     password: &str,
     code: Option<&str>,
+    keep_signed_in: bool,
     address: Option<&str>,
     device: Option<&str>,
 ) -> Result<LoginResult, CoreError> {
-    let ttl = limits.session_ttl_seconds.ok_or_else(|| {
-        CoreError::conflict("session_ttl_unconfigured", "session ttl is not configured")
-    })?;
+    let lifetime = session_lifetime(limits, keep_signed_in)?;
     let (_, email_key) = normalize_email(email)?;
     require_password(password)?;
     let code = code.map(str::trim).filter(|code| !code.is_empty());
@@ -312,7 +317,7 @@ pub async fn login_with_code(
         }
     }
     let mut tx = pool.begin().await?;
-    let token = insert_session(&mut tx, user.id, ttl, "password", device).await?;
+    let token = insert_session(&mut tx, user.id, lifetime, "password", device).await?;
     let summary = user_from_login(&user);
     audit_user(
         &mut tx,
@@ -335,7 +340,7 @@ pub async fn login_with_code(
     Ok(LoginResult {
         user: summary,
         token,
-        ttl_seconds: ttl,
+        ttl_seconds: lifetime.cookie_seconds,
     })
 }
 
@@ -363,12 +368,34 @@ fn account_address_key(email_key: &str, address: Option<&str>) -> String {
     format!("{email_key}\n{}", address.unwrap_or("-"))
 }
 
+/// The person behind a session token, for a request they made: it counts as activity, so a long
+/// session's inactivity window moves (see [`session::touch_session`]).
 pub async fn authenticate(pool: &PgPool, token: &str) -> Result<User, CoreError> {
+    authenticate_with(pool, token, true).await
+}
+
+/// [`authenticate`] for a request the client marked as the page's own background traffic: it is good only
+/// while the session is, and does not count as activity (see [`session_is_live`]).
+pub async fn authenticate_background(pool: &PgPool, token: &str) -> Result<User, CoreError> {
+    authenticate_with(pool, token, false).await
+}
+
+/// Whether a session token is still good, without counting as activity. A socket asks this on a
+/// timer: such a background check must not keep an idle long session alive.
+pub async fn session_is_live(pool: &PgPool, token: &str) -> Result<(), CoreError> {
+    authenticate_with(pool, token, false).await.map(|_| ())
+}
+
+async fn authenticate_with(pool: &PgPool, token: &str, activity: bool) -> Result<User, CoreError> {
+    use sqlx::FromRow;
     let hash = token_hash(token);
-    let row = sqlx::query_as::<_, UserRow>(
+    let row = sqlx::query(
         "SELECT u.id, u.email, u.display_name, u.locale, u.time_zone, u.email_verified_at,
                 u.job_title, u.status_emoji, u.status_text, u.status_clear_at,
-                (u.avatar_object_key IS NOT NULL) AS has_avatar
+                (u.avatar_object_key IS NOT NULL) AS has_avatar,
+                s.id AS session_id,
+                (s.absolute_expires_at IS NOT NULL
+                 AND (s.last_seen_at IS NULL OR s.last_seen_at < now() - interval '60 seconds')) AS needs_touch
          FROM penfii.sessions s
          JOIN penfii.users u ON u.id = s.user_id
          WHERE s.token_hash = $1
@@ -378,8 +405,12 @@ pub async fn authenticate(pool: &PgPool, token: &str) -> Result<User, CoreError>
     )
     .bind(hash)
     .fetch_optional(pool)
-    .await?;
-    row.map(user_from_row).ok_or(CoreError::Unauthenticated)
+    .await?
+    .ok_or(CoreError::Unauthenticated)?;
+    if activity && row.try_get::<bool, _>("needs_touch")? {
+        session::touch_session(pool, row.try_get("session_id")?).await?;
+    }
+    Ok(user_from_row(UserRow::from_row(&row)?))
 }
 
 pub async fn logout(pool: &PgPool, token: &str) -> Result<(), CoreError> {
@@ -693,10 +724,50 @@ pub(crate) fn token_hash(token: &str) -> Vec<u8> {
     Sha256::digest(token.as_bytes()).to_vec()
 }
 
+/// How long a new session lives and what its cookie says: the ordinary session (the fixed
+/// `PENFII_SESSION_TTL_SECONDS`) or, when the person chose to stay signed in and the operator allows
+/// it, a long session (see [`crate::LongSession`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SessionLifetime {
+    /// The cookie's `Max-Age`: the ordinary TTL, or the absolute lifetime of a long session.
+    pub cookie_seconds: i64,
+    /// First `expires_at`: the ordinary TTL, or the inactivity window of a long session.
+    pub first_expiry_seconds: i64,
+    /// `(absolute lifetime, inactivity window)` of a long session.
+    pub long: Option<(i64, i64)>,
+}
+
+/// The lifetime of a session issued now. `keep_signed_in` is honoured only while the operator has
+/// the feature on, and only for a sign-in (a caller that is not one passes `false`); otherwise the
+/// session is the ordinary one, so a remembered choice or a direct API request cannot get a long
+/// session from a server that does not offer it.
+pub(crate) fn session_lifetime(
+    limits: &Limits,
+    keep_signed_in: bool,
+) -> Result<SessionLifetime, CoreError> {
+    let ttl = limits.session_ttl_seconds.ok_or_else(|| {
+        CoreError::conflict("session_ttl_unconfigured", "session ttl is not configured")
+    })?;
+    let long = limits.long_session;
+    if keep_signed_in && long.enabled {
+        let idle = long.effective_idle_seconds();
+        return Ok(SessionLifetime {
+            cookie_seconds: long.max_age_seconds,
+            first_expiry_seconds: idle,
+            long: Some((long.max_age_seconds, idle)),
+        });
+    }
+    Ok(SessionLifetime {
+        cookie_seconds: ttl,
+        first_expiry_seconds: ttl,
+        long: None,
+    })
+}
+
 pub(crate) async fn insert_session(
     conn: &mut PgConnection,
     user_id: Uuid,
-    ttl_seconds: i64,
+    lifetime: SessionLifetime,
     method: &str,
     device: Option<&str>,
 ) -> Result<String, CoreError> {
@@ -705,15 +776,19 @@ pub(crate) async fn insert_session(
         "INSERT INTO penfii.sessions
             (id, user_id, token_hash, expires_at,
              authenticated_at, last_reauth_at, last_reauth_method, auth_method, last_seen_at,
-             device_label)
-         VALUES ($1, $2, $3, now() + make_interval(secs => $4), now(), now(), $5, $5, now(), $6)",
+             device_label, absolute_expires_at, idle_seconds)
+         VALUES ($1, $2, $3, now() + make_interval(secs => $4), now(), now(), $5, $5, now(), $6,
+                 CASE WHEN $7::float8 IS NULL THEN NULL ELSE now() + make_interval(secs => $7) END,
+                 $8::int)",
     )
     .bind(Uuid::new_v4())
     .bind(user_id)
     .bind(hash)
-    .bind(ttl_seconds as f64)
+    .bind(lifetime.first_expiry_seconds as f64)
     .bind(method)
     .bind(device)
+    .bind(lifetime.long.map(|(absolute, _)| absolute as f64))
+    .bind(lifetime.long.map(|(_, idle)| idle as i32))
     .execute(&mut *conn)
     .await?;
     Ok(token)

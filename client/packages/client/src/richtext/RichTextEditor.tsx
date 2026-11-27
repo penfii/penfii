@@ -57,6 +57,11 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, {
   autoFocus?: boolean
   /** `@` opens a list of people from `search` (from the first `@`). Absent: no mention picking. */
   mentions?: { search: (query: string) => Promise<MentionCandidate[]> }
+  /**
+   * What sends (`onSend`): `enter` (a message: Enter sends, Shift+Enter breaks the line) or `mod-enter` (a comment: Enter
+   * breaks the line, Ctrl or ⌘ with Enter sends).
+   */
+  sendWith?: 'enter' | 'mod-enter'
 }>(function RichTextEditor({
   value,
   onChange,
@@ -67,6 +72,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, {
   onFiles,
   autoFocus = false,
   mentions,
+  sendWith = 'enter',
 }, ref) {
   const { t } = useI18n()
   const onChangeRef = useRef(onChange)
@@ -74,6 +80,8 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, {
   const baselineRef = useRef(baseline ?? null)
   const placeholderRef = useRef(placeholder ?? '')
   const onFilesRef = useRef(onFiles)
+  const sendWithRef = useRef(sendWith)
+  sendWithRef.current = sendWith
   const editorRef = useRef<ReturnType<typeof useEditor>>(null)
   const [linkOpen, setLinkOpen] = useState(false)
   const [linkHref, setLinkHref] = useState('')
@@ -183,12 +191,20 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, {
         if (event.isComposing || event.keyCode === 229) return true
         const current = editorRef.current
         if (!current) return false
+        // A comment (`mod-enter`) sends with Ctrl or ⌘ and Enter from anywhere in the text, a list and a code block included;
+        // its plain Enter is a new line, list item or code line, as a message's Enter is inside a list or a code block.
+        const commentStyle = sendWithRef.current === 'mod-enter'
+        if (commentStyle && (event.ctrlKey || event.metaKey) && onSendRef.current) {
+          event.preventDefault()
+          onSendRef.current()
+          return true
+        }
         if (current.isActive('listItem') || current.isActive('codeBlock')) return false
         if (openFence(current)) {
           event.preventDefault()
           return true
         }
-        if (!onSendRef.current) return false
+        if (commentStyle || !onSendRef.current) return false
         event.preventDefault()
         onSendRef.current()
         return true
@@ -232,6 +248,10 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, {
         return true
       },
       handleDOMEvents: {
+        // ProseMirror takes Escape for itself and prevents its default, which hides it from whatever surrounds the editor: a
+        // panel that closes on Escape, a comment being changed that is left with it. Nothing in the editor uses Escape except the
+        // list of people, so with that list shut the key is left alone and goes on to the page.
+        keydown: (_view, event) => event.key === 'Escape' && !mentionUiRef.current,
         dragover: (_view, event) => {
           if (![...(event.dataTransfer?.types ?? [])].includes('Files')) return false
           event.preventDefault()

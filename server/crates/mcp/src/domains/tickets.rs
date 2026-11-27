@@ -75,7 +75,7 @@ fn schema_comment_edit() -> Value {
     object_schema(
         json!({"ticketId": uuid_property("Ticket id."),
                "commentId": uuid_property("Comment id from ticket_comments_list."),
-               "body": text_or_doc("The new comment text or rich-text JSON (replaces the old one).")}),
+               "body": text_or_doc("The new comment text (replaces the old one).")}),
         &["ticketId", "commentId", "body"],
     )
 }
@@ -202,7 +202,7 @@ pub static OPS: &[Operation] = &[
         "ticket.comment_edit",
         "ticket_comment_edit",
         "Edit a Ticket comment",
-        "Replace the text of a comment the person wrote (or may moderate) on a Ticket they can edit. The comment keeps its place; the web app shows it as edited. Not retry-protected, but editing twice with the same body is harmless.",
+        "Replace the whole text of a comment the person wrote (or may moderate) on a Ticket they can edit; pass the body as {\"format\":\"markdown\",\"value\":\"...\"} when it has formatting. The comment keeps its place; the web app shows it as edited. Not retry-protected, but editing twice with the same body is harmless.",
         &["ticket:write"],
         RiskClass::Write,
         WorkspaceResolver::Ticket,
@@ -432,6 +432,7 @@ pub(super) async fn run(
             "ticket.comment_edit" => {
                 let ticket_id = uuid_arg(args, "ticketId")?;
                 let comment_id = uuid_arg(args, "commentId")?;
+                crate::tools::reject_markdown_argument(args, "body")?;
                 let body = rich_text(args.get("body"), "body")?
                     .ok_or_else(|| Failure::invalid("body is required"))?;
                 let (comment, change) =

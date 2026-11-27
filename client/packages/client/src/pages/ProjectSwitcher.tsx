@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import type { FavoriteItem, Project } from '@penfii/contracts'
@@ -27,14 +27,42 @@ export function useRecordProjectVisit(workspaceId: string, projectId: string, en
  */
 export function ProjectTitle({ workspaceId, projectId, name, section, projects }: { workspaceId: string; projectId: string; name: string; section: string; projects: Project[] }) {
   const participating = projects.filter(takesPart)
-  if (participating.length < 2) return <>{name}</>
-  return <ProjectSwitcher workspaceId={workspaceId} projectId={projectId} name={name} section={section} projects={projects} />
+  if (participating.length < 2) return <TitleName name={name} plain><span className="pop-label" data-fit>{name}</span></TitleName>
+  return <TitleName name={name}><ProjectSwitcher workspaceId={workspaceId} projectId={projectId} name={name} section={section} projects={projects} /></TitleName>
+}
+
+/**
+ * The Project's name on one line: it shows whole while there is room and ends in an ellipsis only when there is none (the
+ * header never grows taller, and the actions beside it keep their place). The whole name is then in a tooltip that opens on
+ * hover and on keyboard focus (the name takes focus when it is cut and is not a button already).
+ */
+function TitleName({ name, plain = false, children }: { name: string; plain?: boolean; children: ReactNode }) {
+  const box = useRef<HTMLSpanElement>(null)
+  const [cut, setCut] = useState(false)
+  useLayoutEffect(() => {
+    const root = box.current
+    if (!root) return
+    const measure = () => {
+      const fit = root.querySelector<HTMLElement>('[data-fit]')
+      setCut(fit !== null && fit.scrollWidth > fit.clientWidth + 1)
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(root)
+    return () => observer.disconnect()
+  }, [name])
+  return (
+    <span ref={box} className="project-title-name" data-full={cut ? name : undefined} tabIndex={cut && plain ? 0 : undefined}>
+      {children}
+    </span>
+  )
 }
 
 function ProjectSwitcher({ workspaceId, projectId, name, section, projects }: { workspaceId: string; projectId: string; name: string; section: string; projects: Project[] }) {
   const favorites = useQuery({ ...queries.favorites(workspaceId), enabled: workspaceId.length > 0 })
   return (
-    <Popover label={name} className="project-switch-trigger" wide badge={<span aria-hidden="true" className="project-switch-caret"> ⌄</span>}>
+    <Popover label={name} className="project-switch-trigger" wide truncate badge={<span aria-hidden="true" className="project-switch-caret"> ⌄</span>}>
       {(close) => (
         <SwitcherPanel workspaceId={workspaceId} projectId={projectId} section={section} projects={projects} favorites={favorites.data ?? []} onClose={close} />
       )}

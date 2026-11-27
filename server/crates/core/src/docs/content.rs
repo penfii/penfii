@@ -377,7 +377,9 @@ fn styles_of(value: Option<&Value>) -> Value {
     Value::Object(out)
 }
 
-fn safe_href(href: &str) -> bool {
+/// Whether a Doc link may point at `href`. Public so converters that produce Doc content apply the
+/// same rule as `sanitize`.
+pub fn safe_href(href: &str) -> bool {
     let href = href.trim();
     if href.is_empty() || href.len() > 2048 || href.chars().any(char::is_control) {
         return false;

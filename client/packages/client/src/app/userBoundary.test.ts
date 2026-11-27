@@ -61,6 +61,24 @@ describe('the boundary between two people on one browser', () => {
     expect(lastUserId()).toBe('u-b')
   })
 
+  it('keeps what the sign-in page remembers across signing out and across people (FEA-181)', () => {
+    localStorage.setItem('penfii.login.email', 'kept@example.test')
+    localStorage.setItem('penfii.login.method', 'google')
+    localStorage.setItem('penfii.login.keepSignedIn', '1')
+    sessionStorage.setItem('penfii.login.pending', '{"provider":"google","at":1}')
+    localStorage.setItem('penfii.draft.x', 'a person\'s draft')
+    adoptUser('u-a')
+    endUserSession(new QueryClient(), { forget: true })
+    expect(localStorage.getItem('penfii.login.email')).toBe('kept@example.test')
+    expect(localStorage.getItem('penfii.login.method')).toBe('google')
+    expect(localStorage.getItem('penfii.login.keepSignedIn')).toBe('1')
+    expect(sessionStorage.getItem('penfii.login.pending')).not.toBeNull()
+    expect(localStorage.getItem('penfii.draft.x')).toBeNull()
+    adoptUser('u-a')
+    adoptUser('u-b')
+    expect(localStorage.getItem('penfii.login.email')).toBe('kept@example.test')
+  })
+
   it('purges every key that is not a device setting', () => {
     localStorage.setItem('penfii.work.view.p', 'v')
     localStorage.setItem('penfii.contextNavWidth', '300')

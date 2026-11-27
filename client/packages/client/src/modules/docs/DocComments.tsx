@@ -1,14 +1,15 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { DocComment } from '@penfii/contracts'
+import type { DocComment, RichTextDoc } from '@penfii/contracts'
 import { api } from '../../api'
 import { Avatar, Button, useConfirm } from '../../design/ui'
 import { formatMessageTime } from '../../format'
 import { useI18n } from '../../i18n/I18nProvider'
 import { queryKeys } from '../../queryKeys'
 import { queries } from '../../queries'
-import { RichTextView, plainText } from '../../richtext'
-import { commentToRichText, type PickedMention } from './commentModel'
+import { EMPTY_RICH_TEXT, RichTextEditor, RichTextView, isBlankDoc, plainText, type MentionCandidate, type RichTextEditorHandle } from '../../richtext'
+import { CommentEditBox, focusEditButton } from '../comments/CommentEditBox'
+import { editableBody, withoutBlankEdges } from '../comments/commentBody'
 import { AttachButton } from '../files/AttachButton'
 import { AttachmentList, UploadCards } from '../files/AttachmentList'
 import { FileDropZone } from '../files/FileDropZone'
@@ -40,41 +41,42 @@ export function DocComments({
   const comments = useQuery(queries.docComments(docId))
   const { confirm, dialog: confirmDialog } = useConfirm()
   const [removing, setRemoving] = useState<string | null>(null)
-  const [draft, setDraft] = useState('')
-  const [picked, setPicked] = useState<PickedMention[]>([])
+  const [draft, setDraft] = useState<RichTextDoc>(EMPTY_RICH_TEXT)
   const [failed, setFailed] = useState(false)
   const [posting, setPosting] = useState(false)
   const { uploads, readyIds, failed: uploadFailed, blocking, addFiles, retry, remove, settle } = useFileUploads({ workspaceId, busy: posting })
+  const blank = isBlankDoc(draft)
   const post = useMutation({
-    mutationFn: (text: string) => api.createDocComment(docId, commentToRichText(text, picked), readyIds),
+    // A comment of attachments alone has no text: one empty paragraph, as before.
+    mutationFn: () => api.createDocComment(docId, blank ? { type: 'doc', content: [{ type: 'paragraph', content: [] }] } : withoutBlankEdges(draft), readyIds),
     onSuccess: async () => {
-      setDraft('')
-      setPicked([])
+      setDraft(EMPTY_RICH_TEXT)
       settle()
       await refresh()
     },
+    // The text stays in the box for another try.
     onError: () => setFailed(true),
   })
   const busy = post.isPending
   useEffect(() => setPosting(busy), [busy])
-  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
-  const [suggest, setSuggest] = useState<{ query: string; items: Array<{ id: string; name: string }> } | null>(null)
-  const areaRef = useRef<HTMLTextAreaElement>(null)
+  const [editing, setEditing] = useState<{ id: string; initial: RichTextDoc } | null>(null)
+  const editorRef = useRef<RichTextEditorHandle>(null)
+  const listRef = useRef<HTMLOListElement>(null)
   useEffect(() => {
     if (!autoFocus) return
-    areaRef.current?.focus()
+    if (editorRef.current?.focus()) return
+    // The editor draws a moment after this effect on the first draw.
+    const frame = window.requestAnimationFrame(() => editorRef.current?.focus())
+    return () => window.cancelAnimationFrame(frame)
   }, [autoFocus, docId])
-  const caretAfter = useRef<number | null>(null)
-  // The caret goes after a picked name in the same frame as the text that holds it, so quick typing
-  // right after the pick lands in the right place.
-  useLayoutEffect(() => {
-    const area = areaRef.current
-    if (area && caretAfter.current !== null) {
-      area.focus()
-      area.setSelectionRange(caretAfter.current, caretAfter.current)
-      caretAfter.current = null
-    }
-  }, [draft])
+  // `@` lists the people of the Workspace by name; what is picked is stored as the person's id, and the server decides who is told.
+  const searchMentions = useCallback(
+    async (query: string): Promise<MentionCandidate[]> => {
+      const found = await api.searchDirectory(workspaceId, { q: query, types: 'person', limit: 8 })
+      return found.results.flatMap((hit) => (hit.type === 'person' && hit.person ? [{ id: hit.person.id, name: hit.person.displayName, member: true }] : []))
+    },
+    [workspaceId],
+  )
 
   const mentionIds = Array.from(new Set((comments.data?.items ?? []).flatMap((c) => mentionedIds(c.body)))).sort()
   const names = useQuery({
@@ -94,51 +96,27 @@ export function DocComments({
   }
 
   function submit() {
-    const text = draft.trim()
-    if ((!text && readyIds.length === 0) || busy || blocking) return
+    if ((blank && readyIds.length === 0) || busy || blocking) return
     setFailed(false)
-    post.mutate(text)
+    post.mutate()
   }
 
-  async function saveEdit() {
-    if (!editing || !editing.text.trim()) return
+  /** Back from the editor: the keyboard returns to the comment's Edit link, where it was. */
+  function finishEditing(commentId: string) {
+    setEditing(null)
+    focusEditButton(listRef.current, commentId)
+  }
+
+  async function saveEdit(commentId: string, body: RichTextDoc) {
+    setFailed(false)
     try {
-      await api.editDocComment(docId, editing.id, commentToRichText(editing.text.trim(), []))
-      setEditing(null)
+      await api.editDocComment(docId, commentId, body)
+      finishEditing(commentId)
       await refresh()
     } catch {
+      // The box stays, with what was typed in it.
       setFailed(true)
     }
-  }
-
-  async function lookup(text: string, caret: number) {
-    const before = text.slice(0, caret)
-    const match = /(?:^|\s)@([^\s@]{0,20})$/.exec(before)
-    if (!match) {
-      setSuggest(null)
-      return
-    }
-    const query = match[1] ?? ''
-    try {
-      const found = await api.searchDirectory(workspaceId, { q: query, types: 'person', limit: 6 })
-      const items = found.results.flatMap((hit) => (hit.type === 'person' && hit.person ? [{ id: hit.person.id, name: hit.person.displayName }] : []))
-      setSuggest({ query, items })
-    } catch {
-      setSuggest(null)
-    }
-  }
-
-  function pick(item: { id: string; name: string }) {
-    const area = areaRef.current
-    if (!area || !suggest) return
-    const caret = area.selectionStart
-    const before = draft.slice(0, caret)
-    const start = before.lastIndexOf('@')
-    const next = `${draft.slice(0, start)}@${item.name} ${draft.slice(caret)}`
-    setDraft(next)
-    setPicked((current) => (current.some((p) => p.userId === item.id) ? current : [...current, { userId: item.id, name: item.name }]))
-    setSuggest(null)
-    caretAfter.current = start + item.name.length + 2
   }
 
   async function removeComment(commentId: string) {
@@ -165,7 +143,7 @@ export function DocComments({
       {comments.isError ? <p className="board-error" role="alert">{t('docs.comments.loadError')}</p> : null}
       {comments.isSuccess && comments.data.items.length === 0 ? <p className="hint">{t('docs.comments.empty')}</p> : null}
       {comments.isSuccess ? (
-        <ol className="comment-list">
+        <ol className="comment-list" ref={listRef}>
           {comments.data.items.map((comment: DocComment) => (
             <li key={comment.id} className="comment-item">
               <Avatar name={comment.authorName} />
@@ -176,13 +154,15 @@ export function DocComments({
                   {comment.editedAt ? <small> · {t('docs.comments.edited')}</small> : null}
                 </p>
                 {editing?.id === comment.id ? (
-                  <>
-                    <textarea rows={3} value={editing.text} aria-label={t('docs.comments.edit')} onChange={(event) => setEditing({ id: comment.id, text: event.target.value })} />
-                    <div className="dialog-actions">
-                      <Button variant="ghost" onClick={() => setEditing(null)}>{t('docs.cancel')}</Button>
-                      <Button onClick={() => void saveEdit()}>{t('docs.comments.save')}</Button>
-                    </div>
-                  </>
+                  <CommentEditBox
+                    initial={editing.initial}
+                    label={t('docs.comments.edit')}
+                    saveLabel={t('docs.comments.save')}
+                    cancelLabel={t('docs.cancel')}
+                    onSave={(body) => saveEdit(comment.id, body)}
+                    onCancel={() => finishEditing(comment.id)}
+                    mentions={{ search: searchMentions }}
+                  />
                 ) : (
                   <div className="comment-text"><RichTextView doc={comment.body} names={names.data} /></div>
                 )}
@@ -190,7 +170,7 @@ export function DocComments({
                 {editing?.id !== comment.id && (comment.authorId === userId || canManage) ? (
                   <p className="comment-actions">
                     {comment.authorId === userId ? (
-                      <button type="button" className="link-button" onClick={() => setEditing({ id: comment.id, text: plainText(comment.body) })}>{t('docs.comments.edit')}</button>
+                      <button type="button" className="link-button" data-edit-comment={comment.id} onClick={() => setEditing({ id: comment.id, initial: editableBody(comment.body, (body) => plainText(body as RichTextDoc)) })}>{t('docs.comments.edit')}</button>
                     ) : null}
                     <button
                       type="button"
@@ -215,42 +195,23 @@ export function DocComments({
         }}
       >
         <FileDropZone onFiles={addFiles} disabled={busy} className="comment-surface">
-        <div className="doc-mention-box">
-          <textarea
-            ref={areaRef}
-            rows={3}
-            aria-label={t('docs.comments.placeholder')}
-            placeholder={t('docs.comments.placeholder')}
-            value={draft}
-            onChange={(event) => {
-              setDraft(event.target.value)
-              void lookup(event.target.value, event.target.selectionStart)
-            }}
-            onKeyDown={(event) => {
-              if (event.nativeEvent.isComposing) return
-              if (event.key === 'Escape') setSuggest(null)
-              if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-                event.preventDefault()
-                submit()
-              }
-            }}
-          />
-          {suggest && suggest.items.length > 0 ? (
-            <ul className="doc-mention-list" role="listbox" aria-label={t('docs.comments.mention')}>
-              {suggest.items.map((item) => (
-                <li key={item.id} role="option" aria-selected={false}>
-                  <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => pick(item)}>{item.name}</button>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
+        <RichTextEditor
+          ref={editorRef}
+          value={draft}
+          onChange={setDraft}
+          onSend={submit}
+          sendWith="mod-enter"
+          onFiles={addFiles}
+          mentions={{ search: searchMentions }}
+          label={t('docs.comments.placeholder')}
+          placeholder={t('docs.comments.placeholder')}
+        />
         <UploadCards items={uploads} busy={busy} onRetry={retry} onRemove={remove} />
         {uploadFailed ? <p className="board-error" role="alert">{t('composer.failedBlocks')}</p> : null}
         {failed ? <p className="board-error" role="alert">{t('docs.comments.error')}</p> : null}
         <div className="dialog-actions">
           <AttachButton onFiles={addFiles} disabled={busy} />
-          <Button type="submit" disabled={(!draft.trim() && readyIds.length === 0) || busy || blocking}>{t('docs.comments.submit')}</Button>
+          <Button type="submit" disabled={(blank && readyIds.length === 0) || busy || blocking}>{t('docs.comments.submit')}</Button>
         </div>
         </FileDropZone>
       </form>

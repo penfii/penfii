@@ -3247,6 +3247,22 @@ export interface paths {
         patch: operations["editTicketComment"];
         trace?: never;
     };
+    "/v1/ws/docs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["docRealtime"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/ws/projects/{id}": {
         parameters: {
             query?: never;
@@ -4433,7 +4449,7 @@ export interface paths {
         delete: operations["deleteDoc"];
         options?: never;
         head?: never;
-        /** Rename (edit right, title must not be empty) or set the Project (manage right). No revision precondition. */
+        /** Rename (edit right, title must not be empty), set the Project (manage right) or set fullWidth, the page's layout (edit right). No revision precondition; fullWidth is a setting of the page and changes neither revisionNo nor the content. */
         patch: operations["updateDoc"];
         trace?: never;
     };
@@ -5009,6 +5025,10 @@ export interface paths {
                                 lastReauthAt?: string | null;
                                 /** Format: date-time */
                                 expiresAt?: string;
+                                /** @description A long session ("keep me signed in"): expiresAt is the earlier of its inactivity end and absoluteExpiresAt. */
+                                longLived?: boolean;
+                                /** Format: date-time */
+                                absoluteExpiresAt?: string | null;
                             }[];
                             reauthMethods?: string[];
                             reauthWindowSeconds?: number;
@@ -5250,6 +5270,12 @@ export interface paths {
                                 displayName?: string;
                                 kind?: string;
                             }[];
+                            /** @description Whether the instance offers a long session ("keep me signed in") and its limits. */
+                            longSession?: {
+                                enabled?: boolean;
+                                maxAgeSeconds?: number;
+                                idleSeconds?: number;
+                            };
                         };
                     };
                 };
@@ -5292,6 +5318,8 @@ export interface paths {
                         invitationToken?: string;
                         /** @description relative path on this instance */
                         returnTo?: string;
+                        /** @description For intent login only: ask for a long session; the choice is kept with the attempt and applied when the callback signs in. */
+                        keepSignedIn?: boolean;
                     };
                 };
             };
@@ -7904,6 +7932,8 @@ export interface components {
             password: string;
             /** @description The authenticator or recovery code, for an account with two-step verification on. */
             code?: string | null;
+            /** @description Ask for a long session ("keep me signed in"): it ends at the latest PENFII_LONG_SESSION_MAX_AGE_SECONDS after sign-in and after PENFII_LONG_SESSION_IDLE_SECONDS without activity. Absent is false. A server that has the feature off issues an ordinary session. */
+            keepSignedIn?: boolean;
         };
         CreateWorkspace: {
             name: string;
@@ -9665,6 +9695,27 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Error"];
                 };
+            };
+            503: components["responses"]["DbUnavailable"];
+        };
+    };
+    docRealtime: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Doc page change WebSocket */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             503: components["responses"]["DbUnavailable"];
         };
@@ -13598,6 +13649,8 @@ export interface operations {
                     title?: string;
                     /** Format: uuid */
                     projectId?: string | null;
+                    /** @description Show the page across the whole space between the panels (true) or in the reading column (false, the default). The same for every reader; edit right required. */
+                    fullWidth?: boolean;
                 };
             };
         };

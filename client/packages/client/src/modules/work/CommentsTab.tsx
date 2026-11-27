@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import type { RichTextDoc } from '@penfii/contracts'
 import { api } from '../../api'
 import { Avatar, Button, useConfirm } from '../../design/ui'
 import { AuthorCard } from '../people/AuthorCard'
@@ -12,7 +13,10 @@ import { AttachButton } from '../files/AttachButton'
 import { AttachmentList, UploadCards } from '../files/AttachmentList'
 import { FileDropZone } from '../files/FileDropZone'
 import { useFileUploads } from '../files/useFileUploads'
-import { descriptionText, textToDescription } from './ticketModel'
+import { EMPTY_RICH_TEXT, isBlankDoc, RichTextEditor, RichTextView, type RichTextEditorHandle } from '../../richtext'
+import { CommentEditBox, focusEditButton } from '../comments/CommentEditBox'
+import { editableBody, showsRich, withoutBlankEdges } from '../comments/commentBody'
+import { descriptionText } from './ticketModel'
 
 const INITIAL_VISIBLE = 5
 const SEEN_PREFIX = 'penfii.ticketSeen.'
@@ -44,7 +48,8 @@ export function CommentList({ ticketId, workspaceId, onView }: { ticketId: strin
   const comments = useQuery(queries.ticketComments(ticketId))
   const session = useSession()
   const meId = session.data?.id
-  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
+  const [editing, setEditing] = useState<{ id: string; initial: RichTextDoc } | null>(null)
+  const listRef = useRef<HTMLDivElement>(null)
   const [actionFailed, setActionFailed] = useState(false)
   const [showAll, setShowAll] = useState(false)
   const { confirm, dialog: confirmDialog } = useConfirm()
@@ -76,15 +81,20 @@ export function CommentList({ ticketId, workspaceId, onView }: { ticketId: strin
     ])
   }
 
-  async function saveEdit() {
-    const text = editing?.text.trim()
-    if (!editing || !text) return
+  /** Back from the editor: the keyboard returns to the comment's Edit link, where it was. */
+  function finishEditing(commentId: string) {
+    setEditing(null)
+    focusEditButton(listRef.current, commentId)
+  }
+
+  async function saveEdit(commentId: string, body: RichTextDoc) {
     setActionFailed(false)
     try {
-      await api.editTicketComment(ticketId, editing.id, textToDescription(text))
-      setEditing(null)
+      await api.editTicketComment(ticketId, commentId, body)
+      finishEditing(commentId)
       await refresh()
     } catch {
+      // The box stays, with what was typed in it.
       setActionFailed(true)
     }
   }
@@ -102,7 +112,7 @@ export function CommentList({ ticketId, workspaceId, onView }: { ticketId: strin
   }
 
   return (
-    <div className="comments">
+    <div className="comments" ref={listRef}>
       {comments.isPending ? <p className="hint" role="status">{t('loading')}</p> : null}
       {comments.isError ? <p className="hint" role="alert">{t('work.comments.loadError')}</p> : null}
       {comments.isSuccess && all.length === 0 ? <p className="hint">{t('work.comments.empty')}</p> : null}
@@ -127,21 +137,23 @@ export function CommentList({ ticketId, workspaceId, onView }: { ticketId: strin
                   {comment.editedAt ? <small> · {t('work.comments.edited')}</small> : null}
                 </div>
                 {editing?.id === comment.id ? (
-                  <>
-                    <textarea rows={3} value={editing.text} aria-label={t('work.comments.edit')} onChange={(event) => setEditing({ id: comment.id, text: event.target.value })} />
-                    <div className="dialog-actions">
-                      <Button variant="ghost" onClick={() => setEditing(null)}>{t('work.comments.cancel')}</Button>
-                      <Button disabled={!editing.text.trim()} onClick={() => void saveEdit()}>{t('work.comments.save')}</Button>
-                    </div>
-                  </>
+                  <CommentEditBox
+                    initial={editing.initial}
+                    label={t('work.comments.edit')}
+                    saveLabel={t('work.comments.save')}
+                    cancelLabel={t('work.comments.cancel')}
+                    onSave={(body) => saveEdit(comment.id, body)}
+                    onCancel={() => finishEditing(comment.id)}
+                  />
                 ) : (
-                  <p className="comment-text">{descriptionText(comment.body)}</p>
+                  // A comment written with formatting (here or by MCP) is shown with it; a plain one keeps its line breaks as before.
+                  showsRich(comment.body) ? <div className="comment-text"><RichTextView doc={comment.body} /></div> : <p className="comment-text">{descriptionText(comment.body)}</p>
                 )}
                 <AttachmentList items={comment.attachments} />
                 {editing?.id !== comment.id && (comment.canEdit || comment.canDelete) ? (
                   <p className="comment-actions">
                     {comment.canEdit ? (
-                      <button type="button" className="link-button" onClick={() => setEditing({ id: comment.id, text: descriptionText(comment.body) })}>{t('work.comments.edit')}</button>
+                      <button type="button" className="link-button" data-edit-comment={comment.id} onClick={() => setEditing({ id: comment.id, initial: editableBody(comment.body, descriptionText) })}>{t('work.comments.edit')}</button>
                     ) : null}
                     {comment.canDelete ? (
                       <button type="button" className="link-button" onClick={() => void removeComment(comment.id)}>{t('work.comments.delete')}</button>
@@ -164,39 +176,37 @@ export function CommentList({ ticketId, workspaceId, onView }: { ticketId: strin
 export function CommentComposer({ ticketId, workspaceId }: { ticketId: string; workspaceId: string }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
-  const [draft, setDraft] = useState('')
+  const [draft, setDraft] = useState<RichTextDoc>(EMPTY_RICH_TEXT)
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState(false)
   const { uploads, readyIds, failed: uploadFailed, blocking, addFiles, retry, remove, settle } = useFileUploads({ workspaceId, busy })
-  const areaRef = useRef<HTMLTextAreaElement>(null)
+  const editorRef = useRef<RichTextEditorHandle>(null)
   useEffect(() => {
-    areaRef.current?.focus()
+    if (editorRef.current?.focus()) return
+    // The editor draws a moment after this effect on the first draw.
+    const frame = window.requestAnimationFrame(() => editorRef.current?.focus())
+    return () => window.cancelAnimationFrame(frame)
   }, [ticketId])
+  const blank = isBlankDoc(draft)
 
   async function submit() {
-    const text = draft.trim()
-    if ((!text && readyIds.length === 0) || busy || blocking) return
+    if ((blank && readyIds.length === 0) || busy || blocking) return
     setBusy(true)
     setFailed(false)
     try {
-      await api.createTicketComment(ticketId, textToDescription(text), readyIds)
-      setDraft('')
+      // A comment of attachments alone has no text: an empty document, as before.
+      await api.createTicketComment(ticketId, blank ? { type: 'doc', content: [] } : withoutBlankEdges(draft), readyIds)
+      setDraft(EMPTY_RICH_TEXT)
       settle()
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.ticketComments(ticketId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.ticketActivity(ticketId) }),
       ])
     } catch {
+      // The text stays in the box for another try.
       setFailed(true)
     } finally {
       setBusy(false)
-    }
-  }
-
-  function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing) {
-      event.preventDefault()
-      void submit()
     }
   }
 
@@ -209,21 +219,22 @@ export function CommentComposer({ ticketId, workspaceId }: { ticketId: string; w
       }}
     >
       <FileDropZone onFiles={addFiles} disabled={busy} className="comment-surface">
-        <textarea
-          ref={areaRef}
-          rows={2}
-          aria-label={t('work.comments.placeholder')}
-          placeholder={t('work.comments.placeholder')}
+        <RichTextEditor
+          ref={editorRef}
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={onKeyDown}
+          onChange={setDraft}
+          onSend={() => void submit()}
+          sendWith="mod-enter"
+          onFiles={addFiles}
+          label={t('work.comments.placeholder')}
+          placeholder={t('work.comments.placeholder')}
         />
         <UploadCards items={uploads} busy={busy} onRetry={retry} onRemove={remove} />
         {uploadFailed ? <p className="board-error" role="alert">{t('composer.failedBlocks')}</p> : null}
         {failed ? <p className="board-error" role="alert">{t('work.comments.error')}</p> : null}
         <div className="dialog-actions">
           <AttachButton onFiles={addFiles} disabled={busy} />
-          <Button type="submit" disabled={(!draft.trim() && readyIds.length === 0) || busy || blocking}>{t('work.comments.submit')}</Button>
+          <Button type="submit" disabled={(blank && readyIds.length === 0) || busy || blocking}>{t('work.comments.submit')}</Button>
         </div>
       </FileDropZone>
     </form>

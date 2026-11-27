@@ -168,7 +168,7 @@ fn schema_message_send() -> Value {
     object_schema(
         json!({
             "conversationId": conversation_id(),
-            "body": text_or_doc("Message text or Penfii rich-text JSON (mentions use the rich-text mention node). May be omitted when fileIds is given."),
+            "body": text_or_doc("Message text (mentions need format richtext with the mention node). May be omitted when fileIds is given."),
             "threadRootId": message_id("Reply inside the thread of this root message (a message that is not itself a reply)."),
             "replyToId": message_id("Message this one answers (quoted)."),
             "fileIds": {"type": "array", "items": {"type": "string", "format": "uuid"},
@@ -184,7 +184,7 @@ fn schema_message_edit() -> Value {
         json!({
             "messageId": message_id("Message id (own message)."),
             "expectedVersion": {"type": "integer", "description": "version from message_list / thread_messages_list; a stale value is refused (version_conflict)."},
-            "body": text_or_doc("New message text or rich-text JSON; replaces the body."),
+            "body": text_or_doc("New message text; replaces the whole body."),
             "idempotencyKey": idempotency_key_property()
         }),
         &["messageId", "expectedVersion", "body"],
@@ -449,7 +449,7 @@ pub static OPS: &[Operation] = &[
         "message.send",
         "message_send",
         "Send a message",
-        "Post a message in a channel or DM as the connected person (not as a bot); the MCP client is recorded in the audit trail. Use threadRootId to reply in a thread. Pass the same idempotencyKey to retry safely; the same key returns the first message instead of posting twice. Files must already be uploaded.",
+        "Post a message in a channel or DM as the connected person (not as a bot); the MCP client is recorded in the audit trail. Write the body as {\"format\":\"markdown\",\"value\":\"...\"} when it has formatting. Use threadRootId to reply in a thread. Pass the same idempotencyKey to retry safely; the same key returns the first message instead of posting twice. Files must already be uploaded.",
         &["conversation:write"],
         RiskClass::Write,
         resolve::CONVERSATION,
@@ -461,7 +461,7 @@ pub static OPS: &[Operation] = &[
         "message.edit",
         "message_edit",
         "Edit a message",
-        "Replace the body of the connected person's own message. Needs the current version; a stale version is refused. The earlier body stays in message_history.",
+        "Replace the whole body of the connected person's own message (body as {\"format\":\"markdown\",\"value\":\"...\"} when it has formatting). Needs the current version; a stale version is refused. The earlier body stays in message_history.",
         &["conversation:write"],
         RiskClass::Write,
         resolve::MESSAGE,
@@ -569,6 +569,7 @@ fn raw_of(args: &Value) -> Value {
 }
 
 fn required_body(args: &Value) -> Result<Value, Failure> {
+    crate::tools::reject_markdown_argument(args, "body")?;
     rich_text(args.get("body"), "body")?.ok_or_else(|| Failure::invalid("body is required"))
 }
 
@@ -811,6 +812,7 @@ async fn execute(
                     .collect::<Result<Vec<_>, _>>()?,
                 Some(_) => return Err(Failure::invalid("fileIds must be a list of UUIDs")),
             };
+            crate::tools::reject_markdown_argument(args, "body")?;
             let body = match rich_text(args.get("body"), "body")? {
                 Some(body) => body,
                 None if !file_ids.is_empty() => {

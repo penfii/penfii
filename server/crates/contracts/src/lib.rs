@@ -721,6 +721,9 @@ pub struct LoginRequest {
     /// The authenticator or recovery code, for an account with two-step verification on.
     #[serde(default)]
     pub code: Option<String>,
+    /// Ask for a long session ("keep me signed in"). Absent is `false`.
+    #[serde(default)]
+    pub keep_signed_in: bool,
 }
 
 #[derive(Debug, Deserialize)]

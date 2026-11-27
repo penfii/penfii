@@ -37,7 +37,8 @@ export const queries = {
   oauthGrants: () => queryOptions({ queryKey: queryKeys.oauthGrants, queryFn: ({ signal }) => withSignal(signal, () => api.oauthGrants()), retry: false }),
   oauthRequest: (id: string) => queryOptions({ queryKey: queryKeys.oauthRequest(id), queryFn: ({ signal }) => withSignal(signal, () => api.consentRequest(id)), retry: false }),
   serverInfo: () => queryOptions({ queryKey: queryKeys.serverInfo, queryFn: ({ signal }) => withSignal(signal, () => api.serverInfo()) }),
-  authProviders: () => queryOptions({ queryKey: queryKeys.authProviders, queryFn: ({ signal }) => withSignal(signal, () => api.authProviders()), retry: false }),
+  /** The sign-in providers and whether "keep me signed in" is offered (one public request for the sign-in page). */
+  authOptions: () => queryOptions({ queryKey: queryKeys.authProviders, queryFn: ({ signal }) => withSignal(signal, () => api.authOptions()), retry: false }),
   invitationPreview: (token: string) =>
     queryOptions({
       queryKey: queryKeys.invitationPreview(token),

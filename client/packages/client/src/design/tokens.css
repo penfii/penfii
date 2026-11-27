@@ -32,6 +32,7 @@
   --line: 1.5;
   --topbar: 52px;
   --rail: 76px;
+  --nav-edge: 24px;
   --nav: 248px;
   --focus: 0 0 0 3px rgba(226, 179, 64, 0.45);
 }

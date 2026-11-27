@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
-use crate::extract::{self, CurrentUser};
+use crate::extract::{self, SocketUser};
 use crate::origin::AllowedOrigin;
 
 use axum::Router;
@@ -40,7 +40,7 @@ pub(crate) async fn doc_collab(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
     _: AllowedOrigin,
-    CurrentUser(user): CurrentUser,
+    SocketUser(user): SocketUser,
 ) -> Result<Response, ApiError> {
     if !CollabHub::may_open(&state.pool, user.id, page).await? {
         return Err(CoreError::NotFound.into());
@@ -109,11 +109,21 @@ async fn pump(
     let mut session_check = tokio::time::interval(ttl.max(Duration::from_secs(5)));
     session_check.tick().await;
     let mut last_heard = tokio::time::Instant::now();
+    // Opening the socket, its pings, the initial sync and cursor (awareness) messages are the editor's own traffic. Only a
+    // change to the document is the person working: it counts as activity, at most once a minute like any request.
+    let mut last_activity: Option<tokio::time::Instant> = None;
     loop {
         tokio::select! {
             incoming = stream.next() => match incoming {
                 Some(Ok(Message::Binary(data))) => {
                     last_heard = tokio::time::Instant::now();
+                    if is_document_update(&data)
+                        && last_activity.is_none_or(|at| at.elapsed() >= Duration::from_secs(60))
+                    {
+                        last_activity = Some(last_heard);
+                        // A session that has just ended is refused here; the session check closes the socket.
+                        let _ = identity::authenticate(&pool, &token).await;
+                    }
                     conn.frame(data.to_vec());
                 }
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
@@ -137,7 +147,7 @@ async fn pump(
                 if sink.send(Message::Ping(Vec::new().into())).await.is_err() { break; }
             }
             _ = session_check.tick() => {
-                if identity::authenticate(&pool, &token).await.is_err() {
+                if identity::session_is_live(&pool, &token).await.is_err() {
                     let _ = sink.send(Message::Close(Some(CloseFrame { code: close::SESSION, reason: "session ended".into() }))).await;
                     break;
                 }
@@ -145,4 +155,10 @@ async fn pump(
         }
     }
     // Dropping `conn` leaves the room.
+}
+
+/// Whether a frame from the browser is a y-protocols sync `Update` (message type 0, sync type 2): a change the person
+/// made to the document. Sync step 1 and 2 (the exchange when a socket opens) and awareness are not.
+fn is_document_update(frame: &[u8]) -> bool {
+    matches!(frame, [0, 2, ..])
 }

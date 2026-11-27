@@ -497,7 +497,7 @@ test('ticket: archived by the Project admin while others have it open and one is
 async function editDescription(actor: Actor, text: string) {
   const panel = ticketPanel(actor.page)
   await panel.getByRole('button', { name: 'Edit description' }).click()
-  const editor = panel.locator('[contenteditable="true"]').first()
+  const editor = panel.locator('.ticket-description-blocknote [contenteditable="true"]').first()
   await editor.click()
   await actor.page.keyboard.type(text)
 }
@@ -527,7 +527,7 @@ test('ticket description: two people save their edits at the same moment; the la
   expect(saved).not.toContain(texts[loserName])
   await loser.act('be told the save was refused and still have the draft', async () => {
     await expect(loser.page.getByText(/A newer change was saved first|Someone else changed this ticket first/).first()).toBeVisible()
-    await expect(ticketPanel(loser.page).locator('[contenteditable="true"]').first()).toContainText(texts[loserName])
+    await expect(ticketPanel(loser.page).locator('.ticket-description-blocknote [contenteditable="true"]').first()).toContainText(texts[loserName])
   })
   const viewer = ticketPanel(member2.page)
   const live = await showsLive(member2, 'the saved description', () => expect(viewer.getByText(texts[winner])).toBeVisible({ timeout: 8_000 }))

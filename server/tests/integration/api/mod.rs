@@ -4,6 +4,7 @@
 mod access;
 mod board_realtime;
 mod collab;
+mod doc_realtime;
 mod docs;
 mod estimates;
 mod events;

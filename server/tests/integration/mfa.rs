@@ -850,3 +850,56 @@ async fn no_other_password_path_signs_in_or_skips_the_code(pool: PgPool) {
         StatusCode::UNAUTHORIZED
     );
 }
+
+/// FEA-182: a long session is issued only after the whole sign-in, second factor included, and it
+/// is not a trusted device: the next sign-in asks for a code again.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_long_session_waits_for_the_second_factor_and_does_not_skip_it_later(pool: PgPool) {
+    let (env, mina) = env(pool).await;
+    let (secret, _) = turn_on(&env, &mina).await;
+    clear_counters(&env).await;
+    let ask = |code: Option<String>| {
+        let mut body =
+            json!({"email": mina.email, "password": common::MEMBER_PASSWORD, "keepSignedIn": true});
+        if let Some(code) = code {
+            body["code"] = json!(code);
+        }
+        call(&env.app, "POST", "/v1/session/login", None, Some(body))
+    };
+    let sessions = |env: &common::Env| {
+        let pool = env.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM penfii.sessions WHERE absolute_expires_at IS NOT NULL",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    // The password alone is refused, and nothing is issued although a long session was asked for.
+    let refused = ask(None).await;
+    assert_eq!(refused.body["code"], "mfa_required", "{}", refused.body);
+    assert!(refused.header("set-cookie").is_none());
+    assert_eq!(sessions(&env).await, 0);
+    // A wrong code is refused too.
+    assert_eq!(
+        ask(Some("000000".into())).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(sessions(&env).await, 0);
+    // The right code gives the long session, with the cookie of its absolute lifetime.
+    let accepted = ask(Some(totp_code(&secret, 1))).await;
+    assert_eq!(accepted.status, StatusCode::OK, "{}", accepted.body);
+    assert!(
+        accepted
+            .header("set-cookie")
+            .unwrap()
+            .contains("Max-Age=2592000")
+    );
+    assert_eq!(sessions(&env).await, 1);
+    // Not a trusted device: the same password asks for a code again.
+    let again = ask(None).await;
+    assert_eq!(again.body["code"], "mfa_required");
+    assert_eq!(sessions(&env).await, 1);
+}

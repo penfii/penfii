@@ -3,6 +3,7 @@ import { request as playwrightRequest, type APIRequestContext, type Browser, typ
 import { expect, test } from '../support/test'
 import { accountA, PASSWORD } from '../support/accounts'
 import { apiAs, logIn, type Api } from '../support/api'
+import { projectSocketReady } from '../support/multiUser'
 
 // Flows the other specs leave out, written for the v0.2.1 release check: invitations and password reset by e-mail,
 // a Ticket's archive, trash, restore and purge, recovering a private channel nobody manages, the Web Push switch, the
@@ -204,7 +205,14 @@ test.describe('a Ticket kept, binned and brought back', () => {
     const ticket = await api.createTicket(project.id, `Kept and binned ${stamp()}`)
     await logIn(page, accountA.email)
     const work = `/w/${workspaceId}/projects/${project.id}/work`
-    await page.goto(`${work}?panel=ticket:${ticket.id}`)
+    // The Project socket's first `project.ready` reads the open Ticket again. A trash sent while that read is on its way makes
+    // the read answer 404 (the Ticket is gone by then, as for a trash by somebody else), so each visit waits for it first.
+    const openPanel = async () => {
+      const ready = projectSocketReady(page)
+      await page.goto(`${work}?panel=ticket:${ticket.id}`)
+      await ready
+    }
+    await openPanel()
     await expect(page.getByRole('textbox', { name: 'Title' })).toHaveValue(/Kept and binned/)
 
     await page.getByRole('button', { name: 'Archive', exact: true }).click()
@@ -245,7 +253,7 @@ test.describe('a Ticket kept, binned and brought back', () => {
     await expect(page.getByRole('button', { name: `Open ${ticket.key}` })).toBeVisible()
 
     // Into the trash again, then gone for good.
-    await page.goto(`${work}?panel=ticket:${ticket.id}`)
+    await openPanel()
     await page.getByRole('button', { name: 'Move to trash' }).click()
     await page.getByRole('alertdialog').or(page.getByRole('dialog').filter({ hasText: 'Move to trash' })).last().getByRole('button', { name: 'Move to trash' }).click()
     await page.goto(`/w/${workspaceId}/projects/${project.id}/settings`)

@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
-use crate::extract::{self, Actor};
+use crate::extract::{self, SocketActor};
 use crate::origin::AllowedOrigin;
 
 use axum::Router;
@@ -58,7 +58,7 @@ impl SessionWatch {
     /// Whether the session is over.
     async fn ended(&self) -> bool {
         matches!(
-            identity::authenticate(&self.pool, &self.token).await,
+            identity::session_is_live(&self.pool, &self.token).await,
             Err(CoreError::Unauthenticated)
         )
     }
@@ -85,6 +85,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/v1/ws", get(ws))
         .route("/v1/ws/user", get(user_ws))
         .route("/v1/ws/projects/{id}", get(project_ws))
+        .route("/v1/ws/docs/{id}", get(doc_ws))
 }
 
 #[derive(Deserialize)]
@@ -112,7 +113,7 @@ pub(crate) async fn ws(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
     _: AllowedOrigin,
-    Actor(user_id): Actor,
+    SocketActor(user_id): SocketActor,
 ) -> Result<axum::response::Response, ApiError> {
     conversation::readable_head(&state.pool, user_id, query.conversation_id).await?;
     let watch = SessionWatch::new(&state, &headers).await;
@@ -129,7 +130,7 @@ pub(crate) async fn project_ws(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
     _: AllowedOrigin,
-    Actor(user_id): Actor,
+    SocketActor(user_id): SocketActor,
 ) -> Result<axum::response::Response, ApiError> {
     work::board(&state.pool, project_id, user_id).await?;
     let watch = SessionWatch::new(&state, &headers).await;
@@ -460,7 +461,7 @@ pub(crate) async fn user_ws(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
     _: AllowedOrigin,
-    Actor(user_id): Actor,
+    SocketActor(user_id): SocketActor,
 ) -> Result<axum::response::Response, ApiError> {
     let watch = SessionWatch::new(&state, &headers).await;
     Ok(upgrade
@@ -500,6 +501,90 @@ async fn handle_user(socket: WebSocket, state: AppState, mut watch: SessionWatch
                     // Missed notices of either kind: both screens look again.
                     if send_json(&mut sink, &json!({"v":1,"type":"inbox.changed"})).await.is_err() { return; }
                     if send_json(&mut sink, &json!({"v":1,"type":"space.changed"})).await.is_err() { return; }
+                }
+                Err(RecvError::Closed) => return,
+            }
+        }
+    }
+}
+
+/// The socket of one open Doc page. It carries "this page changed" and nothing else; the client reads the page again
+/// through the ordinary API, which decides what the person may see. A person who may not read the page is refused
+/// before the upgrade with the same 404 as the page itself.
+pub(crate) async fn doc_ws(
+    State(state): State<AppState>,
+    Path(page_id): Path<Uuid>,
+    headers: HeaderMap,
+    upgrade: WebSocketUpgrade,
+    _: AllowedOrigin,
+    SocketActor(user_id): SocketActor,
+) -> Result<axum::response::Response, ApiError> {
+    if !penfii_core::docs::readable(&state.pool, user_id, page_id).await? {
+        return Err(CoreError::NotFound.into());
+    }
+    let watch = SessionWatch::new(&state, &headers).await;
+    Ok(upgrade
+        .max_message_size(EVENT_SOCKET_MAX_MESSAGE)
+        .max_frame_size(EVENT_SOCKET_MAX_MESSAGE)
+        .on_upgrade(move |socket| handle_doc(socket, state, watch, user_id, page_id))
+        .into_response())
+}
+
+async fn handle_doc(
+    socket: WebSocket,
+    state: AppState,
+    mut watch: SessionWatch,
+    user_id: Uuid,
+    page_id: Uuid,
+) {
+    let (mut sink, mut stream) = socket.split();
+    // Subscribed before `doc.ready`: a change committed after the client reads on `doc.ready` reaches `rx`.
+    let mut rx = state.changes.subscribe();
+    if send_json(
+        &mut sink,
+        &json!({"v":1,"type":"doc.ready","docId":page_id}),
+    )
+    .await
+    .is_err()
+    {
+        return;
+    }
+    loop {
+        tokio::select! {
+            incoming = stream.next() => match incoming {
+                Some(Ok(Message::Ping(payload))) => { if sink.send(Message::Pong(payload)).await.is_err() { return; } },
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
+                _ => {}
+            },
+            _ = watch.due() => {
+                if watch.ended().await {
+                    close_session(&mut sink).await;
+                    return;
+                }
+            },
+            event = rx.recv() => match event {
+                Ok(ChangeNotice::Doc { page_id: changed }) if changed == page_id => {
+                    match penfii_core::docs::readable(&state.pool, user_id, page_id).await {
+                        Ok(true) => {
+                            if send_json(&mut sink, &json!({"v":1,"type":"doc.changed","docId":page_id})).await.is_err() { return; }
+                        }
+                        // Deleted, or this person lost it: one frame with nothing in it (the client asks the API,
+                        // which answers 404), then the socket ends. Which of the two it was is not said.
+                        Ok(false) => {
+                            let _ = send_json(&mut sink, &json!({"v":1,"type":"doc.gone","docId":page_id})).await;
+                            return;
+                        }
+                        // The database did not answer: the client reads the page, and the socket stays.
+                        Err(_) => {
+                            if send_json(&mut sink, &json!({"v":1,"type":"doc.changed","docId":page_id})).await.is_err() { return; }
+                        }
+                    }
+                }
+                Ok(ChangeNotice::Access { user_id: target }) if target == user_id => return,
+                Ok(_) => {}
+                // Notices were missed: read the page again.
+                Err(RecvError::Lagged(_)) => {
+                    if send_json(&mut sink, &json!({"v":1,"type":"doc.changed","docId":page_id})).await.is_err() { return; }
                 }
                 Err(RecvError::Closed) => return,
             }

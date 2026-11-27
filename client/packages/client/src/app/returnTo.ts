@@ -11,8 +11,20 @@ const KEY = 'penfii.afterLogin'
 
 type Stored = { path: string; userId: string | null }
 
+/**
+ * A path of this app and nothing else: one segment-rooted path, not a protocol-relative address (`//host`, or `/\host`
+ * which browsers read the same way), without control characters, and never the sign-in page itself (a return there
+ * would only send the person back to the form they just left).
+ */
 function isLocalPath(path: unknown): path is string {
-  return typeof path === 'string' && path.startsWith('/') && !path.startsWith('//')
+  return (
+    typeof path === 'string' &&
+    path.startsWith('/') &&
+    !path.startsWith('//') &&
+    !path.includes('\\') &&
+    !/[\u0000-\u001f\u007f]/.test(path) &&
+    !path.startsWith('/login')
+  )
 }
 
 function read(): Stored | null {
@@ -28,7 +40,7 @@ function read(): Stored | null {
 }
 
 export function rememberReturn(path: string): void {
-  if (!path.startsWith('/') || path.startsWith('//') || path === '/' || path.startsWith('/login')) return
+  if (!isLocalPath(path) || path === '/') return
   try {
     sessionStorage.setItem(KEY, JSON.stringify({ path, userId: lastUserId() } satisfies Stored))
   } catch {

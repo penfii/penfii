@@ -1104,6 +1104,8 @@ export type DocPage = {
   content: DocContent
   /** The concurrency token Save compares. Unrelated to `latestVersionNo`. */
   revisionNo: number
+  /** The page's layout: across the whole space between the panels instead of the reading column. A setting of the page, the same for every reader, apart from `content` and `revisionNo`. Absent from an older server: off. */
+  fullWidth?: boolean
   /** The number of the latest Version a person created; null while the page has none. */
   latestVersionNo: number | null
   /** The saved page differs from the latest Version (or there is none yet). */

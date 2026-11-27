@@ -207,9 +207,10 @@ describe('Ticket panel', () => {
     expect(within(panel).queryByRole('textbox', { name: 'Description' })).toBeNull()
 
     fireEvent.click(within(panel).getByRole('button', { name: 'Edit description' }))
-    await waitFor(() => expect(panel.querySelector('[contenteditable="true"]')).toBeTruthy())
+    // The description's editor, apart from the comment box below it (which is an editor too).
+    await waitFor(() => expect(panel.querySelector('.ticket-description-blocknote [contenteditable="true"]')).toBeTruthy())
     fireEvent.click(within(panel).getByRole('button', { name: 'Cancel' }))
-    await waitFor(() => expect(panel.querySelector('[contenteditable="true"]')).toBeNull())
+    await waitFor(() => expect(panel.querySelector('.ticket-description-blocknote [contenteditable="true"]')).toBeNull())
     expect(within(panel).getByRole('button', { name: 'Edit description' })).toBeTruthy()
   })
 

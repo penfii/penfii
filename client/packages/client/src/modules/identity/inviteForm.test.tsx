@@ -7,7 +7,7 @@ const api = vi.hoisted(() => ({
   previewInvitation: vi.fn(),
   acceptInvitation: vi.fn(),
   me: vi.fn(),
-  authProviders: vi.fn(),
+  authOptions: vi.fn(),
   logout: vi.fn(),
   reauthPassword: vi.fn(),
 }))
@@ -30,7 +30,7 @@ const preview = { email: 'dana@example.com', workspaceName: 'Acme', role: 'MEMBE
 beforeEach(() => {
   localStorage.setItem('penfii.locale', 'en-US')
   sessionStorage.clear()
-  api.authProviders.mockResolvedValue([])
+  api.authOptions.mockResolvedValue({ providers: [], longSession: { enabled: false, maxAgeSeconds: 0, idleSeconds: 0 } })
 })
 afterEach(() => {
   cleanup()

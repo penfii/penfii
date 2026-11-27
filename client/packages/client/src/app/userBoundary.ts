@@ -4,6 +4,7 @@ import { LOCALE_STORAGE_KEY } from '../i18n/messages'
 import { THEME_KEY } from '../design/theme'
 import { closeAllProjectLive } from '../modules/work/live'
 import { NAV_WIDTH_KEY, THREAD_WIDTH_KEY, TICKET_WIDTH_KEY } from '../shell/paneWidth'
+import { LOGIN_EMAIL_KEY, LOGIN_KEEP_KEY, LOGIN_METHOD_KEY, LOGIN_PENDING_KEY } from '../modules/identity/loginMemory'
 
 /**
  * Whose state this tab holds. Everything one person reads or writes (query cache, requests in flight, drafts,
@@ -14,7 +15,12 @@ const LAST_USER_KEY = 'penfii.lastUserId'
 const RETURN_KEY = 'penfii.afterLogin'
 
 /** Settings of the device, not of a person: kept across people. Every other `penfii.*` key is a person's. */
-const DEVICE_KEYS = new Set([LOCALE_STORAGE_KEY, THEME_KEY, NAV_WIDTH_KEY, THREAD_WIDTH_KEY, TICKET_WIDTH_KEY, LAST_USER_KEY, RETURN_KEY])
+const DEVICE_KEYS = new Set([
+  LOCALE_STORAGE_KEY, THEME_KEY, NAV_WIDTH_KEY, THREAD_WIDTH_KEY, TICKET_WIDTH_KEY, LAST_USER_KEY, RETURN_KEY,
+  // What the sign-in page remembers (a kept e-mail address, the last method, the keep-signed-in choice) is for the next
+  // sign-in, whoever it is: signing out does not clear it, and the person removes it on the page.
+  LOGIN_EMAIL_KEY, LOGIN_METHOD_KEY, LOGIN_KEEP_KEY, LOGIN_PENDING_KEY,
+])
 
 export function lastUserId(): string | null {
   try {

@@ -169,6 +169,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     penfii_core::identity::sync_providers(&pool, &providers)
         .await
         .map_err(|error| format!("auth provider sync failed: {error:?}"))?;
+    // The long-session settings can only shorten or end the long sessions that exist.
+    let adjusted = penfii_core::identity::apply_long_session_policy(&pool, &limits)
+        .await
+        .map_err(|error| format!("long session policy failed: {error:?}"))?;
+    if adjusted > 0 {
+        tracing::info!(
+            sessions = adjusted,
+            "long sessions adjusted to the current settings"
+        );
+    }
     // PENFII_MCP_ENABLED is off by default; turning it on without a valid PENFII_PUBLIC_URL stops
     // the process here.
     let oauth = penfii_core::oauth::OAuthConfig::from_env(std::sync::Arc::new(

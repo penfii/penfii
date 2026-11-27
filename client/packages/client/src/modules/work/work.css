@@ -754,8 +754,24 @@
 /* Board toolbar (frame 2.1): the view tabs, the layout switch and the controls share one row on the cream page. */
 .view-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-4) var(--space-6); }
 .view-bar > .view-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+/* FEA-187: the toolbar stays on one line. Tabs, layout switch and controls keep their size; when they do not fit, this row alone
+   scrolls sideways (the page, the side panel and the Board below do not move with it, and it does not move with them). The search
+   field is the one thing that shrinks, down to a width that is still usable. The row has a fixed height that includes the scrollbar,
+   so the Board starts at the same place whether or not the bar is showing. */
+.view-bar { flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: var(--space-2); }
+.view-bar-row { --bar-scroll: 12px; display: flex; flex-wrap: nowrap; align-items: center; gap: var(--space-3); min-width: 0; max-width: 100%; box-sizing: content-box; height: calc(2.5rem + var(--bar-scroll)); padding-bottom: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: thin; }
+.view-bar-row > * { flex: none; }
+.view-bar-row > .view-controls { flex: 0 1 auto; flex-wrap: nowrap; }
+.view-bar-row .view-tabs { flex-wrap: nowrap; }
+.view-bar-row :is(button, select, label, .pop, .pop-trigger) { flex: none; white-space: nowrap; }
+.view-bar-row .view-search { flex: 1 1 12rem; width: auto; min-width: 8rem; }
+.view-bar-row .view-inline-order { display: contents; }
+.view-bar-row .view-select select { max-width: 10rem; }
+.view-bar-row .pop-panel { white-space: normal; }
+.pop-panel[style*="fixed"] { max-height: min(78vh, 42rem, calc(100vh - 2rem)); }
 .board-hint { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.board-toolbar { padding-inline: var(--space-6); }
+.board-toolbar { padding-inline: var(--space-6); flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; white-space: nowrap; }
+.board-toolbar > * { flex: none; }
 .board-viewport { padding-inline: var(--space-3); }
 
 /* Ticket panel at its default width (frame 2.2): the properties are a cream card of two columns, small bold labels
@@ -859,8 +875,9 @@
 .planning-body:has(> .planning-form) > .field-hint { grid-column: 1; order: 0; }
 .planning-item { border-radius: 14px; background: var(--bg-elevated); border: 1px solid var(--border); padding: var(--space-4) var(--space-5); }
 .planning-form button[type="submit"] { justify-self: end; height: 38px; padding: 0 1.2rem; font-weight: 700; color: var(--text); }
-/* The comment box is a rounded field with the send button inside (frame 2.2a). */
-.comment-composer textarea { border-radius: 20px; background: var(--bg); border-color: transparent; padding: 0.6rem 1rem; }
+/* The comment box is a rounded field with the send button inside (frame 2.2a); the editor and the one that changes a comment share its look. */
+.comment-composer .rich-editor, .comment-edit .rich-editor { border-radius: 14px; background: var(--bg); border-color: transparent; }
+.comment-edit { display: grid; gap: var(--space-2); }
 .sprint-actual-line { font-size: 0.75rem; opacity: 0.8; }
 .sprint-periods { list-style: none; margin: 0.25rem 0; padding: 0; }
 
@@ -988,6 +1005,10 @@ span.list-row-check { display: inline-block; }
 .calendar-nav { display: flex; align-items: center; gap: var(--space-2); }
 .calendar-month { margin: 0; min-width: 8rem; text-align: center; font-size: 1.05rem; }
 .calendar-zone { margin: var(--space-1) 0; }
+/* FEA-186: the month shrinks with the room it has until each of the seven days is still readable (7rem), then stops: the box around it
+   scrolls sideways, with the weekday row, the day grid and the bars moving together, and nothing beyond it. */
+.tlcalendar-scroll { position: relative; max-width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; }
+.tlcalendar-table { min-width: 49rem; }
 .tlcalendar-table { width: 100%; table-layout: fixed; border-collapse: collapse; border: 1px solid var(--border); background: var(--bg-elevated); }
 .tlcalendar-weekday { padding: var(--space-1) var(--space-2); font-size: 0.75rem; font-weight: 400; color: var(--text-secondary); text-align: center; background: var(--bg-sunken); }
 .tlcalendar-day { min-width: 0; height: 7.5rem; padding: 0; vertical-align: top; border: 1px solid var(--border); }
@@ -998,6 +1019,7 @@ span.list-row-check { display: inline-block; }
 .tlcalendar-today-tag { font-weight: 700; color: var(--accent-text, var(--accent)); }
 .cal-lane { display: block; height: 1.4rem; margin: 0; padding: 0 var(--space-2); border: 0; font: inherit; font-size: 0.75rem; line-height: 1.4rem; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cal-lane.empty { visibility: hidden; }
+.cal-plan:not(.joined-left):not(:disabled) { position: relative; z-index: 1; }
 .cal-plan { background: var(--accent-soft); color: var(--text); border-block: 1px solid var(--accent); border-inline-start: 1px solid var(--accent); border-radius: var(--radius-sm); margin-inline: 2px; cursor: pointer; }
 .cal-plan.open-left { border-start-start-radius: 0; border-end-start-radius: 0; border-inline-start-style: dashed; margin-inline-start: 0; }
 .cal-plan.joined-left { margin-inline-start: 0; border-start-start-radius: 0; border-end-start-radius: 0; border-inline-start: 0; }
@@ -1006,7 +1028,8 @@ span.list-row-check { display: inline-block; }
 .cal-plan:not(.joined-right) { border-inline-end: 1px solid var(--accent); }
 .cal-plan.state-done, .cal-plan.state-canceled { opacity: 0.65; }
 .cal-kind { font-weight: 700; }
-.cal-due-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.cal-due-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; min-width: 0; }
+.cal-due-list > li { min-width: 0; }
 .cal-due { display: block; width: 100%; padding: 1px var(--space-2); border: 0; background: transparent; color: inherit; font: inherit; font-size: 0.75rem; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; border-radius: var(--radius-sm); }
 .cal-due:hover, .cal-plan:hover { background: var(--bg-muted); }
 .cal-due:focus-visible, .cal-plan:focus-visible, .cal-more:focus-visible { box-shadow: var(--focus); outline: none; }
@@ -1015,9 +1038,11 @@ span.list-row-check { display: inline-block; }
 .cal-more { border: 0; background: transparent; padding: 1px var(--space-2); font: inherit; font-size: 0.75rem; color: var(--accent-text, var(--accent)); text-align: left; cursor: pointer; }
 .cal-day-list ul { list-style: none; margin: var(--space-1) 0 0; padding: 0; display: grid; gap: 2px; min-width: 14rem; }
 .cal-day-list .cal-due { white-space: normal; }
-.calendar-agenda { list-style: none; margin: var(--space-2) 0; padding: 0; display: grid; gap: var(--space-3); }
+.calendar-agenda { list-style: none; margin: var(--space-2) 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
 .calendar-agenda h4 { margin: 0 0 var(--space-1); font-size: 0.875rem; }
-.calendar-agenda ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); }
+.calendar-agenda ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
+.calendar-agenda li { min-width: 0; }
+.calendar-agenda .cal-due { overflow-wrap: anywhere; }
 .calendar-agenda .cal-due { min-height: 2.5rem; padding-block: var(--space-2); white-space: normal; border: 1px solid var(--border); background: var(--bg-elevated); }
 .calendar-agenda .is-today h4 { color: var(--accent-text, var(--accent)); }
 .calendar-work-link { display: inline-block; margin-top: var(--space-2); }

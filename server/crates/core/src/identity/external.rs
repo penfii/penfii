@@ -152,6 +152,9 @@ pub struct StartInput<'a> {
     pub return_to: Option<&'a str>,
     pub address: Option<&'a str>,
     pub throttle: &'a crate::limits::ThrottleLimits,
+    /// The "keep me signed in" choice of a sign-in (`Intent::Login`); any other intent ignores it.
+    /// It is stored with the attempt and honoured when the callback issues the session.
+    pub keep_signed_in: bool,
 }
 
 /// What starting an attempt gives the caller: where the browser goes, and the secret that ties the
@@ -244,8 +247,8 @@ pub async fn start(
     sqlx::query(
         "INSERT INTO penfii.auth_attempts
             (id, state_hash, provider_id, intent, pkce_verifier, nonce, user_id, session_id,
-             invitation_id, return_to, expires_at, browser_hash)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now() + make_interval(secs => $11), $12)",
+             invitation_id, return_to, expires_at, browser_hash, keep_signed_in)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now() + make_interval(secs => $11), $12, $13)",
     )
     .bind(Uuid::new_v4())
     .bind(token_hash(&state))
@@ -259,6 +262,7 @@ pub async fn start(
     .bind(safe_return_to(input.return_to))
     .bind(ATTEMPT_TTL_SECONDS as f64)
     .bind(token_hash(&browser_binding))
+    .bind(input.keep_signed_in && input.intent == Intent::Login)
     .execute(pool)
     .await?;
 
@@ -311,6 +315,7 @@ struct Attempt {
     session_id: Option<Uuid>,
     invitation_id: Option<Uuid>,
     return_to: String,
+    keep_signed_in: bool,
 }
 
 fn with_query(path: &str, key: &str, value: &str) -> String {
@@ -383,7 +388,7 @@ pub async fn callback(
            AND a.browser_hash = $3
            AND p.id = a.provider_id AND p.provider_key = $2
          RETURNING a.provider_id, a.intent, a.pkce_verifier, a.nonce, a.user_id, a.session_id,
-                   a.invitation_id, a.return_to",
+                   a.invitation_id, a.return_to, a.keep_signed_in",
     )
     .bind(token_hash(state))
     .bind(input.provider_key)
@@ -405,6 +410,7 @@ pub async fn callback(
                 session_id: row.try_get("session_id").unwrap_or_default(),
                 invitation_id: row.try_get("invitation_id").unwrap_or_default(),
                 return_to: row.try_get("return_to").unwrap_or_else(|_| "/".into()),
+                keep_signed_in: row.try_get("keep_signed_in").unwrap_or(false),
             }
         }
         _ => return failed("/", "invalid_attempt"),
@@ -474,7 +480,9 @@ async fn act(
     let back = safe_return_to(Some(&attempt.return_to));
     match attempt.intent {
         Intent::Login => {
-            let ttl = session_ttl(limits)?;
+            // Only a sign-in carries the "keep me signed in" choice, read from the attempt that the
+            // browser started (never from the callback's query).
+            let lifetime = super::session_lifetime(limits, attempt.keep_signed_in)?;
             let mut tx = pool.begin().await?;
             let user_id: Option<Uuid> = sqlx::query_scalar(
                 "SELECT i.user_id FROM penfii.external_identities i
@@ -494,18 +502,19 @@ async fn act(
                 }
                 None => sign_up(&mut tx, provider, &profile, attempt.provider_id).await?,
             };
-            let token = insert_session(&mut tx, user_id, ttl, provider.key(), device).await?;
+            let token = insert_session(&mut tx, user_id, lifetime, provider.key(), device).await?;
             audit_login(&mut tx, user_id, provider.key()).await?;
             tx.commit().await?;
             revoke_presented(pool, presented).await?;
             Ok(CallbackOutcome {
                 redirect: back,
-                new_session: Some((token, ttl)),
+                new_session: Some((token, lifetime.cookie_seconds)),
                 clear_session: false,
             })
         }
         Intent::Invite => {
-            let ttl = session_ttl(limits)?;
+            // Accepting an invitation always starts an ordinary session.
+            let lifetime = super::session_lifetime(limits, false)?;
             let invitation_id = attempt.invitation_id.ok_or(CoreError::NotFound)?;
             let mut tx = pool.begin().await?;
             let invite = sqlx::query(
@@ -590,7 +599,7 @@ async fn act(
                 None,
             )
             .await?;
-            let token = insert_session(&mut tx, user_id, ttl, provider.key(), device).await?;
+            let token = insert_session(&mut tx, user_id, lifetime, provider.key(), device).await?;
             audit_login(&mut tx, user_id, provider.key()).await?;
             tx.commit().await?;
             revoke_presented(pool, presented).await?;
@@ -604,7 +613,7 @@ async fn act(
             };
             Ok(CallbackOutcome {
                 redirect,
-                new_session: Some((token, ttl)),
+                new_session: Some((token, lifetime.cookie_seconds)),
                 clear_session: false,
             })
         }
@@ -727,12 +736,6 @@ async fn sign_up(
     }
     insert_identity(tx, user_id, profile, provider_id).await?;
     Ok(user_id)
-}
-
-fn session_ttl(limits: &Limits) -> Result<i64, CoreError> {
-    limits.session_ttl_seconds.ok_or_else(|| {
-        CoreError::conflict("session_ttl_unconfigured", "session ttl is not configured")
-    })
 }
 
 /// A sign-in never keeps or upgrades the session cookie that came with it.

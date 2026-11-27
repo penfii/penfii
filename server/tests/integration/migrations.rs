@@ -56,7 +56,7 @@ async fn exists(pool: &PgPool, table: &str) -> bool {
 async fn the_real_history_is_recorded_once_and_applying_again_changes_nothing(pool: PgPool) {
     let _turn = crate::common::MIGRATING.acquire().await.unwrap();
     apply_migrations(&pool).await.expect("first run");
-    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3]);
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4]);
     let tables: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM pg_tables WHERE schemaname = 'penfii' AND tablename <> '_sqlx_migrations'",
     )
@@ -71,7 +71,7 @@ async fn the_real_history_is_recorded_once_and_applying_again_changes_nothing(po
         .unwrap();
     apply_migrations(&pool).await.expect("second run");
     apply_migrations(&pool).await.expect("third run");
-    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3]);
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4]);
     let kept: i64 =
         sqlx::query_scalar("SELECT count(*) FROM penfii.foundation_state WHERE key = 'kept'")
             .fetch_one(&pool)
@@ -100,7 +100,7 @@ async fn instances_that_start_together_apply_each_migration_once(pool: PgPool) {
     for run in runs {
         run.await.unwrap().expect("every instance succeeds");
     }
-    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3]);
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4]);
 }
 
 #[sqlx::test(migrator = "crate::common::GUARD")]
@@ -391,7 +391,7 @@ async fn a_v0_1_0_database_upgrades_in_place_and_keeps_its_rows(pool: PgPool) {
 
     // What admin-cli migrate does on the upgrade: 0002 and the later files are applied, and the build accepts the result.
     apply_migrations(&pool).await.expect("0002 over v0.1.0");
-    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3]);
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4]);
     penfii_core::require_current_schema(&pool)
         .await
         .expect("the history matches this build");
@@ -437,7 +437,7 @@ async fn a_v0_1_0_database_upgrades_in_place_and_keeps_its_rows(pool: PgPool) {
     assert!(duplicate.is_err());
     // Applying again changes nothing.
     apply_migrations(&pool).await.expect("second run");
-    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3]);
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4]);
 }
 
 /// The migrations a development build between v0.3.1 and the consolidated 0003 recorded: 0001 and 0002
@@ -539,7 +539,11 @@ async fn the_split_0003_history_becomes_the_consolidated_0003(pool: PgPool) {
     let run = apply_migrations(&pool).await.expect("consolidation");
     assert!(run.consolidated_split_0003);
     let after = history(&pool).await;
-    assert_eq!(after.len(), 3);
+    // The consolidated 0003 stands in for the five split files, and the build's own later
+    // migration (0004) is applied after it.
+    assert_eq!(after.len(), 4);
+    assert_eq!(after[3].0, 4);
+    assert_eq!(after[3].1, "after v0 4 1");
     assert_eq!(after[..2], before[..2], "0001 and 0002 are untouched");
     assert_eq!(after[2].0, 3);
     assert_eq!(after[2].1, "after v0 3 1");
@@ -583,7 +587,7 @@ async fn instances_that_start_together_consolidate_the_split_history_once(pool: 
         }
     }
     assert_eq!(rewrote, 1);
-    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3]);
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4]);
 }
 
 /// A history with only some of the split files, one with a split file changed, and one whose tables
@@ -601,7 +605,10 @@ async fn an_incomplete_or_changed_split_history_is_refused_untouched(pool: PgPoo
     let error = apply_migrations(&pool)
         .await
         .expect_err("0006 and 0007 are missing");
-    assert!(error.to_string().contains("not 1 to 7"), "{error}");
+    assert!(
+        error.to_string().contains("not [1, 2, 3, 4, 5, 6, 7]"),
+        "{error}"
+    );
     assert_eq!(history(&pool).await, before);
 
     // Completed, then one checksum differs from the split build's.
@@ -629,4 +636,225 @@ async fn an_incomplete_or_changed_split_history_is_refused_untouched(pool: PgPoo
     let error = apply_migrations(&pool).await.expect_err("missing table");
     assert!(error.to_string().contains("missing"), "{error}");
     assert_eq!(history(&pool).await, before);
+}
+
+/// The migrations a development build after v0.4.1 recorded: this build's 0001 to 0003, then the two split
+/// files (fixtures, byte for byte as that build had them).
+fn split_0004_build() -> Migrator {
+    let file = |version: i64, description: &'static str, sql: &'static str| {
+        Migration::new(
+            version,
+            Cow::Borrowed(description),
+            MigrationType::Simple,
+            Cow::Borrowed(sql),
+            false,
+        )
+    };
+    Migrator {
+        migrations: Cow::Owned(vec![
+            file(
+                1,
+                "initial",
+                include_str!("../../../database/migrations/0001_initial.sql"),
+            ),
+            file(
+                2,
+                "after v0 1 0",
+                include_str!("../../../database/migrations/0002_after_v0_1_0.sql"),
+            ),
+            file(
+                3,
+                "after v0 3 1",
+                include_str!("../../../database/migrations/0003_after_v0_3_1.sql"),
+            ),
+            file(
+                4,
+                "long sessions",
+                include_str!("fixtures/split_0004/0004_long_sessions.sql"),
+            ),
+            file(
+                5,
+                "doc full width",
+                include_str!("fixtures/split_0004/0005_doc_full_width.sql"),
+            ),
+        ]),
+        ..Migrator::DEFAULT
+    }
+}
+
+/// The checksum this build has for its 0004.
+fn consolidated_0004_checksum() -> Vec<u8> {
+    use sha2::Digest;
+    sha2::Sha384::digest(
+        include_str!("../../../database/migrations/0004_after_v0_4_1.sql").as_bytes(),
+    )
+    .to_vec()
+}
+
+/// A development database that applied the split 0004 and 0005 (with rows that use what they added):
+/// `admin-cli migrate` rewrites its history to the consolidated 0004 without running anything again, the
+/// rows stay, the build accepts the history, and a second run has nothing to do.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn the_split_0004_history_becomes_the_consolidated_0004_and_keeps_the_data(pool: PgPool) {
+    let _turn = crate::common::MIGRATING.acquire().await.unwrap();
+    run_migrator(&pool, &split_0004_build(), "penfii")
+        .await
+        .unwrap();
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4, 5]);
+    let error = penfii_core::require_current_schema(&pool)
+        .await
+        .unwrap_err();
+    assert!(error.contains("split migrations 0004-0005"), "{error}");
+    // Rows that use the columns the split files added.
+    let user = Uuid::new_v4();
+    sqlx::query("INSERT INTO penfii.users (id, email, email_key, display_name) VALUES ($1, 'a@x.test', 'a@x.test', 'A')")
+        .bind(user)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO penfii.sessions (id, user_id, token_hash, expires_at, absolute_expires_at, idle_seconds)
+         VALUES ($1, $2, '\\x01', now() + interval '7 days', now() + interval '30 days', 604800)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(user)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let before = history(&pool).await;
+
+    let run = apply_migrations(&pool).await.expect("consolidation");
+    assert!(run.consolidated_split_0004);
+    assert!(!run.consolidated_split_0003);
+    let after = history(&pool).await;
+    assert_eq!(after.len(), 4);
+    assert_eq!(after[..3], before[..3], "0001 to 0003 are untouched");
+    assert_eq!(after[3].0, 4);
+    assert_eq!(after[3].1, "after v0 4 1");
+    assert_eq!(after[3].2, consolidated_0004_checksum());
+    penfii_core::require_current_schema(&pool)
+        .await
+        .expect("the build accepts the consolidated history");
+    let kept: (i64, i32) =
+        sqlx::query_as("SELECT count(*), max(idle_seconds) FROM penfii.sessions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(kept, (1, 604_800));
+    // The constraints came along: a half-set long session is still refused.
+    let error = sqlx::query("UPDATE penfii.sessions SET idle_seconds = NULL")
+        .execute(&pool)
+        .await
+        .expect_err("sessions_long_chk");
+    assert!(error.to_string().contains("sessions_long_chk"), "{error}");
+
+    let again = apply_migrations(&pool).await.expect("second run");
+    assert!(!again.consolidated_split_0004);
+    assert_eq!(history(&pool).await, after);
+}
+
+/// Instances that start together on a split 0004 history: one rewrites it, the others find it done.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn instances_that_start_together_consolidate_the_split_0004_once(pool: PgPool) {
+    let _turn = crate::common::MIGRATING.acquire().await.unwrap();
+    run_migrator(&pool, &split_0004_build(), "penfii")
+        .await
+        .unwrap();
+    let runs: Vec<_> = (0..4)
+        .map(|_| {
+            let pool = pool.clone();
+            tokio::spawn(async move { apply_migrations(&pool).await })
+        })
+        .collect();
+    let mut rewrote = 0;
+    for run in runs {
+        if run
+            .await
+            .unwrap()
+            .expect("every instance succeeds")
+            .consolidated_split_0004
+        {
+            rewrote += 1;
+        }
+    }
+    assert_eq!(rewrote, 1);
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4]);
+}
+
+/// Only one of the two split files, a split file with another checksum, and a missing column are refused and
+/// left exactly as they were.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn an_incomplete_or_changed_split_0004_history_is_refused_untouched(pool: PgPool) {
+    let _turn = crate::common::MIGRATING.acquire().await.unwrap();
+    let full = split_0004_build();
+    let partial = Migrator {
+        migrations: Cow::Owned(full.migrations[..4].to_vec()),
+        ..Migrator::DEFAULT
+    };
+    run_migrator(&pool, &partial, "penfii").await.unwrap();
+    let before = history(&pool).await;
+    let error = apply_migrations(&pool).await.expect_err("0005 is missing");
+    assert!(error.to_string().contains("not [1, 2, 3, 4, 5]"), "{error}");
+    assert_eq!(history(&pool).await, before);
+
+    // Completed, then one checksum differs from the split build's.
+    run_migrator(&pool, &full, "penfii").await.unwrap();
+    sqlx::query("UPDATE penfii._sqlx_migrations SET checksum = '\\x00'::bytea WHERE version = 5")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let before = history(&pool).await;
+    let error = apply_migrations(&pool).await.expect_err("a changed file");
+    assert!(error.to_string().contains("migration 5"), "{error}");
+    assert_eq!(history(&pool).await, before);
+
+    // The checksums are right, but a column those files made is gone.
+    sqlx::query("UPDATE penfii._sqlx_migrations SET checksum = decode($1, 'hex') WHERE version = 5")
+        .bind("bff8c7397ce65c3b067d5867a3cadc77de595eff2572a022881d2c737502adcafac91ae57d4542a9b16a634a5bf768b1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("ALTER TABLE penfii.doc_pages DROP COLUMN full_width")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let before = history(&pool).await;
+    let error = apply_migrations(&pool).await.expect_err("missing column");
+    assert!(error.to_string().contains("missing"), "{error}");
+    assert_eq!(history(&pool).await, before);
+}
+
+/// A v0.4.1 database (history 1 to 3) is upgraded by the consolidated 0004 alone, and a fresh one gets the same.
+#[sqlx::test(migrator = "crate::common::GUARD")]
+async fn a_v0_4_1_database_upgrades_through_the_consolidated_0004(pool: PgPool) {
+    let _turn = crate::common::MIGRATING.acquire().await.unwrap();
+    let v0_4_1 = Migrator {
+        migrations: Cow::Owned(split_0004_build().migrations[..3].to_vec()),
+        ..Migrator::DEFAULT
+    };
+    run_migrator(&pool, &v0_4_1, "penfii").await.unwrap();
+    let run = apply_migrations(&pool).await.expect("upgrade");
+    assert!(!run.consolidated_split_0003 && !run.consolidated_split_0004);
+    assert_eq!(recorded(&pool, "penfii").await, vec![1, 2, 3, 4]);
+    penfii_core::require_current_schema(&pool).await.unwrap();
+    // Existing pages and sessions behave as they did: off and ordinary.
+    let columns: Vec<String> = sqlx::query_scalar(
+        "SELECT column_name || ':' || is_nullable || ':' || coalesce(column_default, '') FROM information_schema.columns
+         WHERE table_schema = 'penfii'
+           AND (table_name, column_name) IN (('sessions', 'absolute_expires_at'), ('sessions', 'idle_seconds'),
+                                             ('auth_attempts', 'keep_signed_in'), ('doc_pages', 'full_width'))
+         ORDER BY 1",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        columns,
+        [
+            "absolute_expires_at:YES:",
+            "full_width:NO:false",
+            "idle_seconds:YES:",
+            "keep_signed_in:NO:false"
+        ]
+    );
 }

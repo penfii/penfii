@@ -14,7 +14,7 @@
 //! A WebSocket upgrade is a plain `GET` that carries the session cookie but no `X-Penfii-Client`
 //! header, and a page on another site of the same registrable domain (or on another port) is
 //! "same-site" for `SameSite=Lax`. So every socket checks the `Origin` the browser reports before
-//! it looks at the cookie. All four sockets (`/v1/ws`, `/v1/ws/user`, `/v1/ws/projects/{id}`,
+//! it looks at the cookie. All five sockets (`/v1/ws`, `/v1/ws/user`, `/v1/ws/projects/{id}`, `/v1/ws/docs/{id}`,
 //! `/v1/docs/{id}/collab`) take [`AllowedOrigin`] before their session extractor; none has a
 //! policy of its own.
 

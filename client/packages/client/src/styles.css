@@ -11,6 +11,10 @@
   overflow: hidden;
 }
 
+/* A conversation or thread that cannot be opened: the message is centred in the space the conversation would have had. */
+.page-scroll[data-state='conversation-unavailable'] { display: flex; }
+.thread-unavailable { flex: 1; min-height: 0; display: flex; overflow: auto; }
+
 .channel-settings-layer { position: fixed; inset: 0; z-index: 100; }
 .channel-settings-backdrop { position: absolute; inset: 0; border: 0; background: rgb(0 0 0 / .22); }
 .channel-settings-panel { position: absolute; inset-block: 0; right: 0; width: min(30rem, 94vw); display: flex; flex-direction: column; background: var(--bg-elevated); border-left: 1px solid var(--border); box-shadow: var(--shadow-md); outline: none; }
@@ -34,6 +38,15 @@
 }
 
 .conversation.no-thread { grid-template-columns: minmax(0, 1fr); }
+/* Beside a thread the main column keeps at least 640px (MAIN_MIN in paneWidth.ts). When the thread is wider
+   than that leaves, the conversation scrolls sideways inside the work area instead of squeezing the main column. */
+@media (min-width: 961px) {
+  .conversation:not(.no-thread) {
+    grid-template-columns: minmax(var(--chat-main-min, 640px), 1fr) var(--thread-width, 420px);
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+}
 
 .column, .transcript {
   min-height: 0;
@@ -46,7 +59,7 @@
 .transcript { flex: 1; }
 .thread-column { position: relative; z-index: 1; border-left: 1px solid var(--border); background: var(--bg); }
 
-.scroller { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--space-3) 0; }
+.scroller { flex: 1; min-height: 0; overflow: auto; overscroll-behavior-y: contain; padding: var(--space-3) 0; }
 .transcript { position: relative; }
 .jump-latest {
   position: absolute;
@@ -618,26 +631,25 @@ button.reply-count { border: 0; background: transparent; padding: 0; font: inher
 .query-error { margin: var(--space-4); color: var(--danger, #b3261e); }
 .query-error.compact { margin: var(--space-2) 0; font-size: .875rem; }
 
-/* FEA-113: the main chat column reads in one centred block no wider than --chat-read-max (messages, day lines, composer and the
-   join / read-only bars). The channel head, the scrollbar and the "latest" button stay on the whole column. A column narrower than the
-   block is unchanged: no media query, only max-width. The thread column is not touched.
+/* The main chat column reads in one block that keeps 32px clear on each side and has no fixed cap, whether a
+   thread is open or not (messages, day lines, composer and the join / read-only bars). The channel head, the scrollbar and the
+   "latest" button stay on the whole column. The thread column is not touched. On a phone the block fills the column.
    The text a person types in the composer starts where the text of a message starts (the letters, not the boxes), so the
    message row and the composer take their spacing from the same variables. */
 :root {
-  /* 960px was too wide: about 77 Korean and 119 English characters a line; 800px gives about 62 and 96. */
-  --chat-read-max: 800px;
   --message-margin: var(--space-4);
   --message-pad: 0.75rem;
   --message-avatar: 40px;
   --message-gap: 0.875rem;
   --composer-border: 1px;
   --composer-text-pad: 1.25rem;
-  /* Space left of the block when the column is wider than the block. */
-  --chat-side: max(0px, calc(50% - var(--chat-read-max) / 2));
+  /* Space left and right of the block. */
+  --chat-side: 0px;
 }
-.conversation > .column:not(.thread-column) .scroller > * { max-width: var(--chat-read-max); margin-inline: auto; }
+.conversation > .column:not(.thread-column) .scroller > * { margin-inline: var(--chat-side); }
 .conversation > .column:not(.thread-column) > :is(.join-bar, .read-only-note, .form-error) { margin-inline: var(--chat-side); }
 @media (min-width: 641px) {
+  .conversation { --chat-side: var(--space-6); }
   .conversation > .column:not(.thread-column) > .composer {
     /* Where a message's text starts (row margin + padding + avatar + gap), less the composer's own border and padding. */
     margin-inline-start: calc(var(--chat-side) + var(--message-margin) + var(--message-pad) + var(--message-avatar) + var(--message-gap) - var(--composer-border) - var(--composer-text-pad));

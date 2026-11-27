@@ -169,7 +169,7 @@ export function BoardLayout({
    * Puts a card in a column at a place. A State column changes the State and/or the shared
    * order in one command; a Sprint column assigns the Sprint, then orders.
    */
-  async function drop(ticketId: string, column: (typeof columns)[number], placement: MovePlacement | null) {
+  async function drop(ticketId: string, column: (typeof columns)[number], placement: MovePlacement | null, keepFocus = false) {
     if (moving.has(ticketId)) return
     const current = queryClient.getQueryData<ProjectBoard>(boardKey)
     const ticket = current ? allTickets(current).find((item) => item.id === ticketId) : undefined
@@ -203,7 +203,8 @@ export function BoardLayout({
         )
         noteOwnChange(ticketId, moved.revisionNo)
       }
-      if (placement) setFocusId(ticketId)
+      // A card that moves without the pointer keeps the keyboard focus, also into an empty column (no placement then).
+      if (placement || keepFocus) setFocusId(ticketId)
     } catch (cause) {
       // Back to what was there. When the first step (the Sprint) worked and the second did not, the read below shows the truth.
       queryClient.setQueryData(boardKey, before)
@@ -236,7 +237,7 @@ export function BoardLayout({
     const target = columns[index + step]
     if (!target || target.stateId === null) return
     const at = siblingIds(target, ticket)
-    void drop(ticket.id, target, byOrder && (at.length > 0 || !target.hierarchical) ? placementAt(at, at.length, ticket.id) : null)
+    void drop(ticket.id, target, byOrder && (at.length > 0 || !target.hierarchical) ? placementAt(at, at.length, ticket.id) : null, true)
   }
 
   /** A phone cannot drag: a card goes to a State column chosen by name (the same move as Alt+←/→, to any column). */
@@ -244,7 +245,7 @@ export function BoardLayout({
     const target = columns.find((column) => column.id === columnId)
     if (!target || target.stateId === null) return
     const at = siblingIds(target, ticket)
-    void drop(ticket.id, target, byOrder && (at.length > 0 || !target.hierarchical) ? placementAt(at, at.length, ticket.id) : null)
+    void drop(ticket.id, target, byOrder && (at.length > 0 || !target.hierarchical) ? placementAt(at, at.length, ticket.id) : null, true)
   }
   const moveChoices = columns.filter((column) => column.stateId !== null).map((column) => ({ id: column.id, name: column.name }))
 

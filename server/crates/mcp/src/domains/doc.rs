@@ -38,8 +38,17 @@ fn doc_only() -> Value {
 }
 
 fn content_property() -> Value {
-    json!({"type": "object",
-           "description": "Penfii document JSON: {\"schema\":\"penfii.doc\",\"version\":1,\"blocks\":[{\"id\",\"type\",\"props\",\"content\",\"children\"}]}. Block types: paragraph, heading (props.level 1-3), bulletListItem, numberedListItem, checkListItem (props.checked), quote, codeBlock (props.language), table, image/video/audio/file (props.url = /v1/files/{id}/content of a file attached to the page), divider. Inline content: [{\"type\":\"text\",\"text\",\"styles\":{bold,italic,underline,strike,code}}]. Take it from doc_get and change it rather than writing it from nothing."})
+    json!({"description": "Page content. Preferred: {\"format\":\"markdown\",\"value\":\"# Title\\n- item\"} (headings 1-3, bullet/numbered/task lists, quotes, fenced code, ---, bold/italic/strike/inline code, links; tables, images and HTML stay as text). {\"format\":\"plain\",\"value\":\"...\"} keeps text literal. {\"format\":\"richtext\",\"value\":<document JSON>} or the document JSON itself is for exact structure (tables, files, mentions). An empty plain/markdown value is an empty page. A bare string is not accepted.",
+           "oneOf": [
+               {"type": "object", "description": "Input object with exactly format and value.",
+                "properties": {
+                    "format": {"type": "string", "enum": ["plain", "markdown", "richtext"]},
+                    "value": {"type": ["string", "object"], "description": "A string (at most 200000 characters) for plain and markdown; the Penfii document JSON object for richtext."}},
+                "required": ["format", "value"], "additionalProperties": false},
+               {"type": "object",
+                "description": "Penfii document JSON: {\"schema\":\"penfii.doc\",\"version\":1,\"blocks\":[{\"id\",\"type\",\"props\",\"content\",\"children\"}]}. Block types: paragraph, heading (props.level 1-3), bulletListItem, numberedListItem, checkListItem (props.checked), quote, codeBlock (props.language), table, image/video/audio/file (props.url = /v1/files/{id}/content of a file attached to the page), divider. Inline content: [{\"type\":\"text\",\"text\",\"styles\":{bold,italic,underline,strike,code}}]. Take it from doc_get and change it rather than writing it from nothing.",
+                "properties": {"schema": {"type": "string", "enum": ["penfii.doc"]}, "version": {"type": "integer"}, "blocks": {"type": "array"}},
+                "required": ["schema"]}]})
 }
 
 fn visibility_properties() -> (Value, Value, Value) {
@@ -97,7 +106,7 @@ pub static OPS: &[Operation] = &[
         "doc.create",
         "doc_create",
         "Create a Doc",
-        "Create a Doc page in a Workspace. Give content (rich-text JSON) or markdown (headings #..###, bullet/numbered/- [ ] lists, > quotes, ``` code, ---, paragraphs; **bold**, *italic*, `code`; nothing is dropped, unknown syntax stays text), or templateId, not several. projectId places the page in a Project (the person must take part in it); parentId nests it; visibility WORKSPACE, PROJECT (scopeProjectId) or RESTRICTED (participants). Not retry-safe: there is no idempotency key, calling twice creates two pages; check doc_tree before retrying.",
+        "Create a Doc page in a Workspace. Give content as {\"format\":\"markdown\",\"value\":\"# Title\n...\"} (headings 1-3, bullet/numbered/task lists, quotes, fenced code, ---, bold/italic/strike/inline code, links; tables, images and HTML stay as text, nothing is dropped), as {\"format\":\"plain\",...} (literal text) or {\"format\":\"richtext\",\"value\":<document JSON>}, or give a templateId, or the legacy top-level markdown string: only one of content, markdown and templateId. Giving none creates an empty page. projectId places the page in a Project (the person must take part in it); parentId nests it; visibility WORKSPACE, PROJECT (scopeProjectId) or RESTRICTED (participants). Not retry-safe: there is no idempotency key, calling twice creates two pages; check doc_tree before retrying.",
         &["doc:write"],
         RiskClass::Write,
         WorkspaceResolver::Argument,
@@ -115,7 +124,7 @@ pub static OPS: &[Operation] = &[
                     "participants": participants_property(),
                     "templateId": uuid_property("Doc template id from doc_template_list."),
                     "content": content_property(),
-                    "markdown": {"type": "string", "maxLength": 200000, "description": "Markdown convenience instead of content."}
+                    "markdown": {"type": "string", "maxLength": 200000, "description": "Legacy: Markdown string. Prefer content with format markdown. Not combined with content or templateId."}
                 }),
                 &["workspaceId", "title"],
             )
@@ -126,7 +135,7 @@ pub static OPS: &[Operation] = &[
         "doc.save",
         "doc_save",
         "Save a Doc",
-        "Replace the title and the whole content of a Doc with the given draft if expectedRevision is current (read it with doc_get; change the JSON it returned and send it back). A stale revision fails with version_conflict and currentRevision: read again and merge, never overwrite. Same rules as the web editor: content is sanitised, files must be attached to the page, the saved page becomes the working copy of live editors. title may be left out to keep it. Retry-safe: saving the same draft against the revision it produced is refused as a conflict, not applied twice.",
+        "Replace the title and the whole content of a Doc with the given content if expectedRevision is current. content is {\"format\":\"markdown\"|\"plain\"|\"richtext\",\"value\":...} or the document JSON from doc_get. Markdown and plain replace the entire body: tables, images, files and mentions of the old page are not kept, so for a precise edit read doc_get, change its content JSON and send it back. An empty plain/markdown value empties the page; content is required. A stale revision fails with version_conflict and currentRevision: read again and merge, never overwrite. Same rules as the web editor: content is sanitised, files must be attached to the page, the saved page becomes the working copy of live editors. title may be left out to keep it. Retry-safe: saving the same draft against the revision it produced is refused as a conflict, not applied twice.",
         &["doc:write"],
         RiskClass::Write,
         resolve::DOC,
@@ -316,14 +325,14 @@ pub static OPS: &[Operation] = &[
         "doc.comment_create",
         "doc_comment_create",
         "Comment on a Doc",
-        "Add a comment (text or rich-text JSON) to a Doc the person can read. Not retry-safe: calling twice writes two comments.",
+        "Add a comment to a Doc the person can read (body as {\"format\":\"markdown\",\"value\":\"...\"} when it has formatting). Not retry-safe: calling twice writes two comments.",
         &["doc:write"],
         RiskClass::Write,
         resolve::DOC,
         || {
             object_schema(
                 json!({"docId": doc_id(),
-            "body": crate::catalog::text_or_doc("Comment text or rich-text JSON.")}),
+            "body": crate::catalog::text_or_doc("Comment text.")}),
                 &["docId", "body"],
             )
         },
@@ -333,14 +342,14 @@ pub static OPS: &[Operation] = &[
         "doc.comment_edit",
         "doc_comment_edit",
         "Edit a Doc comment",
-        "Replace the body of a comment the person wrote (comment id from doc_comment_list).",
+        "Replace the whole body of a comment the person wrote (comment id from doc_comment_list); body as {\"format\":\"markdown\",\"value\":\"...\"} when it has formatting.",
         &["doc:write"],
         RiskClass::Write,
         resolve::DOC,
         || {
             object_schema(
                 json!({"docId": doc_id(), "commentId": uuid_property("Comment id."),
-            "body": crate::catalog::text_or_doc("New text or rich-text JSON.")}),
+            "body": crate::catalog::text_or_doc("New comment text.")}),
                 &["docId", "commentId", "body"],
             )
         },
@@ -521,11 +530,33 @@ fn participants_arg(args: &Value) -> Result<Vec<(Uuid, String)>, Failure> {
         .collect()
 }
 
+/// The `content` argument. A root object (`{schema:"penfii.doc",...}`) is the original form and
+/// goes to `core` as it is; an object with `format` or `value` is the input wrapper `{format,
+/// value}` (`plain`, `markdown` or `richtext`), converted here and never stored.
 fn content_arg(args: &Value) -> Result<Option<Value>, Failure> {
+    use crate::markdown::{Content, is_wrapper, markdown_to_doc, parse_wrapper, plain_to_doc};
     match args.get("content") {
         None | Some(Value::Null) => Ok(None),
+        Some(Value::Object(object)) if is_wrapper(object) => {
+            match parse_wrapper(object, "content")? {
+                Content::Plain(text) => plain_to_doc(text).map(Some),
+                Content::Markdown(text) => markdown_to_doc(text).map(Some),
+                Content::Richtext(root) => Ok(Some(Value::Object(root.clone()))),
+            }
+        }
         Some(object @ Value::Object(_)) => Ok(Some(object.clone())),
-        Some(_) => Err(Failure::invalid("content must be a document object")),
+        Some(_) => Err(Failure::invalid(
+            "content must be a document object or a {format, value} object",
+        )),
+    }
+}
+
+/// `doc_create`'s legacy top-level `markdown`: a string, converted like `format: markdown`.
+fn legacy_markdown_arg(args: &Value) -> Result<Option<Value>, Failure> {
+    match args.get("markdown") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(markdown)) => crate::markdown::markdown_to_doc(markdown).map(Some),
+        Some(_) => Err(Failure::invalid("markdown must be a string")),
     }
 }
 
@@ -571,13 +602,22 @@ async fn execute(
             let title = string_arg(args, "title")
                 .ok_or_else(|| Failure::invalid("title is required"))?
                 .to_string();
-            let mut content = content_arg(args)?;
-            if let Some(markdown) = string_arg(args, "markdown") {
-                if content.is_some() {
-                    return Err(Failure::invalid("use content or markdown, not both"));
-                }
-                content = Some(markdown_to_content(markdown));
+            // The page starts from one of content, markdown or a template; a combination is an
+            // error rather than a priority rule. An empty markdown string is a chosen input too.
+            let chosen = [
+                !matches!(args.get("content"), None | Some(Value::Null)),
+                !matches!(args.get("markdown"), None | Some(Value::Null)),
+                !matches!(args.get("templateId"), None | Some(Value::Null)),
+            ];
+            if chosen.iter().filter(|set| **set).count() > 1 {
+                return Err(Failure::invalid(
+                    "use only one of content, markdown (legacy) and templateId",
+                ));
             }
+            let content = match content_arg(args)? {
+                Some(content) => Some(content),
+                None => legacy_markdown_arg(args)?,
+            };
             let page = docs::create(
                 pool,
                 &ctx.services.knowledge,
@@ -607,8 +647,12 @@ async fn execute(
         "doc.save" => {
             let id = uuid_arg(args, "docId")?;
             let expected = revision_arg(args)?;
-            let content = content_arg(args)?
-                .ok_or_else(|| Failure::invalid("content is required (a document object)"))?;
+            crate::tools::reject_markdown_argument(args, "content")?;
+            let content = content_arg(args)?.ok_or_else(|| {
+                Failure::invalid(
+                    "content is required (a document object or a {format, value} object)",
+                )
+            })?;
             let title = match string_arg(args, "title") {
                 Some(title) => title.to_string(),
                 None => {
@@ -637,6 +681,7 @@ async fn execute(
                 id,
                 string_arg(args, "title").map(str::to_string),
                 nullable(args, "projectId", parse_uuid)?,
+                None,
             )
             .await?;
             collab_title(ctx, id, &page);
@@ -790,6 +835,7 @@ async fn execute(
         }
         "doc.comment_create" => {
             let id = uuid_arg(args, "docId")?;
+            crate::tools::reject_markdown_argument(args, "body")?;
             let body = rich_text(args.get("body"), "body")?
                 .ok_or_else(|| Failure::invalid("body is required"))?;
             let comment = docs::create_comment(pool, user, id, body, &[]).await?;
@@ -803,6 +849,7 @@ async fn execute(
         "doc.comment_edit" => {
             let id = uuid_arg(args, "docId")?;
             let comment_id = uuid_arg(args, "commentId")?;
+            crate::tools::reject_markdown_argument(args, "body")?;
             let body = rich_text(args.get("body"), "body")?
                 .ok_or_else(|| Failure::invalid("body is required"))?;
             let comment = docs::edit_comment(pool, user, id, comment_id, body).await?;
@@ -928,204 +975,4 @@ fn version_no(args: &Value) -> Result<i32, Failure> {
         .and_then(|n| i32::try_from(n).ok())
         .filter(|n| *n >= 1)
         .ok_or_else(|| Failure::invalid("versionNo must be a positive integer"))
-}
-
-// ---------------------------------------------------------------------------------------------
-// Markdown convenience (create only)
-// ---------------------------------------------------------------------------------------------
-
-fn text_node(text: &str, styles: Value) -> Value {
-    json!({"type": "text", "text": text, "styles": styles})
-}
-
-/// `**bold**`, `*italic*`/`_italic_`, `` `code` `` and `~~strike~~`; everything else is text.
-fn inline(text: &str) -> Vec<Value> {
-    let chars: Vec<char> = text.chars().collect();
-    let mut out: Vec<Value> = Vec::new();
-    let mut plain = String::new();
-    let flush = |plain: &mut String, out: &mut Vec<Value>| {
-        if !plain.is_empty() {
-            out.push(text_node(plain, json!({})));
-            plain.clear();
-        }
-    };
-    let mut i = 0;
-    while i < chars.len() {
-        let rest: String = chars[i..].iter().collect();
-        let marks: [(&str, &str); 4] = [
-            ("**", "bold"),
-            ("~~", "strike"),
-            ("`", "code"),
-            ("*", "italic"),
-        ];
-        let mut matched = false;
-        for (mark, style) in marks {
-            if let Some(after) = rest.strip_prefix(mark)
-                && let Some(end) = after.find(mark)
-                && end > 0
-            {
-                flush(&mut plain, &mut out);
-                out.push(text_node(&after[..end], json!({ style: true })));
-                i += mark.chars().count() * 2 + after[..end].chars().count();
-                matched = true;
-                break;
-            }
-        }
-        if !matched {
-            plain.push(chars[i]);
-            i += 1;
-        }
-    }
-    flush(&mut plain, &mut out);
-    out
-}
-
-fn block(kind: &str, props: Value, content: Vec<Value>) -> Value {
-    json!({"id": Uuid::new_v4().to_string(), "type": kind, "props": props,
-           "content": content, "children": []})
-}
-
-/// Markdown to DocContent blocks. Lossless by construction: a line that is not one of the known
-/// constructs becomes a paragraph with its text as written.
-pub(crate) fn markdown_to_content(markdown: &str) -> Value {
-    let mut blocks: Vec<Value> = Vec::new();
-    let mut paragraph: Vec<String> = Vec::new();
-    let mut lines = markdown.lines().peekable();
-    fn end_paragraph(paragraph: &mut Vec<String>, blocks: &mut Vec<Value>) {
-        if !paragraph.is_empty() {
-            blocks.push(block("paragraph", json!({}), inline(&paragraph.join(" "))));
-            paragraph.clear();
-        }
-    }
-    while let Some(line) = lines.next() {
-        let trimmed = line.trim_start();
-        if let Some(info) = trimmed.strip_prefix("```") {
-            end_paragraph(&mut paragraph, &mut blocks);
-            let mut code = Vec::new();
-            for next in lines.by_ref() {
-                if next.trim_start().starts_with("```") {
-                    break;
-                }
-                code.push(next);
-            }
-            let language = info.trim();
-            blocks.push(block(
-                "codeBlock",
-                json!({"language": if language.is_empty() { "text" } else { language }}),
-                vec![text_node(&code.join("\n"), json!({}))],
-            ));
-            continue;
-        }
-        if trimmed.is_empty() {
-            end_paragraph(&mut paragraph, &mut blocks);
-            continue;
-        }
-        let heading = trimmed.chars().take_while(|c| *c == '#').count();
-        if (1..=6).contains(&heading) && trimmed[heading..].starts_with(' ') {
-            end_paragraph(&mut paragraph, &mut blocks);
-            blocks.push(block(
-                "heading",
-                json!({"level": heading.min(3)}),
-                inline(trimmed[heading..].trim()),
-            ));
-        } else if matches!(trimmed, "---" | "***" | "___") {
-            end_paragraph(&mut paragraph, &mut blocks);
-            blocks.push(block("divider", json!({}), Vec::new()));
-        } else if let Some(item) = trimmed
-            .strip_prefix("- [ ] ")
-            .or_else(|| trimmed.strip_prefix("* [ ] "))
-        {
-            end_paragraph(&mut paragraph, &mut blocks);
-            blocks.push(block(
-                "checkListItem",
-                json!({"checked": false}),
-                inline(item),
-            ));
-        } else if let Some(item) = trimmed
-            .strip_prefix("- [x] ")
-            .or_else(|| trimmed.strip_prefix("- [X] "))
-            .or_else(|| trimmed.strip_prefix("* [x] "))
-        {
-            end_paragraph(&mut paragraph, &mut blocks);
-            blocks.push(block(
-                "checkListItem",
-                json!({"checked": true}),
-                inline(item),
-            ));
-        } else if let Some(item) = trimmed
-            .strip_prefix("- ")
-            .or_else(|| trimmed.strip_prefix("* "))
-            .or_else(|| trimmed.strip_prefix("+ "))
-        {
-            end_paragraph(&mut paragraph, &mut blocks);
-            blocks.push(block("bulletListItem", json!({}), inline(item)));
-        } else if let Some(item) = numbered(trimmed) {
-            end_paragraph(&mut paragraph, &mut blocks);
-            blocks.push(block("numberedListItem", json!({}), inline(item)));
-        } else if let Some(quote) = trimmed
-            .strip_prefix("> ")
-            .or_else(|| trimmed.strip_prefix('>'))
-        {
-            end_paragraph(&mut paragraph, &mut blocks);
-            blocks.push(block("quote", json!({}), inline(quote.trim_start())));
-        } else {
-            paragraph.push(trimmed.to_string());
-        }
-    }
-    end_paragraph(&mut paragraph, &mut blocks);
-    if blocks.is_empty() {
-        blocks.push(block("paragraph", json!({}), Vec::new()));
-    }
-    json!({"schema": "penfii.doc", "version": 1, "blocks": blocks})
-}
-
-fn numbered(line: &str) -> Option<&str> {
-    let digits = line.chars().take_while(char::is_ascii_digit).count();
-    if digits == 0 {
-        return None;
-    }
-    line[digits..].strip_prefix(". ")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn markdown_becomes_blocks_and_keeps_unknown_syntax_as_text() {
-        let content = markdown_to_content(
-            "# Title\n\nHello **bold** and `code`.\n\n- a\n- [x] done\n1. one\n> quote\n---\n| a | b |\n![img](x)\n```rs\nlet x = 1;\n```",
-        );
-        let kinds: Vec<&str> = content["blocks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|b| b["type"].as_str().unwrap())
-            .collect();
-        assert_eq!(
-            kinds,
-            [
-                "heading",
-                "paragraph",
-                "bulletListItem",
-                "checkListItem",
-                "numberedListItem",
-                "quote",
-                "divider",
-                "paragraph",
-                "codeBlock"
-            ]
-        );
-        // The table row and the image stay as the text that was written.
-        let last_paragraph = content["blocks"][7]["content"][0]["text"].as_str().unwrap();
-        assert!(last_paragraph.contains("| a | b |") && last_paragraph.contains("![img](x)"));
-        let (clean, _) = penfii_core::docs::content::sanitize(&content, 1 << 20).unwrap();
-        assert_eq!(clean["blocks"].as_array().unwrap().len(), 9);
-    }
-
-    #[test]
-    fn empty_markdown_is_one_empty_paragraph() {
-        let content = markdown_to_content("");
-        assert_eq!(content["blocks"].as_array().unwrap().len(), 1);
-    }
 }

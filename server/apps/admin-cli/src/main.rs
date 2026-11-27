@@ -205,6 +205,12 @@ async fn run_migrate() {
              consolidated 0003 (nothing was applied again)"
         );
     }
+    if run.consolidated_split_0004 {
+        println!(
+            "migration history: the pre-release split migrations 0004-0005 are now recorded as the \
+             consolidated 0004 (nothing was applied again)"
+        );
+    }
     penfii_core::protect_history(&pool)
         .await
         .unwrap_or_else(|error| fail(format!("migrate: {error}")));

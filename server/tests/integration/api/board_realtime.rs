@@ -15,19 +15,19 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use uuid::Uuid;
 
-type Ws = WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+pub(super) type Ws = WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// The router with a broadcast of its own that the sockets listen to, served on a free port. HTTP
 /// commands go through `app` (the same state), so what a handler publishes reaches the sockets.
-struct Live {
-    app: axum::Router,
-    addr: std::net::SocketAddr,
-    changes: tokio::sync::broadcast::Sender<ChangeNotice>,
+pub(super) struct Live {
+    pub(super) app: axum::Router,
+    pub(super) addr: std::net::SocketAddr,
+    pub(super) changes: tokio::sync::broadcast::Sender<ChangeNotice>,
     server: tokio::task::JoinHandle<()>,
 }
 
 impl Live {
-    async fn start(world: &World, capacity: usize) -> Live {
+    pub(super) async fn start(world: &World, capacity: usize) -> Live {
         let (changes, _keep) = tokio::sync::broadcast::channel(capacity);
         let app = penfii_http_api::router_from(penfii_http_api::RouterConfig {
             changes: Some(changes.clone()),
@@ -47,12 +47,12 @@ impl Live {
         }
     }
 
-    fn stop(self) {
+    pub(super) fn stop(self) {
         self.server.abort();
     }
 }
 
-async fn connect(live: &Live, cookie: &str, path: &str) -> Ws {
+pub(super) async fn connect(live: &Live, cookie: &str, path: &str) -> Ws {
     let mut request = format!("ws://{}{path}", live.addr)
         .into_client_request()
         .unwrap();
@@ -110,7 +110,7 @@ async fn open_user(live: &Live, cookie: &str) -> Ws {
 }
 
 /// The next text frame, or `None` when the socket closed or nothing came within the limit.
-async fn next_frame(ws: &mut Ws) -> Option<Value> {
+pub(super) async fn next_frame(ws: &mut Ws) -> Option<Value> {
     loop {
         match timeout(Duration::from_secs(10), ws.next()).await.ok()?? {
             Ok(WsMessage::Text(text)) => return Some(serde_json::from_str(&text).unwrap()),

@@ -266,7 +266,9 @@ fn validate_mention(
     Ok(())
 }
 
-fn allowed_href(href: &str) -> bool {
+/// Whether a link mark may point at `href` (http or https, no credentials). Public so converters that
+/// produce rich text apply the same rule as the validator.
+pub fn allowed_href(href: &str) -> bool {
     let Ok(url) = Url::parse(href) else {
         return false;
     };

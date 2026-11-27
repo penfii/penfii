@@ -124,9 +124,11 @@ export function InviteForm({ token }: { token: string }) {
             {t('invite.displayName')}
             <input required value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
           </label>
+          {/* The address this account is made for, so a password manager saves the new password with it. */}
+          <input className="visually-hidden" type="email" name="email" autoComplete="username" readOnly tabIndex={-1} aria-hidden="true" value={invitation.email} />
           <label>
             {t('invite.password')}
-            <input type="password" autoComplete="new-password" required minLength={15} value={password} onChange={(event) => setPassword(event.target.value)} />
+            <input name="password" type="password" autoComplete="new-password" required minLength={15} value={password} onChange={(event) => setPassword(event.target.value)} />
           </label>
           <small className="hint">{t('password.rule')}</small>
         </>

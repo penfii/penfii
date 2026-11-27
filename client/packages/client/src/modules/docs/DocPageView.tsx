@@ -20,6 +20,7 @@ import { Popover } from '../work/Popover'
 import { useScopeLabel } from './useScopeLabel'
 import type { EditorController } from './DocEditor'
 import { useOpenReference } from './docContext'
+import { useDocLive } from './docLive'
 
 // BlockNote is large: it loads only when a page is opened.
 const DocEditor = lazy(() => import('./DocEditor'))
@@ -70,6 +71,8 @@ export function DocPageView({
   const queryClient = useQueryClient()
   const session = useSession()
   const page = useQuery({ ...queries.doc(docId), retry: false })
+  // Other people's saved changes (and the loss of the page) reach this page while it is open, read or being edited.
+  useDocLive(docId, workspaceId)
   const sharedWith = useScopeLabel(workspaceId, { visibility: page.data?.visibility ?? 'WORKSPACE', projectId: page.data?.scopeProjectId ?? null, teamId: page.data?.scopeTeamId ?? null })
   const [editing, setEditing] = useState<Editing | null>(null)
   const [titleDraft, setTitleDraft] = useState('')
@@ -83,6 +86,7 @@ export function DocPageView({
   const [templateName, setTemplateName] = useState('')
   const [notice, setNotice] = useState<string | null>(null)
   const [versioning, setVersioning] = useState(false)
+  const [layoutBusy, setLayoutBusy] = useState(false)
   const controller = useRef<EditorController | null>(null)
   const seed = useRef(0)
   const started = useRef(false)
@@ -200,6 +204,31 @@ export function DocPageView({
     await queryClient.invalidateQueries({ queryKey: queryKeys.doc(docId) })
   }
 
+  /**
+   * Full width is a setting of the page, saved the moment it is changed: no edit session and no Save button, and apart
+   * from the draft, the revision and the Versions (a draft that is open stays as it is). The page follows the choice
+   * at once; if the server refuses it, the page goes back to what is stored and says so.
+   */
+  async function changeLayout(next: boolean) {
+    if (layoutBusy) return
+    setLayoutBusy(true)
+    const key = queryKeys.doc(docId)
+    const setWide = (fullWidth: boolean) => queryClient.setQueryData<DocPage>(key, (old) => (old ? { ...old, fullWidth } : old))
+    const before = queryClient.getQueryData<DocPage>(key)?.fullWidth === true
+    setWide(next)
+    try {
+      const saved = await api.updateDoc(docId, { fullWidth: next })
+      setWide(saved.fullWidth === true)
+    } catch {
+      // What is really stored, not a guess: ask, and fall back to the value from before when that fails too.
+      const stored = await api.getDoc(docId).then((fresh) => fresh.fullWidth === true, () => before)
+      setWide(stored)
+      notify({ message: t('docs.layout.error') })
+    } finally {
+      setLayoutBusy(false)
+    }
+  }
+
   async function createVersion() {
     if (!page.data || versioning) return
     setNotice(null)
@@ -238,7 +267,9 @@ export function DocPageView({
   }, [editing, canSave])
 
   if (page.isPending) return <p className="hint doc-page" role="status">{t('loading')}</p>
-  if (page.isError) {
+  // A page that was read stays on screen when a later read fails for a passing reason (the network, the server); one the
+  // person may no longer read (deleted, access taken away) is never shown from what was cached.
+  if (page.isError && (page.data === undefined || isNotFound(page.error))) {
     return (
       <div className="doc-page">
         <EmptyState title={t('docs.unavailable.title')} body={isNotFound(page.error) ? t('docs.unavailable.body') : t('docs.loadError')} />
@@ -255,7 +286,7 @@ export function DocPageView({
       : `${t('docs.version.latest', { no: String(data.latestVersionNo) })} · ${data.hasUnversionedChanges ? t('docs.version.pending') : t('docs.version.upToDate')}`
 
   return (
-    <article className="doc-page">
+    <article className={data.fullWidth === true ? 'doc-page is-wide' : 'doc-page'}>
       <div className={editing ? 'doc-topbar is-editing' : 'doc-topbar'}>
         <nav className="doc-crumb" aria-label={t('nav.docs')}>
           <span>{t('nav.docs')}</span>
@@ -270,6 +301,11 @@ export function DocPageView({
             <span className="doc-actions">
               <Button variant="ghost" onClick={finish} disabled={saving}>{t('docs.edit.finish')}</Button>
               <Button onClick={() => void save()} disabled={saving || !titleDraft.trim() || (!dirty && problem === null)} title={titleDraft.trim() ? undefined : t('docs.save.needsTitle')}>{saving ? t('docs.saving') : problem === 'error' ? t('docs.save.retry') : t('docs.save')}</Button>
+              {canEdit ? (
+                <Popover label={t('docs.more')} icon={<MoreIcon />} iconOnly align="end">
+                  {(close) => <div className="menu-list"><LayoutToggle wide={data.fullWidth === true} busy={layoutBusy} onChange={(next) => { close(); void changeLayout(next) }} /></div>}
+                </Popover>
+              ) : null}
             </span>
           </>
         ) : (
@@ -283,6 +319,7 @@ export function DocPageView({
             <Popover label={t('docs.more')} icon={<MoreIcon />} iconOnly align="end">
               {(close) => (
                 <div className="menu-list">
+                  {canEdit ? <LayoutToggle wide={data.fullWidth === true} busy={layoutBusy} onChange={(next) => { close(); void changeLayout(next) }} /> : null}
                   <button type="button" onClick={() => { close(); setTemplateName(data.title); setTemplateOpen(true) }}>{t('docs.template.save')}</button>
                 </div>
               )}
@@ -396,6 +433,17 @@ export function DocPageView({
         </div>
       </Dialog>
     </article>
+  )
+}
+
+/** The "Full width" menu item: a check item, on while the page is shown across the whole space between the panels. */
+function LayoutToggle({ wide, busy, onChange }: { wide: boolean; busy: boolean; onChange: (next: boolean) => void }) {
+  const { t } = useI18n()
+  return (
+    <button type="button" role="menuitemcheckbox" aria-checked={wide} className="doc-layout-toggle" disabled={busy} onClick={() => onChange(!wide)}>
+      <span className="doc-layout-check" aria-hidden="true">{wide ? '✓' : ''}</span>
+      {t('docs.layout.fullWidth')}
+    </button>
   )
 }
 

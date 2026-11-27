@@ -1,5 +1,5 @@
 import { ResizeHandle } from '../shell/ResizeHandle'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router'
 import { api } from '../api'
@@ -9,9 +9,10 @@ import { isArchivedTeam } from '../modules/spaces/teamState'
 import { queries } from '../queries'
 import { EMPTY_RICH_TEXT, isBlankDoc, messageBodyBytes, sameRichText, type DisplayNames } from '../richtext'
 import { usePaneWidth } from '../shell/usePaneWidth'
+import { MAIN_MIN } from '../shell/paneWidth'
 import { Button } from '../design/ui'
 import { shouldOfferJoin } from '../modules/spaces/joinPolicy'
-import { NotFoundState } from '../ui/NotFoundState'
+import { ConversationUnavailable, ThreadUnavailable } from '../modules/conversations/ConversationUnavailable'
 import {
   Composer,
   ConversationLiveProvider,
@@ -33,6 +34,7 @@ export function ConversationPane({
   showDmWarning,
   heading,
   threadBase,
+  projectId,
 }: {
   workspaceId: string
   conversationId: string
@@ -42,17 +44,37 @@ export function ConversationPane({
   showDmWarning: boolean
   heading: string
   threadBase: string
+  /** The Project the conversation was opened from, for the way back when it cannot be opened. */
+  projectId?: string
 }) {
   const { t } = useI18n()
   const location = useLocation()
   const navigate = useNavigate()
+  const frame = useRef<HTMLDivElement>(null)
+  // While the person sets the thread's width the conversation stays scrolled to its right end, so the handle stays under the
+  // pointer (or in view, from the keyboard). Otherwise the sideways scroll is theirs and is left alone, so
+  // only the width they asked for (not a later one from a window resize) moves the scroll.
+  const widthAskedFor = useRef<number | null>(null)
   const threadPane = usePaneWidth('thread', {
     threadOpen: true,
-    detailOpen: new URLSearchParams(location.search).has('panel'),
+    // A Ticket panel beside the conversation takes its own width, so the thread's room is what it leaves (320 of the work area stays in view).
+    panel: new URLSearchParams(location.search).get('panel'),
     onTooNarrow: () => {
       if (threadRootId) void navigate(threadBase)
     },
+    onUserResize: (width) => {
+      widthAskedFor.current = width
+    },
   })
+  useLayoutEffect(() => {
+    if (widthAskedFor.current !== threadPane.width) return
+    widthAskedFor.current = null
+    scrollToEnd(frame.current)
+  }, [threadPane.width])
+  // A thread that opens is shown whole, its close button included.
+  useLayoutEffect(() => {
+    if (threadRootId) scrollToEnd(frame.current)
+  }, [threadRootId])
   const queryClient = useQueryClient()
   const serverInfo = useQuery(queries.serverInfo())
   const space = useQuery({ ...queries.space(workspaceId), enabled: workspaceId.length > 0 })
@@ -91,6 +113,8 @@ export function ConversationPane({
   const threadRef = useRef<ThreadHandle>(null)
   const [commentOnId, setCommentOnId] = useState<string | null>(null)
   const [notFound, setNotFound] = useState(false)
+  // The thread alone cannot be opened (its root is gone) while the conversation can.
+  const [threadGone, setThreadGone] = useState(false)
 
   useEffect(() => {
     setChannelDoc(EMPTY_RICH_TEXT)
@@ -101,13 +125,14 @@ export function ConversationPane({
   useEffect(() => {
     setThreadDoc(EMPTY_RICH_TEXT)
     setCommentOnId(null)
+    setThreadGone(false)
   }, [threadRootId])
 
   // No draft is read for a channel nobody can write to (the server has none to give), nor before the Space says which it is.
   // Nor where the composer is a Join action: the server answers a draft request for a conversation the caller cannot write with 404.
-  const draftsOpen = space.isSuccess && !readOnly && !mustJoin
+  const draftsOpen = space.isSuccess && !readOnly && !mustJoin && !notFound
   useServerDraft('CHANNEL_COMPOSE', draftsOpen ? conversationId : null, channelDoc, setChannelDoc)
-  useServerDraft('THREAD_COMPOSE', draftsOpen ? (threadRootId ?? null) : null, threadDoc, setThreadDoc)
+  useServerDraft('THREAD_COMPOSE', draftsOpen && !threadGone ? (threadRootId ?? null) : null, threadDoc, setThreadDoc)
 
   const maxBytes: number | null | undefined = serverInfo.data
     ? serverInfo.data.limits.messageBodyMaxBytes
@@ -154,13 +179,14 @@ export function ConversationPane({
     })
   }
 
-  if (notFound) return <NotFoundState />
+  if (notFound) return <ConversationUnavailable workspaceId={workspaceId} projectId={projectId} />
 
   return (
     <ConversationLiveProvider conversationId={conversationId}>
       <div
+        ref={frame}
         className={threadRootId ? 'conversation' : 'conversation no-thread'}
-        style={{ ['--thread-width' as string]: `${String(threadPane.width)}px` }}
+        style={{ ['--thread-width' as string]: `${String(threadPane.width)}px`, ['--chat-main-min' as string]: `${String(MAIN_MIN)}px` }}
       >
         <div className="column">
           <Timeline
@@ -197,40 +223,51 @@ export function ConversationPane({
         {threadRootId ? (
           <div className="column thread-column">
             <ResizeHandle pane={threadPane} label={t('layout.resizeThread')} resetLabel={t('layout.resetWidth')} />
-            <ThreadPanel
-              ref={threadRef}
-              workspaceId={workspaceId}
-              conversationId={conversationId}
-              rootId={threadRootId}
-              currentUserId={currentUserId}
-              channelRole={channelRole}
-              names={names}
-              conversationHref={threadBase}
-              attempt={threadOutbound.attempt}
-              onRetry={() => void send('thread')}
-              onNotFound={() => setNotFound(true)}
-              commentOnId={commentOnId}
-              onComment={setCommentOnId}
-              onClearComment={() => setCommentOnId(null)}
-            />
-            {readOnly ? readOnlyBar : mustJoin ? joinBar : (
-              <Composer
-                value={threadDoc}
-                onChange={setThreadDoc}
-                workspaceId={workspaceId}
-                onSend={(fileIds) => send('thread', fileIds)}
-                messageBodyMaxBytes={maxBytes}
-                busy={threadOutbound.attempt?.phase === 'sending'}
-                label={t('thread.compose')}
-                placeholder={t('thread.compose')}
-                sendLabel={t('thread.send')}
-                focusToken={threadRootId}
-                searchMentions={searchMentions}
-              />
+            {threadGone ? (
+              <ThreadUnavailable conversationHref={threadBase} />
+            ) : (
+              <>
+                <ThreadPanel
+                  ref={threadRef}
+                  workspaceId={workspaceId}
+                  conversationId={conversationId}
+                  rootId={threadRootId}
+                  currentUserId={currentUserId}
+                  channelRole={channelRole}
+                  names={names}
+                  conversationHref={threadBase}
+                  attempt={threadOutbound.attempt}
+                  onRetry={() => void send('thread')}
+                  onNotFound={() => setThreadGone(true)}
+                  commentOnId={commentOnId}
+                  onComment={setCommentOnId}
+                  onClearComment={() => setCommentOnId(null)}
+                />
+                {readOnly ? readOnlyBar : mustJoin ? joinBar : (
+                  <Composer
+                    value={threadDoc}
+                    onChange={setThreadDoc}
+                    workspaceId={workspaceId}
+                    onSend={(fileIds) => send('thread', fileIds)}
+                    messageBodyMaxBytes={maxBytes}
+                    busy={threadOutbound.attempt?.phase === 'sending'}
+                    label={t('thread.compose')}
+                    placeholder={t('thread.compose')}
+                    sendLabel={t('thread.send')}
+                    focusToken={threadRootId}
+                    searchMentions={searchMentions}
+                  />
+                )}
+              </>
             )}
           </div>
         ) : null}
       </div>
     </ConversationLiveProvider>
   )
+}
+
+/** Scrolls a conversation that is wider than the work area to its right end (no-op when it fits). */
+function scrollToEnd(element: HTMLElement | null) {
+  if (element) element.scrollLeft = element.scrollWidth - element.clientWidth
 }

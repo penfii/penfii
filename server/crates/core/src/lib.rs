@@ -59,7 +59,7 @@ pub mod work;
 pub mod work_history;
 
 pub use error::CoreError;
-pub use limits::{Bucket, Limits, ThrottleLimits};
+pub use limits::{Bucket, Limits, LongSession, ThrottleLimits};
 pub use migrate::{
     MigrationRun, apply_migrations, connect, migration_url_from_env, protect_history,
     require_current_schema, run_migrator,

@@ -88,6 +88,8 @@ export function ViewBar({
 
   return (
     <div className="view-bar">
+      {/* One row that does not wrap: when the controls do not fit it scrolls by itself, and the panels open over the page. */}
+      <div className="view-bar-row" data-pop-float>
       <div className="view-tabs" role="group" aria-label={t('view.bar.label')}>
         <button type="button" className={activeId === null ? 'view-tab on' : 'view-tab'} aria-pressed={activeId === null} onClick={() => onSelect(null)}>
           {t('view.default')}
@@ -152,6 +154,7 @@ export function ViewBar({
           {() => <DisplayPanel definition={definition} layout={layout} wide={target !== 'PROJECT'} density={density} ownDisplay={ownDisplay} onResetDisplay={onResetDisplay} onChange={onChange} />}
         </Popover>
         {actions}
+      </div>
       </div>
 
       {dirty || error ? (

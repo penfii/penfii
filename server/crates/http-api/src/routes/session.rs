@@ -75,6 +75,7 @@ async fn login(
         &body.email,
         &body.password,
         body.code.as_deref(),
+        body.keep_signed_in,
         address.as_deref(),
         device.as_deref(),
     )
@@ -410,10 +411,24 @@ struct AuthStartRequest {
     invitation_token: Option<String>,
     #[serde(default)]
     return_to: Option<String>,
+    /// "Keep me signed in", for `intent: login` only.
+    #[serde(default)]
+    keep_signed_in: bool,
 }
 
+/// The sign-in methods on offer, and whether the server offers a long session (the "keep me signed
+/// in" choice) with its two limits, so the sign-in page can show the option and say what it means.
 async fn auth_providers(State(state): State<AppState>) -> Result<Response, ApiError> {
-    Ok(Json(serde_json::json!({"items": identity::offered(&state.providers)})).into_response())
+    let long = state.limits.long_session;
+    Ok(Json(serde_json::json!({
+        "items": identity::offered(&state.providers),
+        "longSession": {
+            "enabled": long.enabled,
+            "maxAgeSeconds": long.max_age_seconds,
+            "idleSeconds": long.effective_idle_seconds(),
+        },
+    }))
+    .into_response())
 }
 
 async fn auth_start(
@@ -443,6 +458,7 @@ async fn auth_start(
             return_to: body.return_to.as_deref(),
             address: address.as_deref(),
             throttle: &state.limits.login_throttle,
+            keep_signed_in: body.keep_signed_in,
         },
     )
     .await?;
@@ -488,6 +504,7 @@ async fn reauth_provider_start(
             return_to: body.return_to.as_deref(),
             address: None,
             throttle: &state.limits.login_throttle,
+            keep_signed_in: false,
         },
     )
     .await?;

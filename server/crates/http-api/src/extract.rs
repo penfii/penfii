@@ -219,9 +219,20 @@ pub fn session_token(headers: &HeaderMap) -> Option<String> {
     None
 }
 
+/// The web client marks the requests the page makes by itself (a timer, a refresh nobody asked for) with
+/// `X-Penfii-Background`. They are answered like any other, but do not count as activity of the person, so
+/// they cannot keep a long ("keep me signed in") session alive. A request without the header is activity.
+fn is_background(headers: &HeaderMap) -> bool {
+    headers.contains_key("x-penfii-background")
+}
+
 async fn current_user(state: &AppState, headers: &HeaderMap) -> Result<User, ApiError> {
     let token = session_token(headers).ok_or(CoreError::Unauthenticated)?;
-    Ok(identity::authenticate(&state.pool, &token).await?)
+    Ok(if is_background(headers) {
+        identity::authenticate_background(&state.pool, &token).await?
+    } else {
+        identity::authenticate(&state.pool, &token).await?
+    })
 }
 
 async fn current_session(
@@ -229,7 +240,11 @@ async fn current_session(
     headers: &HeaderMap,
 ) -> Result<identity::AuthSession, ApiError> {
     let token = session_token(headers).ok_or(CoreError::Unauthenticated)?;
-    Ok(identity::authenticate_session(&state.pool, &token).await?)
+    Ok(if is_background(headers) {
+        identity::authenticate_session_background(&state.pool, &token).await?
+    } else {
+        identity::authenticate_session(&state.pool, &token).await?
+    })
 }
 
 // Session extractors. A handler that takes one of these requires a signed-in session: without a
@@ -245,6 +260,36 @@ impl FromRequestParts<AppState> for Actor {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
         Ok(Self(current_user(state, &parts.headers).await?.id))
+    }
+}
+
+/// The signed-in person's profile for opening a live socket. Opening or reopening one is the page's doing (a
+/// reconnect after a dropped network, a restarted server), not the person's: it is answered like any request but does
+/// not count as activity, so it cannot keep a long session alive. The browser cannot add the background header to a
+/// socket upgrade, so this extractor always takes it as one.
+pub struct SocketUser(pub User);
+
+impl FromRequestParts<AppState> for SocketUser {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
+        let token = session_token(&parts.headers).ok_or(CoreError::Unauthenticated)?;
+        Ok(Self(
+            identity::authenticate_background(&state.pool, &token).await?,
+        ))
+    }
+}
+
+/// [`SocketUser`] when only the id is needed.
+pub struct SocketActor(pub Uuid);
+
+impl FromRequestParts<AppState> for SocketActor {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
+        Ok(Self(
+            SocketUser::from_request_parts(parts, state).await?.0.id,
+        ))
     }
 }
 
@@ -281,7 +326,12 @@ impl OptionalFromRequestParts<AppState> for Session {
         let Some(token) = session_token(&parts.headers) else {
             return Ok(None);
         };
-        match identity::authenticate_session(&state.pool, &token).await {
+        let found = if is_background(&parts.headers) {
+            identity::authenticate_session_background(&state.pool, &token).await
+        } else {
+            identity::authenticate_session(&state.pool, &token).await
+        };
+        match found {
             Ok(session) => Ok(Some(Self(session))),
             Err(CoreError::Unauthenticated) => Ok(None),
             Err(error) => Err(error.into()),

@@ -44,4 +44,13 @@ describe('Chat entry point', () => {
     expect(await screen.findByRole('link', { name: /# Alpha/ })).toBeTruthy()
     expect(screen.queryByText('채널을 만들거나 다이렉트 메시지를 시작해 보세요.')).toBeNull()
   })
+  it('says it is loading, not that there is nothing yet, until the Space has loaded', async () => {
+    let answer: (value: Space) => void = () => undefined
+    api.getSpace.mockReturnValue(new Promise<Space>((resolve) => { answer = resolve }))
+    mount()
+    expect(await screen.findByRole('status')).toBeTruthy()
+    expect(screen.queryByText('채널을 만들거나 다이렉트 메시지를 시작해 보세요.')).toBeNull()
+    answer(space([]))
+    expect(await screen.findByText('채널을 만들거나 다이렉트 메시지를 시작해 보세요.')).toBeTruthy()
+  })
 })

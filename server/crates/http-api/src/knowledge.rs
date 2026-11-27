@@ -144,6 +144,10 @@ struct PatchDocBody {
     title: Option<String>,
     #[serde(default, deserialize_with = "present_or_null")]
     project_id: Option<Option<Uuid>>,
+    /// The page's layout: shown across the whole space between the panels (`true`) or in the
+    /// reading column. A setting of the page, not part of its content or revision.
+    #[serde(default)]
+    full_width: Option<bool>,
 }
 
 async fn patch_doc(
@@ -152,7 +156,15 @@ async fn patch_doc(
     Actor(user): Actor,
     Body(body): Body<PatchDocBody>,
 ) -> Result<Response, ApiError> {
-    let page = docs::patch(&state.pool, user, id, body.title, body.project_id).await?;
+    let page = docs::patch(
+        &state.pool,
+        user,
+        id,
+        body.title,
+        body.project_id,
+        body.full_width,
+    )
+    .await?;
     if let Some(hub) = &state.collab {
         hub.page_meta_changed(id, page["title"].as_str().unwrap_or(""));
     }

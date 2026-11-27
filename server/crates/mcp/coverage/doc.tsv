@@ -25,3 +25,4 @@ GET	/v1/docs/{id}/references	tool	doc_references
 POST	/v1/docs/{id}/manager-recovery	web	RecentActor recover_doc_manager; see workspace_web_only
 GET	/v1/workspaces/{id}/docs-without-manager	other	admin domain (orphaned-resource list)
 GET	/v1/docs/{id}/collab	excluded	WebSocket co-editing (Yjs) is not an MCP tool; edit with doc_save
+GET	/v1/ws/docs/{id}	excluded	WebSocket that tells an open page in the web app to read again; an agent reads a Doc with doc_get

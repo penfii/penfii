@@ -10,7 +10,7 @@ import { queryKeys } from '../../queryKeys'
 
 /** Account → sign-in methods and sessions. Every change goes through the one reauth dialog. */
 export function SignInMethods() {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const queryClient = useQueryClient()
   const identities = useQuery(queries.identities())
   const sessions = useQuery(queries.sessions())
@@ -78,8 +78,9 @@ export function SignInMethods() {
           <li key={session.id} className={session.current ? 'is-current' : undefined}>
             <span className="row-text">
               <b>{session.deviceLabel ?? t('sessions.unknownDevice')}</b>
-              <small>{new Date(session.lastSeenAt ?? session.createdAt).toLocaleString()}</small>
+              <small>{new Date(session.lastSeenAt ?? session.createdAt).toLocaleString(locale)}</small>
             </span>
+            {session.longLived ? <span className="current-badge">{t('sessions.longLived')}</span> : null}
             {session.current ? <span className="current-badge">{t('sessions.current')}</span> : null}
             {session.current ? null : (
               <button

@@ -15,6 +15,7 @@ pub use reads::{
     ManualUnread, UpdateRead, get_conversation_read, get_thread_read, manual_conversation_unread,
     manual_thread_unread, update_conversation_read, update_thread_read,
 };
+pub use richtext::allowed_href as rich_text_link_allowed;
 
 use chrono::{DateTime, Utc};
 use penfii_contracts::{

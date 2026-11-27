@@ -411,6 +411,7 @@ pub async fn run(
         "ticket.change_status" => ticket_change_status(ctx, principal, args).await,
         "ticket.comment" => {
             let ticket_id = uuid_arg(args, "ticketId")?;
+            reject_markdown_argument(args, "body")?;
             let body = rich_text(args.get("body"), "body")?
                 .ok_or_else(|| Failure::invalid("body is required"))?;
             let (comment, change) =
@@ -483,28 +484,67 @@ pub(crate) fn to_value<T: serde::Serialize>(value: &T) -> Result<Value, Failure>
     serde_json::to_value(value).map_err(|e| CoreError::Internal(e.to_string()).into())
 }
 
-/// Plain text becomes a one-paragraph document; an object is passed to `core`, which validates
-/// rich text exactly as it does for the web app (JSON first, plain text as a convenience).
+/// Rich text input, for every tool that writes a description, message or comment.
+///
+/// A string is plain text (a paragraph per blank line) and a root object (`{type:"doc",...}`) goes
+/// to `core`, which validates rich text exactly as it does for the web app; both are the original
+/// behaviour. An object with `format` or `value` is the input wrapper `{format, value}`: `plain`
+/// and `markdown` take a string, `richtext` the same root object as before. The wrapper is
+/// converted here and never stored. Absent or `null` is `None`, whatever the tool makes of that.
 pub(crate) fn rich_text(value: Option<&Value>, name: &str) -> Result<Option<Value>, Failure> {
+    rich_text_as(value, name, false)
+}
+
+/// A ticket description. The web editor stores a description as a Doc (`penfii.doc`, blocks), and
+/// older descriptions (the plain string, ProseMirror JSON) are converted to it by the browser each
+/// time they are opened. So Markdown is written as the Doc it will become: task lists stay check
+/// items and `---` a divider instead of the text `[ ] ` and `---`, and nothing is converted twice.
+/// Plain text and rich-text JSON are kept as they were.
+pub(crate) fn description_text(
+    value: Option<&Value>,
+    name: &str,
+) -> Result<Option<Value>, Failure> {
+    rich_text_as(value, name, true)
+}
+
+fn rich_text_as(
+    value: Option<&Value>,
+    name: &str,
+    markdown_as_doc: bool,
+) -> Result<Option<Value>, Failure> {
+    use crate::markdown::{
+        Content, check_rich_source, is_wrapper, markdown_to_doc, parse_wrapper,
+        rich_text_from_markdown, rich_text_from_plain,
+    };
     match value {
         None | Some(Value::Null) => Ok(None),
-        Some(Value::String(text)) => {
-            if text.trim().is_empty() {
-                return Err(Failure::invalid(format!("{name} must not be empty")));
+        Some(Value::String(text)) => rich_text_from_plain(text, name).map(Some),
+        Some(Value::Object(object)) if is_wrapper(object) => match parse_wrapper(object, name)? {
+            Content::Plain(text) => rich_text_from_plain(text, name).map(Some),
+            Content::Markdown(text) if markdown_as_doc => {
+                check_rich_source(text, name)?;
+                markdown_to_doc(text).map(Some)
             }
-            if text.len() > 20_000 {
-                return Err(Failure::invalid(format!("{name} is too long")));
-            }
-            Ok(Some(json!({"type": "doc", "content": text
-                .split("\n\n")
-                .map(|paragraph| json!({"type": "paragraph", "content": [{"type": "text", "text": paragraph}]}))
-                .collect::<Vec<_>>()})))
-        }
+            Content::Markdown(text) => rich_text_from_markdown(text, name).map(Some),
+            Content::Richtext(root) => Ok(Some(Value::Object(root.clone()))),
+        },
         Some(object @ Value::Object(_)) => Ok(Some(object.clone())),
         Some(_) => Err(Failure::invalid(format!(
-            "{name} must be text or a document object"
+            "{name} must be text, a document object or a {{format, value}} object"
         ))),
     }
+}
+
+/// `markdown` is not an argument of the tools that take `{format, value}` content. The MCP layer
+/// does not reject unknown arguments, so without this a call that only passes `markdown` would
+/// look like a successful no-op.
+pub(crate) fn reject_markdown_argument(args: &Value, field: &str) -> Result<(), Failure> {
+    if args.get("markdown").is_some() {
+        return Err(Failure::invalid(format!(
+            "markdown is not an argument of this tool: pass {field}: {{\"format\": \"markdown\", \"value\": \"...\"}}"
+        )));
+    }
+    Ok(())
 }
 
 /// Retry key: the caller's, else a fresh one (no replay protection, and the tool says so).
@@ -621,10 +661,12 @@ async fn ticket_create(
     args: &Value,
 ) -> Result<Done, Failure> {
     let project_id = uuid_arg(args, "projectId")?;
+    reject_markdown_argument(args, "description")?;
     let title = string_arg(args, "title").ok_or_else(|| Failure::invalid("title is required"))?;
     let input = TicketInput {
         title: title.to_string(),
-        description: rich_text(args.get("description"), "description")?.unwrap_or(Value::Null),
+        description: description_text(args.get("description"), "description")?
+            .unwrap_or(Value::Null),
         hierarchy_kind: string_arg(args, "hierarchyKind")
             .unwrap_or("TASK")
             .to_string(),
@@ -657,9 +699,10 @@ async fn ticket_update(
     args: &Value,
 ) -> Result<Done, Failure> {
     let ticket_id = uuid_arg(args, "ticketId")?;
+    reject_markdown_argument(args, "description")?;
     let update = TicketUpdate {
         title: string_arg(args, "title").map(str::to_string),
-        description: rich_text(args.get("description"), "description")?,
+        description: description_text(args.get("description"), "description")?,
         assignee_id: nullable(args, "assigneeId", parse_uuid)?,
         priority: nullable(args, "priority", |v| v.as_str().map(str::to_string))?,
         due_on: nullable(args, "dueOn", parse_date)?,
